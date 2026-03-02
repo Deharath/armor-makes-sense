@@ -52,7 +52,7 @@ require "testing/ArmorMakesSense_BenchRunner"
 local Mod = ArmorMakesSense
 local MOD_KEY = "ArmorMakesSenseState"
 local MOD_OPTIONS_ID = "ArmorMakesSense"
-local SCRIPT_VERSION = "0.5.82"
+local SCRIPT_VERSION = "1.0.0"
 local SCRIPT_BUILD = "ams-b42-2026-02-28-v050"
 local warned = {}
 local cachedEnableSystem = true

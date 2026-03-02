@@ -30,7 +30,7 @@ No stress penalties. Just physics.
 
 ## Installation
 
-Subscribe on [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=YOUR_WORKSHOP_ID), or copy `common/` and `42/` into your PZ mods directory.
+Subscribe on [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3677430162), or copy `common/` and `42/` into your PZ mods directory.
 
 Requires Project Zomboid Build 42 (42.14.0+). Singleplayer only.
 

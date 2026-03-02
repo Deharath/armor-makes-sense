@@ -1,0 +1,2 @@
+Sandbox_ArmorMakesSense_EnableSystem=Enable Armor Physical Load
+Sandbox_ArmorMakesSense_EnableSystem_tooltip=Applies armor-related physical costs to endurance and sleep recovery.

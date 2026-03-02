@@ -92,17 +92,6 @@ local TT_VALUE_BREATHING_HEAVY = { 1.0, 0.45, 0.35, 1.0 }
 local TT_BAR_BURDEN = { 0.95, 0.70, 0.25, 1.0 }
 local TT_SEPARATOR = { 0.60, 0.60, 0.60, 1.0 }
 
-local function safeTooltipLayout(tooltip)
-    if not tooltip then
-        return nil
-    end
-    local getLayout = ctx("safeMethod") and ctx("safeMethod")(tooltip, "getLayout")
-    if getLayout then
-        return getLayout
-    end
-    return tooltip.layout
-end
-
 local function addLayoutRow(layout, payload)
     local row = ctx("safeMethod")(layout, "addItem")
     if not row then
@@ -141,7 +130,8 @@ local function isTooltipWearable(item)
     local location = getBodyLocation(item)
     local wearableCheck = ctx("isWearableItem")
     if type(wearableCheck) == "function" then
-        if wearableCheck(item, location) then
+        local ok, result = pcall(wearableCheck, item, location)
+        if ok and result then
             return true
         end
     end
@@ -229,62 +219,6 @@ local function installStarlitHook()
     return true
 end
 
-local function installRenderHook()
-    local tipClass = _G.ISToolTipInv
-    if not (tipClass and type(tipClass.render) == "function") then
-        return false
-    end
-    if tipClass._amsTooltipPatched then
-        return true
-    end
-
-    local originalRender = tipClass.render
-    tipClass.render = function(self, ...)
-        local patched = false
-        local itemMT, realDoTooltip
-
-        pcall(function()
-            if type(self) ~= "table" then return end
-            local item = self.item
-            if not item or instanceof(item, "FluidContainer") then return end
-            if not isTooltipWearable(item) then return end
-
-            -- NOTE: metatable swap can race with other mods that hook DoTooltip.
-            -- No clean alternative in PZ's API. Swap is scoped to this render call and
-            -- restored immediately after. Shared risk across PZ modding ecosystem.
-            itemMT = getmetatable(item)
-            if not itemMT or not itemMT.__index then return end
-            realDoTooltip = itemMT.__index.DoTooltip
-            if not realDoTooltip then return end
-
-            itemMT.__index.DoTooltip = function(itm, tooltip, layout)
-                realDoTooltip(itm, tooltip, layout)
-                pcall(function()
-                    local lyt = layout or safeTooltipLayout(tooltip)
-                    if lyt then
-                        injectTooltipRowsWithLayout(lyt, item)
-                    end
-                end)
-            end
-            patched = true
-        end)
-
-        local result = originalRender(self, ...)
-
-        if patched and itemMT and realDoTooltip then
-            itemMT.__index.DoTooltip = realDoTooltip
-        end
-
-        return result
-    end
-    tipClass._amsTooltipPatched = true
-    ctx("logOnce")("ui_tooltip_render_hook", "[UI] AMS tooltip rows registered via ISToolTipInv:render() monkey-patch.")
-    return true
-end
-
--- Tooltip injection uses two paths (Starlit Library is optional, not a dependency):
---   1. If Starlit is present: register on its onFillItemTooltip event (clean, no monkey-patch).
---   2. Otherwise: monkey-patch ISToolTipInv:render() with temporary DoTooltip swap.
 local function installTooltipHook()
     if tooltipHookInstalled then
         return
@@ -295,12 +229,7 @@ local function installTooltipHook()
         return
     end
 
-    if installRenderHook() then
-        tooltipHookInstalled = true
-        return
-    end
-
-    ctx("logOnce")("ui_tooltip_no_hook", "[UI] No tooltip hook available (no Starlit, no ISToolTipInv). AMS tooltip rows disabled.")
+    ctx("logErrorOnce")("ui_tooltip_starlit_missing", "[UI] Starlit Library missing: AMS tooltip rows unavailable.")
     tooltipHookInstalled = true
 end
 

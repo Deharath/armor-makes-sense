@@ -39,7 +39,7 @@ Requires Project Zomboid Build 42 (42.14.0+). Singleplayer only.
 - Singleplayer only
 - Build 42.14.0+
 - Armor from other mods should work -- items are classified based on their defense stats, weight, and item properties (not yet tested with all armor mods)
-- Compatible with [Starlit Library](https://steamcommunity.com/sharedfiles/filedetails/?id=3378285185) -- uses its tooltip hook when available
+- Requires [Starlit Library](https://steamcommunity.com/sharedfiles/filedetails/?id=3378285185) for tooltip UI integration
 
 ## Documentation
 

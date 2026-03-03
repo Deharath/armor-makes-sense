@@ -102,6 +102,10 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
     if isCosmetic then
         return nil
     end
+    local isContainer = ctx("toBoolean")(ctx("safeMethod")(item, "IsInventoryContainer"))
+    if isContainer then
+        return nil
+    end
     local locationName = ctx("lower")(wornLocation or ctx("safeMethod")(item, "getBodyLocation") or ctx("safeMethod")(scriptItem, "getBodyLocation"))
     local itemName = ctx("lower")(ctx("safeMethod")(item, "getDisplayName") or ctx("safeMethod")(item, "getName") or ctx("safeMethod")(item, "getType"))
 

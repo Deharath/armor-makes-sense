@@ -12,6 +12,8 @@ No stress penalties. Just physics.
 
 **Speed rebalance.** Run speed and combat speed modifiers are normalised by body region for known protective gear. Leg armor affects running. Arm and shoulder armor affect combat speed. Light pads stay neutral.
 
+**Equipment layering.** Vanilla limits what you can wear together in ways that don't always make sense -- a watch can't go over a forearm guard, shoulder pads block your backpack. This mod re-slots 79 items across 8 custom body locations so layering works the way you'd expect.
+
 **Endurance drain.** Heavier armor increases endurance usage during movement and combat. Walking is almost free. Sprinting in full plate is not.
 
 **Thermal pressure.** Armor traps heat. In hot weather you overheat faster. In cold weather, insulating armor helps. The system is intentionally asymmetric.

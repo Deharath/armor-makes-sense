@@ -117,6 +117,90 @@ local function getBodyLocation(item)
     return tostring(ctx("safeMethod")(item, "getBodyLocation") or "")
 end
 
+local function isShoulderpadFamilyItem(item, location)
+    local loc = ctx("lower")(location or getBodyLocation(item))
+    if string.find(loc, "shoulderpad", 1, true) then
+        return true
+    end
+    local fullType = tostring(ctx("safeMethod")(item, "getFullType") or "")
+    local loweredFullType = ctx("lower")(fullType)
+    return string.find(loweredFullType, "shoulderpad", 1, true) ~= nil
+end
+
+local function pruneBackpackTooltipRow(layout, item, starlitUI)
+    if not layout or not item then
+        return
+    end
+    if not isShoulderpadFamilyItem(item) then
+        return
+    end
+
+    local rows = layout.items
+    if not rows then
+        return
+    end
+
+    local noBackpackText = getText and getText("Tooltip_item_NoBackpack") or "Can't wear with a backpack."
+    local noBackpackTextLower = ctx("lower")(tostring(noBackpackText or ""))
+    local itemTooltip = tostring(ctx("safeMethod")(item, "getTooltip") or "")
+    local count = tonumber(ctx("safeMethod")(rows, "size")) or 0
+    local toRemove = {}
+    for i = count - 1, 0, -1 do
+        local row = ctx("safeMethod")(rows, "get", i)
+        local label = tostring((row and row.label) or ctx("safeMethod")(row, "getLabel") or "")
+        local value = tostring((row and row.value) or ctx("safeMethod")(row, "getValue") or "")
+        local normalized = string.gsub(label, "^%s+", "")
+        normalized = string.gsub(normalized, "%s+$", "")
+        local normalizedLower = ctx("lower")(normalized)
+        local normalizedValue = string.gsub(value, "^%s+", "")
+        normalizedValue = string.gsub(normalizedValue, "%s+$", "")
+        local normalizedValueLower = ctx("lower")(normalizedValue)
+
+        local isNoBackpack = (
+            normalized == tostring(noBackpackText or "")
+            or normalizedValue == tostring(noBackpackText or "")
+            or (noBackpackTextLower ~= "" and (
+                string.find(normalizedLower, noBackpackTextLower, 1, true) ~= nil
+                or string.find(normalizedValueLower, noBackpackTextLower, 1, true) ~= nil
+            ))
+        )
+        local isEmptyPlaceholder = (
+            normalized == "\"\"" or normalizedValue == "\"\""
+            or (normalized == "" and normalizedValue == "")
+        )
+        local isItemTooltipBlank = (itemTooltip == "" or itemTooltip == "\"\"")
+
+        if isNoBackpack or (isItemTooltipBlank and isEmptyPlaceholder) then
+            toRemove[#toRemove + 1] = row
+        end
+    end
+
+    for i = 1, #toRemove do
+        local row = toRemove[i]
+        local removed = false
+        if type(starlitUI) == "table" and type(starlitUI.removeTooltipElement) == "function" then
+            local ok = pcall(starlitUI.removeTooltipElement, layout, row)
+            if ok then
+                removed = true
+            end
+        end
+        if not removed and row then
+            pcall(function()
+                rows:remove(row)
+                removed = true
+            end)
+        end
+        if not removed and row then
+            row.label = ""
+            row.value = ""
+            row.hasValue = false
+            row.couldHaveValue = false
+            row.progressFraction = 0
+            row.height = 0
+        end
+    end
+end
+
 local function stripAmsPrefix(text)
     local value = tostring(text or "")
     value = string.gsub(value, "^%s*AMS%s+", "")
@@ -212,6 +296,7 @@ local function installStarlitHook()
     end
 
     starlitUI.onFillItemTooltip:addListener(function(tooltip, layout, item)
+        pcall(pruneBackpackTooltipRow, layout, item, starlitUI)
         pcall(injectTooltipRowsWithLayout, layout, item)
     end)
     starlitHookInstalled = true

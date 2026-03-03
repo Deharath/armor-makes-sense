@@ -73,6 +73,21 @@ local function safeDoParam(item, param)
     return ok
 end
 
+local function safeSetTooltip(item, value)
+    if not item then
+        return false
+    end
+    local fn = item.setTooltip
+    if type(fn) ~= "function" then
+        return false
+    end
+    local ok, err = pcall(fn, item, value)
+    if not ok then
+        print("[ArmorMakesSense] setTooltip failed: " .. tostring(err))
+    end
+    return ok
+end
+
 local function safeScriptNumber(item, methodName)
     local value = safeMethod(item, methodName)
     return tonumber(value)
@@ -520,12 +535,23 @@ local function applySlotReslots(sm)
     local changed = 0
     local missing = 0
     for _, def in ipairs(slotReslots) do
+        local isShoulderpadSlot = (
+            def.slot == "ams:shoulderpad_left"
+            or def.slot == "ams:shoulderpad_right"
+            or def.slot == "ams:sport_shoulderpad"
+            or def.slot == "ams:sport_shoulderpad_on_top"
+        )
         for _, fullType in ipairs(def.fullTypes) do
             local item = sm:getItem(fullType)
             if item then
                 cacheOriginalDiscomfort(item)
                 safeDoParam(item, "BodyLocation = " .. def.slot)
                 safeDoParam(item, "DiscomfortModifier = 0.00")
+                -- Vanilla shoulderpads carry Tooltip_item_NoBackpack. After AMS slot
+                -- compatibility changes this becomes misleading, so clear it.
+                if isShoulderpadSlot then
+                    safeSetTooltip(item, nil)
+                end
                 changed = changed + 1
             else
                 missing = missing + 1

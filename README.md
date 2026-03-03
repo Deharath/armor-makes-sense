@@ -45,8 +45,8 @@ Requires Project Zomboid Build 42 (42.14.0+). Singleplayer only.
 
 | Document | Contents |
 |---|---|
-| [Design Manifesto](docs/design/armor_makes_sense-design_manifesto.md) | Core philosophy and design goals |
-| [Technical Reference](docs/design/armor_makes_sense-technical_appendix.md) | Architecture, models, load channels, config values |
+| [Design Manifesto](docs/armor_makes_sense-design_manifesto.md) | Core philosophy and design goals |
+| [Technical Reference](docs/armor_makes_sense-technical_appendix.md) | Architecture, models, load channels, config values |
 
 ## Testing
 

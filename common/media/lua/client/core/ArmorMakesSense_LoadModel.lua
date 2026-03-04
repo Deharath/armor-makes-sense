@@ -197,7 +197,9 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
     local thermalLoad = wearabilityBase
     local breathingLoad = 0
 
-    if hasBreathingTag then
+    local itemType = ctx("lower")(ctx("safeMethod")(item, "getType") or ctx("safeMethod")(item, "getFullType") or "")
+    local isNoFilter = string.find(itemType, "nofilter", 1, true) ~= nil
+    if hasBreathingTag and not isNoFilter then
         breathingLoad = breathingLoad + 2.40
         thermalLoad = thermalLoad + 0.90
     end
@@ -207,9 +209,6 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
     end
     if string.find(locationName, "maskeyes", 1, true) or string.find(locationName, "maskfull", 1, true) then
         breathingLoad = breathingLoad + 0.45
-    end
-    if string.find(itemName, "helmet", 1, true) or string.find(locationName, "head", 1, true) then
-        breathingLoad = breathingLoad + 0.30
     end
 
     if not isArmor then

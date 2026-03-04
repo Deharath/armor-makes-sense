@@ -1,7 +1,7 @@
-# Armor Makes Sense — Technical Appendix (v1.0.3)
+# Armor Makes Sense — Technical Appendix (v1.0.4)
 
 _As of March 3, 2026_  
-`SCRIPT_VERSION=1.0.3`  
+`SCRIPT_VERSION=1.0.4`  
 `SCRIPT_BUILD=ams-b42-2026-03-03-v052`
 
 ## Scope
@@ -193,10 +193,14 @@ thermalLoad =
 ```
 
 Breathing increments:
-- breathing-tag hit: `+2.40 breathing`, `+0.90 thermal`
+- breathing-tag hit: `+2.40 breathing`, `+0.90 thermal` — skipped when item type contains `nofilter` (depleted filter detection via `getType()`)
 - mask name/location hit: `+0.90 breathing`, `+0.45 thermal`
 - `maskeyes`/`maskfull`: `+0.45 breathing`
-- helmet/head cue: `+0.30 breathing`
+
+Filter-aware tiers:
+- gas mask with filter: `2.40 + 0.90 + 0.45 = 3.75`
+- gas mask without filter: `0.90 + 0.45 = 1.35`
+- respirator with filter: `2.40 + 0.90 = 3.30`
 
 Armor/non-armor split:
 - non-armor rigidity: `weight * 5 + discomfort * 12`

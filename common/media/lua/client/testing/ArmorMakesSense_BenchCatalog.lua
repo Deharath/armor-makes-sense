@@ -153,7 +153,9 @@ local function makeCatalog()
             },
         },
         { id = "mask_respirator", class = "mask", baseline = false, items = { "Base.Hat_BuildersRespirator" } },
+        { id = "mask_respirator_nofilter", class = "mask", baseline = false, items = { "Base.Hat_BuildersRespirator_nofilter" } },
         { id = "mask_gas", class = "mask", baseline = false, items = { "Base.Hat_GasMask" } },
+        { id = "mask_gas_nofilter", class = "mask", baseline = false, items = { "Base.Hat_GasMask_nofilter" } },
         { id = "military_surplus", class = "armor", gearProfile = "military_surplus", items = {} },
         { id = "light", class = "armor", gearProfile = "light", items = {} },
         { id = "heavy", class = "armor", gearProfile = "heavy", items = {} },
@@ -224,7 +226,9 @@ local function makeCatalog()
             sets = {
                 "naked",
                 "mask_respirator",
+                "mask_respirator_nofilter",
                 "mask_gas",
+                "mask_gas_nofilter",
             },
             scenarios = {
                 "native_treadmill_walk",
@@ -232,6 +236,22 @@ local function makeCatalog()
                 "native_treadmill_sprint",
             },
             repeats = 3,
+            speed = 8.0,
+            mode = "sim",
+        },
+        benchmark_breathing_quick = {
+            id = "benchmark_breathing_quick",
+            sets = {
+                "naked",
+                "mask_respirator",
+                "mask_respirator_nofilter",
+                "mask_gas",
+                "mask_gas_nofilter",
+            },
+            scenarios = {
+                "native_treadmill_run",
+            },
+            repeats = 1,
             speed = 8.0,
             mode = "sim",
         },

@@ -64,6 +64,24 @@ local SWING_CHAIN_EXCLUSIONS = {
     "shoulderholster",
 }
 
+local SLEEP_CONTACT_HIGH = {
+    "torso", "back", "cuirass", "chest", "boilersuit", "fullsuit",
+    "jacket", "jersey", "sweater",
+}
+
+local SLEEP_CONTACT_MEDIUM = {
+    "shoulder", "hip", "thigh", "leg", "belt",
+}
+
+local SLEEP_CONTACT_LOW = {
+    "forearm", "hand", "elbow", "shin", "calf", "gaiter",
+    "foot", "shoe", "sock", "wrist", "finger",
+}
+
+local SLEEP_CONTACT_ZERO = {
+    "mask", "eye", "hat", "head", "ear", "scarf", "gorget", "neck",
+}
+
 local function locationHasAnyPattern(locationName, patterns)
     if locationName == "" then
         return false
@@ -94,6 +112,26 @@ local function isSwingChainLocation(locationName)
         return false
     end
     return locationHasAnyPattern(loc, SWING_CHAIN_LOCATION_PATTERNS)
+end
+
+local function getSleepContactWeight(locationName)
+    local loc = tostring(locationName or "")
+    if loc == "" then
+        return 0.7
+    end
+    if locationHasAnyPattern(loc, SLEEP_CONTACT_ZERO) then
+        return 0.0
+    end
+    if locationHasAnyPattern(loc, SLEEP_CONTACT_LOW) then
+        return 0.15
+    end
+    if locationHasAnyPattern(loc, SLEEP_CONTACT_MEDIUM) then
+        return 0.5
+    end
+    if locationHasAnyPattern(loc, SLEEP_CONTACT_HIGH) then
+        return 1.0
+    end
+    return 0.7
 end
 
 function LoadModel.itemToArmorSignal(item, wornLocation)
@@ -308,7 +346,8 @@ function LoadModel.computeArmorProfile(player)
                 end
                 thermal = thermal + signal.thermalLoad
                 breathing = breathing + signal.breathingLoad
-                rigidity = rigidity + (tonumber(signal.rigidityLoad) or 0)
+                local contactWeight = getSleepContactWeight(lowerLoc)
+                rigidity = rigidity + (tonumber(signal.rigidityLoad) or 0) * contactWeight
                 weightUsedTotal = weightUsedTotal + (tonumber(signal.weightUsed) or 0)
                 equippedWeightTotal = equippedWeightTotal + (tonumber(signal.equippedWeight) or 0)
                 actualWeightTotal = actualWeightTotal + (tonumber(signal.actualWeight) or 0)

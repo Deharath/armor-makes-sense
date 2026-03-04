@@ -33,7 +33,7 @@ ArmorMakesSense.DEFAULTS = {
     BreathingSealedDynamicLoadWeight = 29.00,
 
     -- Sleep-in-armor continuous fatigue recovery slowdown.
-    SleepRigidityFatigueRate = 0.003,
+    SleepRigidityFatigueRate = 0.0045,
 
     -- Activity bands.
     ActivityIdle = 0.35,

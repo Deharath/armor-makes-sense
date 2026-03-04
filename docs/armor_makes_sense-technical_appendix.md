@@ -222,6 +222,12 @@ Across worn items:
 - sum channels: `physical`, `thermal`, `breathing`, `rigidity`
 - `upperBodyLoad`: includes locations unless clearly lower-body
 - `swingChainLoad`: shoulder/forearm/elbow/hand/arm locations, scaled by discomfort factor:
+- `rigidityLoad`: per-item rigidity weighted by sleep contact surface:
+  - high-contact slots (`torso/back/chest/cuirass/...`) = `1.0`
+  - medium-contact slots (`shoulder/hip/thigh/leg/belt`) = `0.5`
+  - low-contact slots (`forearm/hand/elbow/shin/calf/foot/shoe/...`) = `0.15`
+  - no-contact slots (`mask/head/neck/eye/ear/...`) = `0.0`
+  - unknown slots fallback = `0.7`
 
 ```lua
 discFactor = clamp(0.5 + discomfort * 5.0, 0.25, 3.0)
@@ -524,7 +530,7 @@ Runtime invariant:
 - `BreathingStaticReliefWeight = 0.25`
 - `BreathingDynamicLoadWeight = 5.10`
 - `BreathingSealedDynamicLoadWeight = 29.00`
-- `SleepRigidityFatigueRate = 0.003`
+- `SleepRigidityFatigueRate = 0.0045`
 - `ActivityIdle = 0.35`
 - `ActivityWalk = 0.75`
 - `ActivityJog = 1.00`

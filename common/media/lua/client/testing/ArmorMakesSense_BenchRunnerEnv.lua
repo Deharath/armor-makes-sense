@@ -354,6 +354,13 @@ local WEATHER_OVERRIDE_PROFILES = {
         precipitation_intensity = 0.35,
         is_snow = true,
     },
+    thermal_cold_nowind = {
+        temperature = -12.0,
+        wind_intensity = 0.0,
+        cloud_intensity = 0.85,
+        precipitation_intensity = 0.35,
+        is_snow = true,
+    },
 }
 
 local function setClimateFloatOverride(channel, value)

@@ -132,6 +132,32 @@ local SCENARIOS = {
             { kind = "lock_weather_end" },
         },
     },
+    native_treadmill_walk_cold_nowind = {
+        id = "native_treadmill_walk_cold_nowind",
+        movement_uptime_min = 0.50,
+        blocks = {
+            { kind = "prepare_state" },
+            { kind = "equip_set" },
+            { kind = "lock_weather_start", weather_profile = "thermal_cold_nowind" },
+            { kind = "sample_once", tag = "before" },
+            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "walk", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
+            { kind = "sample_once", tag = "after" },
+            { kind = "lock_weather_end" },
+        },
+    },
+    native_treadmill_run_cold_nowind = {
+        id = "native_treadmill_run_cold_nowind",
+        movement_uptime_min = 0.50,
+        blocks = {
+            { kind = "prepare_state" },
+            { kind = "equip_set" },
+            { kind = "lock_weather_start", weather_profile = "thermal_cold_nowind" },
+            { kind = "sample_once", tag = "before" },
+            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "run", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
+            { kind = "sample_once", tag = "after" },
+            { kind = "lock_weather_end" },
+        },
+    },
     native_standing_combat_air = {
         id = "native_standing_combat_air",
         blocks = {

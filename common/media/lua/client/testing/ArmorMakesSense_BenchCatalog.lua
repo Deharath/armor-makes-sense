@@ -221,6 +221,36 @@ local function makeCatalog()
             speed = 8.0,
             mode = "sim",
         },
+        benchmark_thermal_cold_windy_v1 = {
+            id = "benchmark_thermal_cold_windy_v1",
+            sets = {
+                "naked",
+                "civilian_winter_layer",
+                "heavy",
+            },
+            scenarios = {
+                "native_treadmill_walk_cold",
+                "native_treadmill_run_cold",
+            },
+            repeats = 2,
+            speed = 8.0,
+            mode = "sim",
+        },
+        benchmark_thermal_cold_nowind_v1 = {
+            id = "benchmark_thermal_cold_nowind_v1",
+            sets = {
+                "naked",
+                "civilian_winter_layer",
+                "heavy",
+            },
+            scenarios = {
+                "native_treadmill_walk_cold_nowind",
+                "native_treadmill_run_cold_nowind",
+            },
+            repeats = 2,
+            speed = 8.0,
+            mode = "sim",
+        },
         benchmark_breathing_v1 = {
             id = "benchmark_breathing_v1",
             sets = {

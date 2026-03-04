@@ -1251,6 +1251,17 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
             if type(ctx("resetCharacterToEquilibrium")) == "function" then
                 ctx("resetCharacterToEquilibrium")(player)
             end
+            local caloriesTarget = tonumber(block.calories)
+            if caloriesTarget == nil then
+                caloriesTarget = tonumber(block.calories_target)
+            end
+            if caloriesTarget == nil then
+                caloriesTarget = 300.0
+            end
+            local nutrition = safeMethod(player, "getNutrition")
+            if nutrition then
+                safeMethod(nutrition, "setCalories", caloriesTarget)
+            end
             if exec.pinnedTimeOfDay ~= nil then
                 local setOk, setReason = setNativeTimeOfDay(exec.pinnedTimeOfDay)
                 if not setOk then

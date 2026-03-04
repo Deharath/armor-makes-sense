@@ -157,7 +157,7 @@ local function makeCatalog()
         { id = "mask_gas", class = "mask", baseline = false, items = { "Base.Hat_GasMask" } },
         { id = "mask_gas_nofilter", class = "mask", baseline = false, items = { "Base.Hat_GasMask_nofilter" } },
         { id = "military_surplus", class = "armor", gearProfile = "military_surplus", items = {} },
-        { id = "light", class = "armor", gearProfile = "light", items = {} },
+        { id = "bulletproof_vest", class = "armor", gearProfile = "light", items = {} },
         { id = "heavy", class = "armor", gearProfile = "heavy", items = {} },
     }
 
@@ -191,7 +191,7 @@ local function makeCatalog()
                 "civilian_baseline",
                 "civilian_leather",
                 "military_surplus",
-                "light",
+                "bulletproof_vest",
                 "heavy",
             },
             scenarios = {
@@ -307,7 +307,7 @@ local function makeCatalog()
                 "civilian_baseline",
                 "civilian_leather",
                 "military_surplus",
-                "light",
+                "bulletproof_vest",
                 "heavy",
             },
             scenarios = {

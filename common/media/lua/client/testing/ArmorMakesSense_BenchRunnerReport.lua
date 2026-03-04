@@ -430,7 +430,8 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
             report.warnings[#report.warnings + 1] = string.format("naked_baseline_missing:%s", tostring(scenarioId))
         end
 
-        local lightStats = scenario.sets.light
+        local lightSetId = scenario.sets.bulletproof_vest and "bulletproof_vest" or nil
+        local lightStats = lightSetId and scenario.sets[lightSetId] or nil
         local heavyStats = scenario.sets.heavy
         if lightStats and heavyStats and lightStats.mean_end_delta ~= nil and heavyStats.mean_end_delta ~= nil and math.abs(lightStats.mean_end_delta) > 0.000001 then
             scenario.heavy_light_ratio = math.abs(heavyStats.mean_end_delta) / math.abs(lightStats.mean_end_delta)
@@ -454,12 +455,12 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
         local scenarioGateProfile = resolveScenarioGateProfile and resolveScenarioGateProfile(scenarioDef) or {}
         if scenarioGateProfile.realSleep then
             local civilianId = scenario.sets.civilian_baseline and "civilian_baseline" or findSetByClass(scenario, "civilian", "naked")
-            local lightId = scenario.sets.light and "light" or nil
+            local lightId = lightSetId
             local heavyId = scenario.sets.heavy and "heavy" or nil
             local sequence = {
                 { label = "naked", value = scenario.sets.naked and asMetricValue(scenario.sets.naked.mean_achieved_sec) or nil },
                 { label = "civilian", value = civilianId and asMetricValue(scenario.sets[civilianId].mean_achieved_sec) or nil },
-                { label = "light", value = lightId and asMetricValue(scenario.sets[lightId].mean_achieved_sec) or nil },
+                { label = "bulletproof_vest", value = lightId and asMetricValue(scenario.sets[lightId].mean_achieved_sec) or nil },
                 { label = "heavy", value = heavyId and asMetricValue(scenario.sets[heavyId].mean_achieved_sec) or nil },
             }
 
@@ -474,12 +475,12 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
                 end
             end
         elseif isThermalScenarioId(scenarioId) then
-            local lightId = scenario.sets.light and "light" or nil
+            local lightId = lightSetId
             local heavyId = scenario.sets.heavy and "heavy" or nil
             if lightId and heavyId then
                 local left = monotonicBurden(scenario.sets[lightId].marginal_end_delta)
                 local right = monotonicBurden(scenario.sets[heavyId].marginal_end_delta)
-                local ok, breakReason = checkMonotonicPair("light", left, "heavy", right, scenarioId)
+                local ok, breakReason = checkMonotonicPair("bulletproof_vest", left, "heavy", right, scenarioId)
                 if not ok then
                     scenario.monotonicity = "fail"
                     scenario.monotonicity_break = tostring(breakReason)
@@ -487,13 +488,13 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
             end
         else
             local civilianId = scenario.sets.civilian_baseline and "civilian_baseline" or findSetByClass(scenario, "civilian", "naked")
-            local lightId = scenario.sets.light and "light" or nil
+            local lightId = lightSetId
             local heavyId = scenario.sets.heavy and "heavy" or nil
 
             local sequence = {
                 { label = "naked", value = monotonicBurden(0.0) },
                 { label = "civilian", value = civilianId and monotonicBurden(scenario.sets[civilianId].marginal_end_delta) or nil },
-                { label = "light", value = lightId and monotonicBurden(scenario.sets[lightId].marginal_end_delta) or nil },
+                { label = "bulletproof_vest", value = lightId and monotonicBurden(scenario.sets[lightId].marginal_end_delta) or nil },
                 { label = "heavy", value = heavyId and monotonicBurden(scenario.sets[heavyId].marginal_end_delta) or nil },
             }
 

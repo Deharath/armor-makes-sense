@@ -225,7 +225,7 @@ function Benches.sleepBench(hours, tempC, wetnessPct)
     local wet = ctx("clamp")(tonumber(wetnessPct) or 0.0, 0.0, 100.0)
 
     ctx("resetCharacterToEquilibrium")(player)
-    local light, errLight = runSleepBenchPhase("light", sleepHours, temp, wet)
+    local light, errLight = runSleepBenchPhase("bulletproof_vest", sleepHours, temp, wet)
     if not light then
         ctx("logError")("sleep bench failed (light): " .. tostring(errLight))
         return false

@@ -115,6 +115,8 @@ function State.ensureState(player)
     state.lastEnduranceObserved = tonumber(state.lastEnduranceObserved)
     state.lastArmorLoad = tonumber(state.lastArmorLoad) or 0
     state.uiRuntimeSnapshot = type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or nil
+    state.mpServerSnapshot = type(state.mpServerSnapshot) == "table" and state.mpServerSnapshot or nil
+    state.mpClient = type(state.mpClient) == "table" and state.mpClient or nil
     state.sleepSnapshot = state.sleepSnapshot
     state.wasSleeping = ctx("toBoolean")(state.wasSleeping)
     state.recoveryTrace = state.recoveryTrace or {

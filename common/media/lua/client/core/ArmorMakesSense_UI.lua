@@ -545,32 +545,90 @@ local function ensurePanelClasses()
 
         local state = ctx("ensureState") and ctx("ensureState")(player) or nil
         local options = UI._lastOptions or (ctx("getOptions") and ctx("getOptions")()) or {}
-        local profile = ctx("computeArmorProfile")(player) or {}
         local runtime = ctx("getUiRuntimeSnapshot") and ctx("getUiRuntimeSnapshot")(player, state, options) or nil
+        local isMp = type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")()
 
-        local burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
-        local thermalWord, thermalColor, thermalBurdensome, thermalAnnotation, thermalAnnotationColor = resolveThermalEffect(runtime)
-        local breathingWord = breathingTierFromLoad(profile.breathingLoad)
+        if isMp and type(runtime) ~= "table" then
+            self.snapshot = {
+                pendingSnapshot = true,
+                profile = { physicalLoad = 0, breathingLoad = 0, rigidityLoad = 0, armorCount = 0 },
+                runtime = nil,
+                burdenTier = tr("UI_AMS_Tier_Negligible", "Negligible"),
+                burdenTierKey = "negligible",
+                thermalWord = tr("UI_AMS_Label_ThermalNeutral", "Neutral"),
+                thermalColor = { 0.82, 0.82, 0.82, 1.0 },
+                thermalAnnotation = nil,
+                thermalAnnotationColor = nil,
+                breathingWord = nil,
+                breathingDesc = nil,
+                sleepWord = nil,
+                noBurden = false,
+                compact = false,
+                heatSensitive = false,
+                drivers = {},
+            }
+            self.lastRefreshMinute = nowMinute
+            self.lastRuntimeRefreshMinute = nowMinute
+            self.needsRefresh = false
+            return
+        end
+
+        local profile = nil
+        local burdenTier, burdenTierKey = nil, nil
+        local breathingWord = nil
         local breathingDesc = nil
-        if breathingWord then
-            local bLoad = tonumber(profile.breathingLoad) or 0
-            if bLoad >= 3.45 then
-                breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-            else
-                breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
-            end
-        end
-
-        local rigidity = tonumber(profile.rigidityLoad) or 0
         local sleepWord = nil
-        if rigidity >= 10 then
-            local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
-            local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
-            if sleepPct >= 1 then
-                sleepWord = string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
+        local costDrivers = {}
+        if isMp then
+            local loadNorm = tonumber(runtime and runtime.loadNorm) or 0
+            local physicalLoad = tonumber(runtime and runtime.physicalLoad)
+            if physicalLoad == nil then
+                physicalLoad = ctx("clamp")(loadNorm / 2.8 * 100.0, 0, 100)
             end
+            local breathingLoad = tonumber(runtime and runtime.breathingLoad) or 0
+            local armorCount = tonumber(runtime and runtime.armorCount) or (physicalLoad > 1 and 1 or 0)
+            profile = {
+                physicalLoad = physicalLoad,
+                breathingLoad = breathingLoad,
+                rigidityLoad = 0,
+                armorCount = armorCount,
+            }
+            burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
+            breathingWord = breathingTierFromLoad(profile.breathingLoad)
+            if breathingWord then
+                local bLoad = tonumber(profile.breathingLoad) or 0
+                if bLoad >= 3.45 then
+                    breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
+                else
+                    breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
+                end
+            end
+            costDrivers = type(runtime and runtime.drivers) == "table" and runtime.drivers or {}
+        else
+            profile = ctx("computeArmorProfile")(player) or {}
+            burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
+            breathingWord = breathingTierFromLoad(profile.breathingLoad)
+            if breathingWord then
+                local bLoad = tonumber(profile.breathingLoad) or 0
+                if bLoad >= 3.45 then
+                    breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
+                else
+                    breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
+                end
+            end
+
+            local rigidity = tonumber(profile.rigidityLoad) or 0
+            if rigidity >= 10 then
+                local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
+                local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
+                if sleepPct >= 1 then
+                    sleepWord = string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
+                end
+            end
+            costDrivers = collectCostDrivers(player)
         end
 
+        local thermalWord, thermalColor, thermalBurdensome, thermalAnnotation, thermalAnnotationColor = resolveThermalEffect(runtime)
         local physical = tonumber(profile.physicalLoad) or 0
         local armorCount = tonumber(profile.armorCount) or 0
         local noBurden = armorCount <= 0
@@ -580,9 +638,8 @@ local function ensurePanelClasses()
             and (not breathingWord)
         local heatSensitive = (not noBurden) and physical < 15 and thermalBurdensome
 
-        local costDrivers = collectCostDrivers(player)
-
         self.snapshot = {
+            pendingSnapshot = false,
             profile = profile,
             runtime = runtime,
             burdenTier = burdenTier,
@@ -684,6 +741,12 @@ local function ensurePanelClasses()
         local cAnnotation = { 0.72, 0.70, 0.64 }
         local cSep = { 0.35, 0.35, 0.35 }
 
+        if data.pendingSnapshot then
+            self:drawText("Waiting for server snapshot...", x, y, cValue[1], cValue[2], cValue[3], 1.0, font)
+            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
+            return
+        end
+
         if data.noBurden then
             self:drawText(tr("UI_AMS_NoBurden", "No armor burden."), x, y, cValue[1], cValue[2], cValue[3], 1.0, font)
             self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
@@ -741,6 +804,13 @@ local function ensurePanelClasses()
             y = y + lineH
         end
 
+        local drivers = data.drivers or {}
+        local maxRows = #drivers
+        if maxRows <= 0 then
+            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
+            return
+        end
+
         -- Separator
         y = y + sectionGap
         self:drawRect(x, y, contentW, 1, 0.18, cSep[1], cSep[2], cSep[3])
@@ -749,8 +819,6 @@ local function ensurePanelClasses()
         -- Section: Cost Drivers
         self:drawText(tr("UI_AMS_Section_CostDrivers", "Cost Drivers"), x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
         y = y + lineH + 4
-        local drivers = data.drivers or {}
-        local maxRows = #drivers
         local topPhysical = maxRows > 0 and (tonumber(drivers[1].physical) or 0) or 1
 
         local maxNameW = 0

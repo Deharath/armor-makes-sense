@@ -8,6 +8,14 @@ ArmorMakesSense = ArmorMakesSense or {}
 --   ArmorMakesSense.DEFAULTS   -- config defaults
 
 require "ArmorMakesSense_Config"
+local okMpCompat, mpCompatOrErr = pcall(require, "ArmorMakesSense_MPCompat")
+if not okMpCompat then
+    print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))
+end
+local okMpClientRuntime, errMpClientRuntime = pcall(require, "ArmorMakesSense_MPClientRuntime")
+if not okMpClientRuntime then
+    print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_MPClientRuntime :: " .. tostring(errMpClientRuntime))
+end
 local okModOptionsShared, errModOptionsShared = pcall(require, "ArmorMakesSense_ModOptionsShared")
 if not okModOptionsShared then
     print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_ModOptionsShared :: " .. tostring(errModOptionsShared))
@@ -52,8 +60,9 @@ require "testing/ArmorMakesSense_BenchRunner"
 local Mod = ArmorMakesSense
 local MOD_KEY = "ArmorMakesSenseState"
 local MOD_OPTIONS_ID = "ArmorMakesSense"
-local SCRIPT_VERSION = "1.0.5"
-local SCRIPT_BUILD = "ams-b42-2026-03-04-v053"
+local mpCompat = (okMpCompat and mpCompatOrErr) or (ArmorMakesSense and ArmorMakesSense.MP) or {}
+local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.0.5")
+local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-03-04-v053")
 local warned = {}
 local cachedEnableSystem = true
 local cachedDebugLogging = false
@@ -312,6 +321,14 @@ local function isMultiplayer()
         return true
     end
     return false
+end
+
+local function isClientSide()
+    return safeGlobalBool("isClient")
+end
+
+local function isServerSide()
+    return safeGlobalBool("isServer")
 end
 
 local function hasFunction(target, name)
@@ -638,6 +655,8 @@ contextCoreAStatic = {
     ensureState = ensureState,
     getLocalPlayer = getLocalPlayer,
     isMultiplayer = isMultiplayer,
+    isClientSide = isClientSide,
+    isServerSide = isServerSide,
     getCurrentGameSpeed = getCurrentGameSpeed,
     setCurrentGameSpeed = setCurrentGameSpeed,
     getGameVersionTag = getGameVersionTag,

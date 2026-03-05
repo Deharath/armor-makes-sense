@@ -128,14 +128,16 @@ function Runtime.enforceDiscomfortInvariant(player, state, force)
         return
     end
 
-    local nowMinutes = tonumber(ctx("getWorldAgeMinutes")()) or 0
-    local minuteNow = math.floor(nowMinutes)
-    local lastMinute = tonumber(state.lastDiscomfortSuppressMinute)
-    if (not force) and lastMinute ~= nil and minuteNow <= lastMinute then
-        return
+    local isMp = type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")()
+    if not isMp then
+        local nowMinutes = tonumber(ctx("getWorldAgeMinutes")()) or 0
+        local minuteNow = math.floor(nowMinutes)
+        local lastMinute = tonumber(state.lastDiscomfortSuppressMinute)
+        if (not force) and lastMinute ~= nil and minuteNow <= lastMinute then
+            return
+        end
+        state.lastDiscomfortSuppressMinute = minuteNow
     end
-
-    state.lastDiscomfortSuppressMinute = minuteNow
     local discomfort = tonumber(ctx("getDiscomfort")(player)) or 0
     if discomfort > 0.0001 then
         ctx("setDiscomfort")(player, 0.0)
@@ -148,7 +150,7 @@ function Runtime.onEveryOneMinute()
     end
 
     if ctx("isMultiplayer")() then
-        ctx("logOnce")("mp_disabled", "MP detected. This version is SP-only and will no-op.")
+        ctx("logOnce")("mp_client_read_only", "MP detected. Client gameplay mutations disabled; waiting for server-authoritative snapshots.")
         return
     end
 
@@ -168,16 +170,17 @@ function Runtime.onPlayerUpdate(playerObj)
         return
     end
 
-    if ctx("isMultiplayer")() then
-        return
-    end
-
     local player = playerObj or ctx("getLocalPlayer")()
     if not player then
         return
     end
 
     local state = ctx("ensureState")(player)
+    if ctx("isMultiplayer")() then
+        Runtime.enforceDiscomfortInvariant(player, state, false)
+        return
+    end
+
     Runtime.enforceDiscomfortInvariant(player, state, false)
     ctx("runGuarded")("BenchRunner", ctx("tickBenchRunner"), player, state)
 
@@ -224,6 +227,15 @@ function Runtime.registerEvents(mod)
         tostring(ctx("scriptBuild")),
         tostring(ctx("isSystemEnabledCached")()),
         tostring(ctx("isDebugLoggingCached")())
+    ))
+    ctx("log")(string.format(
+        "[BOOT_MP] side=client isClient=%s isServer=%s isMultiplayer=%s ingame=%s scriptVersion=%s build=%s",
+        tostring(ctx("isClientSide") and ctx("isClientSide")() or false),
+        tostring(ctx("isServerSide") and ctx("isServerSide")() or false),
+        tostring(ctx("isMultiplayer")()),
+        tostring(GameClient and GameClient.ingame or false),
+        tostring(ctx("scriptVersion")),
+        tostring(ctx("scriptBuild"))
     ))
 
     Runtime.runStaticStartupChecks(bootOptions)

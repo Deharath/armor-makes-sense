@@ -19,6 +19,12 @@ function Stats.setContext(context)
     C = context or {}
 end
 
+local function shouldBlockMpWrite()
+    local isMultiplayer = type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")()
+    local isClientSide = type(ctx("isClientSide")) == "function" and ctx("isClientSide")()
+    return isMultiplayer and isClientSide
+end
+
 function Stats.getEndurance(player)
     local stats = ctx("safeMethod")(player, "getStats")
     if not stats then
@@ -36,6 +42,9 @@ function Stats.getEndurance(player)
 end
 
 function Stats.setEndurance(player, value)
+    if shouldBlockMpWrite() then
+        return
+    end
     local stats = ctx("safeMethod")(player, "getStats")
     if not stats then
         return
@@ -69,6 +78,9 @@ function Stats.getFatigue(player)
 end
 
 function Stats.setFatigue(player, value)
+    if shouldBlockMpWrite() then
+        return
+    end
     local stats = ctx("safeMethod")(player, "getStats")
     if not stats then
         return
@@ -102,6 +114,9 @@ function Stats.getThirst(player)
 end
 
 function Stats.setThirst(player, value)
+    if shouldBlockMpWrite() then
+        return
+    end
     local stats = ctx("safeMethod")(player, "getStats")
     if not stats then
         return
@@ -134,6 +149,9 @@ function Stats.getDiscomfort(player)
 end
 
 function Stats.setWetness(player, value)
+    if shouldBlockMpWrite() then
+        return
+    end
     value = ctx("clamp")(tonumber(value) or 0, 0, 100)
     local stats = ctx("safeMethod")(player, "getStats")
     if stats and CharacterStat and CharacterStat.WETNESS then
@@ -161,6 +179,8 @@ function Stats.getWetness(player)
 end
 
 function Stats.setDiscomfort(player, value)
+    -- Discomfort suppression is an immediate client UX fix (fidget/moodle noise),
+    -- so allow this write in MP while other gameplay-affecting stats remain blocked.
     local stats = ctx("safeMethod")(player, "getStats")
     if not stats then
         return
@@ -176,6 +196,9 @@ function Stats.setDiscomfort(player, value)
 end
 
 function Stats.setBodyTemperature(player, value)
+    if shouldBlockMpWrite() then
+        return
+    end
     value = ctx("clamp")(tonumber(value) or 37.0, 34.0, 41.0)
     local stats = ctx("safeMethod")(player, "getStats")
     if stats and CharacterStat and CharacterStat.TEMPERATURE then
@@ -354,6 +377,9 @@ local function resetThermoregulatorState(player)
 end
 
 function Stats.resetCharacterToEquilibrium(player)
+    if shouldBlockMpWrite() then
+        return 0
+    end
     local stats = ctx("safeMethod")(player, "getStats")
     if stats then
         Stats.setEndurance(player, 1.0)

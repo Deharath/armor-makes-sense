@@ -14,8 +14,10 @@ end
 
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local SNAPSHOT_INTERVAL_SECONDS = math.max(1, math.floor(tonumber(MP.SNAPSHOT_FALLBACK_SECONDS) or 2))
+local SNAPSHOT_STALE_SECONDS = math.max(10, SNAPSHOT_INTERVAL_SECONDS * 4)
 local firstSnapshotLogged = false
 local uiHooksEnsured = false
+local markUiDirty
 
 local function log(message)
     print("[ArmorMakesSense][MP][CLIENT] " .. tostring(message))
@@ -61,6 +63,22 @@ local function getLocalPlayer()
     return playerObj
 end
 
+local function getWallClockSeconds()
+    if type(getTimestampMs) == "function" then
+        local nowMs = tonumber(getTimestampMs())
+        if nowMs ~= nil then
+            return math.floor(nowMs / 1000)
+        end
+    end
+    if type(getTimestamp) == "function" then
+        local nowSeconds = tonumber(getTimestamp())
+        if nowSeconds ~= nil then
+            return math.floor(nowSeconds)
+        end
+    end
+    return 0
+end
+
 local function getWorldAgeMinutes()
     local gameTime = type(getGameTime) == "function" and getGameTime() or nil
     local worldAgeHours = tonumber(gameTime and safeCall(gameTime, "getWorldAgeHours") or nil)
@@ -68,10 +86,6 @@ local function getWorldAgeMinutes()
         return 0
     end
     return worldAgeHours * 60.0
-end
-
-local function getWallClockSeconds()
-    return math.floor(getWorldAgeMinutes() * 60.0)
 end
 
 local function isMultiplayerClientSession(playerObj)
@@ -108,6 +122,41 @@ local function readLatestSnapshotState()
     return playerObj, state, mpClient
 end
 
+local function clearSnapshotState(playerObj, resetLogLatch)
+    local state, mpClient = ensureState(playerObj)
+    if not state or not mpClient then
+        return false
+    end
+    local hadSnapshot = type(state.mpServerSnapshot) == "table"
+    state.mpServerSnapshot = nil
+    mpClient.lastSnapshotWallSecond = 0
+    if resetLogLatch then
+        firstSnapshotLogged = false
+    end
+    if hadSnapshot then
+        markUiDirty()
+    end
+    return hadSnapshot
+end
+
+local function expireStaleSnapshot(playerObj)
+    local state, mpClient = ensureState(playerObj)
+    if not state or not mpClient or type(state.mpServerSnapshot) ~= "table" then
+        return false
+    end
+    local lastSnapshot = tonumber(mpClient.lastSnapshotWallSecond) or 0
+    if lastSnapshot <= 0 then
+        return false
+    end
+    local ageSeconds = getWallClockSeconds() - lastSnapshot
+    if ageSeconds < SNAPSHOT_STALE_SECONDS then
+        return false
+    end
+    clearSnapshotState(playerObj, false)
+    log(string.format("expired stale snapshot age_s=%.1f", tonumber(ageSeconds) or 0))
+    return true
+end
+
 local function canSendRequest(playerObj)
     if not playerObj then
         return false
@@ -130,7 +179,7 @@ local function canSendRequest(playerObj)
     return true
 end
 
-local function markUiDirty()
+function markUiDirty()
     local ui = ArmorMakesSense and ArmorMakesSense.Core and ArmorMakesSense.Core.UI or nil
     if ui and type(ui.markDirty) == "function" then
         pcall(ui.markDirty)
@@ -244,13 +293,14 @@ local function parseServerSnapshot(args)
         physicalLoad = tonumber(args.physical_load) or 0,
         thermalLoad = tonumber(args.thermal_load) or 0,
         breathingLoad = tonumber(args.breathing_load) or 0,
+        rigidityLoad = tonumber(args.rigidity_load) or 0,
         armorCount = tonumber(args.armor_count) or 0,
         effectiveLoad = tonumber(args.effective_load) or 0,
         drivers = parsedDrivers,
         activityLabel = tostring(args.activity_label or "idle"),
         hotStrain = toBoolean(args.thermal_hot) and 1 or 0,
         coldAppropriateness = toBoolean(args.thermal_cold) and 1 or 0,
-        thermalPressureScale = toBoolean(args.thermal_hot) and 1 or 0,
+        thermalPressureScale = tonumber(args.thermal_pressure_scale) or 0,
         enduranceEnvFactor = tonumber(args.endurance_env_factor) or 1,
         updatedMinute = tonumber(args.updated_minute) or 0,
         source = "server_snapshot",
@@ -295,6 +345,7 @@ local function onServerCommand(module, command, args)
 end
 
 local function onConnected()
+    clearSnapshotState(getLocalPlayer(), true)
     ensureMpUiHooks(getLocalPlayer())
     sendSnapshotRequest(getLocalPlayer(), "OnConnected", true)
 end
@@ -326,17 +377,23 @@ local function onCreatePlayer(playerIndex, playerObj)
     if playerObj and type(playerObj.isLocalPlayer) == "function" and not playerObj:isLocalPlayer() then
         return
     end
-    ensureMpUiHooks(playerObj or getLocalPlayer())
-    sendSnapshotRequest(playerObj or getLocalPlayer(), "OnCreatePlayer", true)
+    local player = playerObj or getLocalPlayer()
+    clearSnapshotState(player, true)
+    ensureMpUiHooks(player)
+    sendSnapshotRequest(player, "OnCreatePlayer", true)
 end
 
 local function onClothingUpdated()
-    sendSnapshotRequest(getLocalPlayer(), "OnClothingUpdated", true)
+    local player = getLocalPlayer()
+    expireStaleSnapshot(player)
+    sendSnapshotRequest(player, "OnClothingUpdated", true)
 end
 
 local function onEveryOneMinute()
-    ensureMpUiHooks(getLocalPlayer())
-    sendSnapshotRequest(getLocalPlayer(), "EveryOneMinute", false)
+    local player = getLocalPlayer()
+    expireStaleSnapshot(player)
+    ensureMpUiHooks(player)
+    sendSnapshotRequest(player, "EveryOneMinute", false)
 end
 
 local function onPlayerUpdate(playerObj)
@@ -344,6 +401,7 @@ local function onPlayerUpdate(playerObj)
     if not player then
         return
     end
+    expireStaleSnapshot(player)
     ensureMpUiHooks(player)
     sendSnapshotRequest(player, "OnPlayerUpdate", false)
 end
@@ -388,4 +446,5 @@ end
 
 registerEvents()
 logBootBanner("load")
+clearSnapshotState(getLocalPlayer(), true)
 sendSnapshotRequest(getLocalPlayer(), "load", true)

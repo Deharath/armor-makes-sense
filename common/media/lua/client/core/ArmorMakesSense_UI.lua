@@ -586,11 +586,12 @@ local function ensurePanelClasses()
                 physicalLoad = ctx("clamp")(loadNorm / 2.8 * 100.0, 0, 100)
             end
             local breathingLoad = tonumber(runtime and runtime.breathingLoad) or 0
+            local rigidityLoad = tonumber(runtime and runtime.rigidityLoad) or 0
             local armorCount = tonumber(runtime and runtime.armorCount) or (physicalLoad > 1 and 1 or 0)
             profile = {
                 physicalLoad = physicalLoad,
                 breathingLoad = breathingLoad,
-                rigidityLoad = 0,
+                rigidityLoad = rigidityLoad,
                 armorCount = armorCount,
             }
             burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
@@ -601,6 +602,14 @@ local function ensurePanelClasses()
                     breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
                 else
                     breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
+                end
+            end
+            local rigidity = tonumber(profile.rigidityLoad) or 0
+            if rigidity >= 10 then
+                local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
+                local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
+                if sleepPct >= 1 then
+                    sleepWord = string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
                 end
             end
             costDrivers = type(runtime and runtime.drivers) == "table" and runtime.drivers or {}

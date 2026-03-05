@@ -515,6 +515,7 @@ function Physiology.getUiRuntimeSnapshot(player, state, options)
             physicalLoad = tonumber(snapshot.physicalLoad) or 0,
             thermalLoad = tonumber(snapshot.thermalLoad) or 0,
             breathingLoad = tonumber(snapshot.breathingLoad) or 0,
+            rigidityLoad = tonumber(snapshot.rigidityLoad) or 0,
             armorCount = tonumber(snapshot.armorCount) or 0,
             effectiveLoad = tonumber(snapshot.effectiveLoad) or 0,
             hotStrain = tonumber(snapshot.hotStrain) or 0,

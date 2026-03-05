@@ -17,6 +17,36 @@ if type(MP) ~= "table" then
     return
 end
 
+local function diagnosticsEnabled()
+    if MP and MP.DEV_DIAGNOSTICS_ENABLED == true then
+        return true
+    end
+    if _G.ams_enable_mp_diagnostics == true then
+        return true
+    end
+    if type(isDebugEnabled) == "function" then
+        local okDebug, enabled = pcall(isDebugEnabled)
+        if okDebug and enabled == true then
+            return true
+        end
+    end
+    return false
+end
+
+local function minuteSummaryEnabled()
+    if MP and MP.DEV_DIAG_MINUTE_SUMMARY_ENABLED == true then
+        return true
+    end
+    if _G.ams_enable_mp_diag_minute_summary == true then
+        return true
+    end
+    return false
+end
+
+if not diagnosticsEnabled() then
+    return
+end
+
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 
 local function log(message)
@@ -219,9 +249,9 @@ local function registerEvents()
         log("OnClientCommand.Add unavailable; diag dump request handler inactive")
     end
 
-    if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
+    if minuteSummaryEnabled() and Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
         Events.EveryOneMinute.Add(onEveryOneMinute)
-    else
+    elseif minuteSummaryEnabled() then
         log("EveryOneMinute.Add unavailable; minute diagnostics inactive")
     end
 end

@@ -56,6 +56,7 @@ local Physiology = physiologyOrErr
 local DEFAULTS = ArmorMakesSense.DEFAULTS or {}
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local COST_DRIVER_THRESHOLD = 1.5
+local COMBAT_LATCH_ATTACK_SECONDS = 1.25
 
 local BREATHING_KEYWORDS = {
     "mask", "respirator", "gas", "hazmat", "filter", "welding", "visor",
@@ -490,7 +491,7 @@ local function getActivityFactorForLabel(options, activityLabel)
     return clamp(tonumber(options.ActivityIdle) or 0.35, 0.2, 1.8)
 end
 
-local function prepareRuntimeInputs(playerObj, options, requestedActivityLabel)
+local function prepareRuntimeInputs(playerObj, options)
     local profile = type(LoadModel.computeArmorProfile) == "function" and LoadModel.computeArmorProfile(playerObj) or nil
     if type(profile) ~= "table" then
         profile = {}
@@ -499,8 +500,7 @@ local function prepareRuntimeInputs(playerObj, options, requestedActivityLabel)
     local drivers = collectSnapshotDrivers(playerObj)
     local heatFactor = type(Environment.getHeatFactor) == "function" and tonumber(Environment.getHeatFactor(playerObj, options)) or 1.0
     local wetFactor = type(Environment.getWetFactor) == "function" and tonumber(Environment.getWetFactor(playerObj, options)) or 1.0
-    local fallbackActivityLabel = type(Environment.getActivityLabel) == "function" and Environment.getActivityLabel(playerObj) or "idle"
-    local activityLabel = normalizeActivityLabel(requestedActivityLabel) or normalizeActivityLabel(fallbackActivityLabel) or "idle"
+    local activityLabel = normalizeActivityLabel(type(Environment.getActivityLabel) == "function" and Environment.getActivityLabel(playerObj) or "idle") or "idle"
     local activityFactor = getActivityFactorForLabel(options, activityLabel)
     local postureLabel = type(Environment.getPostureLabel) == "function" and Environment.getPostureLabel(playerObj) or "stand"
 
@@ -517,6 +517,7 @@ local function buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
         physicalLoad = tonumber(profile.physicalLoad) or 0,
         thermalLoad = tonumber(profile.thermalLoad) or 0,
         breathingLoad = tonumber(profile.breathingLoad) or 0,
+        rigidityLoad = tonumber(profile.rigidityLoad) or 0,
         armorCount = tonumber(profile.armorCount) or 0,
         effectiveLoad = tonumber(uiSnapshot.effectiveLoad) or tonumber(profile.combinedLoad) or 0,
         drivers = drivers or {},
@@ -541,11 +542,13 @@ local function sendSnapshot(playerObj, snapshot, reason)
         physical_load = tonumber(snapshot.physicalLoad) or 0,
         thermal_load = tonumber(snapshot.thermalLoad) or 0,
         breathing_load = tonumber(snapshot.breathingLoad) or 0,
+        rigidity_load = tonumber(snapshot.rigidityLoad) or 0,
         armor_count = tonumber(snapshot.armorCount) or 0,
         effective_load = tonumber(snapshot.effectiveLoad) or 0,
         activity_label = tostring(snapshot.activityLabel or "idle"),
         thermal_hot = snapshot.thermalHot == true,
         thermal_cold = snapshot.thermalCold == true,
+        thermal_pressure_scale = tonumber(snapshot.thermalPressureScale) or 0,
         endurance_env_factor = tonumber(snapshot.enduranceEnvFactor) or 1,
         updated_minute = tonumber(snapshot.updatedMinute) or 0,
         reason = tostring(reason or "tick"),
@@ -571,7 +574,18 @@ local function sendSnapshot(playerObj, snapshot, reason)
     end
 end
 
-local function updatePlayer(playerObj, reason, requestedActivityLabel)
+local function buildFreshSnapshot(playerObj, mpState, options)
+    activeFormulaState = mpState
+    local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
+    activeFormulaState = nil
+    if not okInputs then
+        log("shared model input prep failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
+        return nil
+    end
+    return buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
+end
+
+local function updatePlayer(playerObj, reason)
     local _, mpState = ensurePlayerState(playerObj)
     if not mpState then
         return
@@ -585,6 +599,16 @@ local function updatePlayer(playerObj, reason, requestedActivityLabel)
     mpState.pendingCatchupMinutes = (tonumber(mpState.pendingCatchupMinutes) or 0) + elapsed
 
     if mpState.pendingCatchupMinutes <= 0 then
+        local normalizedReason = lower(reason)
+        if normalizedReason ~= "minute" and normalizedReason ~= "tick" then
+            local options = getOptions()
+            local freshSnapshot = buildFreshSnapshot(playerObj, mpState, options)
+            if freshSnapshot then
+                mpState.runtimeSnapshot = freshSnapshot
+                sendSnapshot(playerObj, freshSnapshot, reason)
+                return
+            end
+        end
         if type(mpState.runtimeSnapshot) == "table" then
             sendSnapshot(playerObj, mpState.runtimeSnapshot, reason)
         end
@@ -598,7 +622,7 @@ local function updatePlayer(playerObj, reason, requestedActivityLabel)
     local snapshot = nil
 
     activeFormulaState = mpState
-    local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options, requestedActivityLabel)
+    local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
     if not okInputs then
         activeFormulaState = nil
         log("shared model input prep failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
@@ -665,7 +689,7 @@ local function onClientCommand(module, command, playerObj, args)
         return
     end
 
-    updatePlayer(playerObj, args and args.reason or "request", args and args.activity_label or nil)
+    updatePlayer(playerObj, args and args.reason or "request")
 end
 
 local function onEveryOneMinute()
@@ -684,6 +708,11 @@ local function onWeaponSwing(attacker, weapon)
     local playerObj = attacker
     if not playerObj or not weapon then
         return
+    end
+
+    local _, mpState = ensurePlayerState(playerObj)
+    if mpState then
+        mpState.recentCombatUntilMinute = (tonumber(getWorldAgeMinutes()) or 0) + (COMBAT_LATCH_ATTACK_SECONDS / 60.0)
     end
 
     local options = getOptions()

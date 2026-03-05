@@ -165,7 +165,7 @@ local SCENARIOS = {
             { kind = "equip_set" },
             { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
             { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_combat_air", requested_sec = 420, timeout_sec = 420, sterile_radius = 8.0, expected_hit_events = 0, combat_stand_still = true },
+            { kind = "run_activity", mode = "native_combat_air", requested_swings = 60, requested_sec = 420, timeout_sec = 420, sterile_radius = 8.0, expected_hit_events = 0, combat_stand_still = true },
             { kind = "sample_once", tag = "after" },
             { kind = "lock_weather_end" },
         },

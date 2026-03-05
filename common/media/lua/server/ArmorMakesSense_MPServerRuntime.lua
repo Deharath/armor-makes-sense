@@ -56,7 +56,6 @@ local Physiology = physiologyOrErr
 local DEFAULTS = ArmorMakesSense.DEFAULTS or {}
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local COST_DRIVER_THRESHOLD = 1.5
-local MAX_SNAPSHOT_DRIVERS = 5
 
 local BREATHING_KEYWORDS = {
     "mask", "respirator", "gas", "hazmat", "filter", "welding", "visor",
@@ -412,12 +411,6 @@ local function collectSnapshotDrivers(playerObj)
     table.sort(drivers, function(a, b)
         return (tonumber(a and a.physical) or 0) > (tonumber(b and b.physical) or 0)
     end)
-
-    if #drivers > MAX_SNAPSHOT_DRIVERS then
-        for i = #drivers, MAX_SNAPSHOT_DRIVERS + 1, -1 do
-            drivers[i] = nil
-        end
-    end
 
     return drivers
 end

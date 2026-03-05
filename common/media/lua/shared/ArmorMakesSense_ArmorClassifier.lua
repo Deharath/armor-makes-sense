@@ -98,16 +98,15 @@ end
 function Classifier.computeArmorLikeSignals(item, scriptItem, wornLocation)
     scriptItem = scriptItem or safeCall(item, "getScriptItem")
     local locationName = lower(wornLocation or safeCall(item, "getBodyLocation") or safeCall(scriptItem, "getBodyLocation"))
+    -- Use stable script identifiers for keyword matching to avoid locale-dependent behavior.
     local itemName = lower(
-        safeCall(item, "getDisplayName")
-        or safeCall(item, "getName")
+        safeCall(item, "getFullType")
         or safeCall(item, "getType")
-        or safeCall(item, "getFullType")
+        or safeCall(item, "getName")
         or safeCall(item, "getFullName")
-        or safeCall(scriptItem, "getDisplayName")
-        or safeCall(scriptItem, "getName")
-        or safeCall(scriptItem, "getType")
         or safeCall(scriptItem, "getFullType")
+        or safeCall(scriptItem, "getType")
+        or safeCall(scriptItem, "getName")
         or safeCall(scriptItem, "getFullName")
     )
 
@@ -211,5 +210,4 @@ Classifier.PROTECTIVE_TAG_HINTS = PROTECTIVE_TAG_HINTS
 Classifier.hasAnyProtectiveTag = hasAnyProtectiveTag
 
 return Classifier
-
 

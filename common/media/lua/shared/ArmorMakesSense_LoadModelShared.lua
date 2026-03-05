@@ -145,7 +145,15 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
         return nil
     end
     local locationName = ctx("lower")(wornLocation or ctx("safeMethod")(item, "getBodyLocation") or ctx("safeMethod")(scriptItem, "getBodyLocation"))
-    local itemName = ctx("lower")(ctx("safeMethod")(item, "getDisplayName") or ctx("safeMethod")(item, "getName") or ctx("safeMethod")(item, "getType"))
+    -- Use stable script identifiers for keyword-based classification so results are locale-independent.
+    local itemName = ctx("lower")(
+        ctx("safeMethod")(item, "getFullType")
+        or ctx("safeMethod")(item, "getType")
+        or ctx("safeMethod")(item, "getName")
+        or ctx("safeMethod")(scriptItem, "getFullType")
+        or ctx("safeMethod")(scriptItem, "getType")
+        or ctx("safeMethod")(scriptItem, "getName")
+    )
 
     local scratch = getItemOrScriptNumber(item, scriptItem, "getScratchDefense")
     local bite = getItemOrScriptNumber(item, scriptItem, "getBiteDefense")

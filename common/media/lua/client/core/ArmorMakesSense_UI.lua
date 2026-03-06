@@ -54,8 +54,11 @@ end
 
 local function breathingTierFromLoad(load)
     local value = tonumber(load) or 0
-    if value < 1.2 then
+    if value < 0.80 then
         return nil
+    end
+    if value < 2.00 then
+        return tr("UI_AMS_Label_BreathingMild", "Mild")
     end
     if value < 3.45 then
         return tr("UI_AMS_Label_BreathingRestricted", "Restricted")
@@ -236,7 +239,7 @@ local function injectTooltipRowsWithLayout(layout, item)
         return
     end
     local hasPhysical = (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD
-    local hasBreathing = (tonumber(signal.breathingLoad) or 0) >= 1.2
+    local hasBreathing = (tonumber(signal.breathingLoad) or 0) >= 0.80
     if not hasPhysical and not hasBreathing then
         return
     end
@@ -521,6 +524,19 @@ local function ensurePanelClasses()
         return player
     end
 
+    local function shouldShowThermalBlock(thermalBurdensome, thermalAnnotation, showBurden, showBreathing, showSleep)
+        return thermalBurdensome or thermalAnnotation ~= nil or showBurden or showBreathing or showSleep
+    end
+
+    local function hasRenderableContent(data)
+        return (type(data.summaryLines) == "table" and #data.summaryLines > 0)
+            or data.showBurden
+            or data.showThermal
+            or data.showBreathing
+            or data.showSleep
+            or data.showDrivers
+    end
+
     function AMSBurdenPanel:collectSnapshot(force)
         local player = self:resolvePlayer()
         if not player then
@@ -562,9 +578,12 @@ local function ensurePanelClasses()
                 breathingWord = nil,
                 breathingDesc = nil,
                 sleepWord = nil,
-                noBurden = false,
-                compact = false,
-                heatSensitive = false,
+                summaryLines = {},
+                showBurden = false,
+                showThermal = false,
+                showBreathing = false,
+                showSleep = false,
+                showDrivers = false,
                 drivers = {},
             }
             self.lastRefreshMinute = nowMinute
@@ -600,8 +619,10 @@ local function ensurePanelClasses()
                 local bLoad = tonumber(profile.breathingLoad) or 0
                 if bLoad >= 3.45 then
                     breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-                else
+                elseif bLoad >= 2.00 then
                     breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
+                else
+                    breathingDesc = tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
                 end
             end
             local rigidity = tonumber(profile.rigidityLoad) or 0
@@ -621,8 +642,10 @@ local function ensurePanelClasses()
                 local bLoad = tonumber(profile.breathingLoad) or 0
                 if bLoad >= 3.45 then
                     breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-                else
+                elseif bLoad >= 2.00 then
                     breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
+                else
+                    breathingDesc = tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
                 end
             end
 
@@ -646,6 +669,33 @@ local function ensurePanelClasses()
             and (not thermalBurdensome)
             and (not breathingWord)
         local heatSensitive = (not noBurden) and physical < 15 and thermalBurdensome
+        local showBreathing = breathingWord ~= nil
+        local showSleep = sleepWord ~= nil
+        local showDrivers = #costDrivers > 0
+        local showBurden = (not noBurden)
+        local showThermal = shouldShowThermalBlock(thermalBurdensome, thermalAnnotation, showBurden, showBreathing, showSleep)
+        local summaryLines = {}
+
+        if noBurden then
+            summaryLines[#summaryLines + 1] = {
+                text = tr("UI_AMS_NoBurden", "No armor burden."),
+                tone = "default",
+            }
+        elseif compact then
+            summaryLines[#summaryLines + 1] = {
+                text = tr("UI_AMS_LightMinimal", "Light clothing -- minimal burden."),
+                tone = "default",
+            }
+        elseif heatSensitive then
+            summaryLines[#summaryLines + 1] = {
+                text = tr("UI_AMS_HeatSensitive", "Low weight, but heat-sensitive outfit."),
+                tone = "warm",
+            }
+        end
+
+        if not showBurden and not showBreathing and not showSleep and not thermalBurdensome and not thermalAnnotation then
+            showThermal = false
+        end
 
         self.snapshot = {
             pendingSnapshot = false,
@@ -660,9 +710,12 @@ local function ensurePanelClasses()
             breathingWord = breathingWord,
             breathingDesc = breathingDesc,
             sleepWord = sleepWord,
-            noBurden = noBurden,
-            compact = compact,
-            heatSensitive = heatSensitive,
+            summaryLines = summaryLines,
+            showBurden = showBurden,
+            showThermal = showThermal,
+            showBreathing = showBreathing,
+            showSleep = showSleep,
+            showDrivers = showDrivers,
             drivers = costDrivers,
         }
 
@@ -756,72 +809,79 @@ local function ensurePanelClasses()
             return
         end
 
-        if data.noBurden then
-            self:drawText(tr("UI_AMS_NoBurden", "No armor burden."), x, y, cValue[1], cValue[2], cValue[3], 1.0, font)
-            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
-            return
-        end
-
-        if data.compact then
+        if not hasRenderableContent(data) then
             self:drawText(tr("UI_AMS_LightMinimal", "Light clothing -- minimal burden."), x, y, cValue[1], cValue[2], cValue[3], 1.0, font)
             self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
             return
         end
 
-        local contentW = self.width - x - 14
-
-        if data.heatSensitive then
-            self:drawText(tr("UI_AMS_HeatSensitive", "Low weight, but heat-sensitive outfit."), x, y, 1.0, 0.85, 0.55, 1.0, font)
-            y = y + lineH + 4
-            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Thermal", "Thermal") .. ":", cLabel, data.thermalWord, data.thermalColor, labelCol)
-            if data.thermalAnnotation then
-                local ac = data.thermalAnnotationColor or { cAnnotation[1], cAnnotation[2], cAnnotation[3], 0.90 }
-                y = y + lineH
-                self:drawText(data.thermalAnnotation, x, y, ac[1], ac[2], ac[3], ac[4], font)
+        local summaryLines = data.summaryLines or {}
+        for i = 1, #summaryLines do
+            local row = summaryLines[i]
+            local color = cValue
+            if row.tone == "warm" then
+                color = { 1.0, 0.85, 0.55 }
             end
-            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
-            return
-        end
-
-        -- Section: Load Channels
-        drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Burden", "Burden") .. ":", cLabel, data.burdenTier, cValue, labelCol)
-        y = y + lineH
-        local profilePhysical = tonumber(data.profile and data.profile.physicalLoad) or 0
-        local barH = math.max(8, math.floor(fontH * 0.6))
-        drawBar(self, x, y, contentW, burdenBarFraction(profilePhysical), { 0.95, 0.70, 0.25 }, barH)
-        y = y + barH + 8
-
-        drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Thermal", "Thermal") .. ":", cLabel, data.thermalWord, data.thermalColor, labelCol)
-        y = y + lineH
-        if data.thermalAnnotation then
-            local ac = data.thermalAnnotationColor or { cAnnotation[1], cAnnotation[2], cAnnotation[3], 0.90 }
-            self:drawText(data.thermalAnnotation, x, y, ac[1], ac[2], ac[3], ac[4], font)
+            self:drawText(tostring(row.text or ""), x, y, color[1], color[2], color[3], 1.0, font)
             y = y + lineH
         end
 
-        if data.breathingWord then
+        local contentW = self.width - x - 14
+
+        if #summaryLines > 0 then
+            y = y + 4
+        end
+
+        local renderedPrimary = false
+
+        if data.showBurden then
+            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Burden", "Burden") .. ":", cLabel, data.burdenTier, cValue, labelCol)
+            y = y + lineH
+            local profilePhysical = tonumber(data.profile and data.profile.physicalLoad) or 0
+            local barH = math.max(8, math.floor(fontH * 0.6))
+            drawBar(self, x, y, contentW, burdenBarFraction(profilePhysical), { 0.95, 0.70, 0.25 }, barH)
+            y = y + barH + 8
+            renderedPrimary = true
+        end
+
+        if data.showThermal then
+            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Thermal", "Thermal") .. ":", cLabel, data.thermalWord, data.thermalColor, labelCol)
+            y = y + lineH
+            if data.thermalAnnotation then
+                local ac = data.thermalAnnotationColor or { cAnnotation[1], cAnnotation[2], cAnnotation[3], 0.90 }
+                self:drawText(data.thermalAnnotation, x, y, ac[1], ac[2], ac[3], ac[4], font)
+                y = y + lineH
+            end
+            renderedPrimary = true
+        end
+
+        if data.showBreathing then
             drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Breathing", "Breathing") .. ":", cLabel, data.breathingWord, { 1.0, 0.80, 0.40 }, labelCol)
             y = y + lineH
             if data.breathingDesc then
                 self:drawText(data.breathingDesc, x, y, cAnnotation[1], cAnnotation[2], cAnnotation[3], 0.90, font)
                 y = y + lineH
             end
+            renderedPrimary = true
         end
 
-        if data.sleepWord then
+        if data.showSleep then
             drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Sleep", "Sleep") .. ":", cLabel, data.sleepWord, cValue, labelCol)
             y = y + lineH
+            renderedPrimary = true
         end
 
         local drivers = data.drivers or {}
-        local maxRows = #drivers
+        local maxRows = data.showDrivers and #drivers or 0
         if maxRows <= 0 then
             self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
             return
         end
 
         -- Separator
-        y = y + sectionGap
+        if renderedPrimary then
+            y = y + sectionGap
+        end
         self:drawRect(x, y, contentW, 1, 0.18, cSep[1], cSep[2], cSep[3])
         y = y + sectionGap
 

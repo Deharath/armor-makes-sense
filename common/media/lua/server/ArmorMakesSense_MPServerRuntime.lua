@@ -58,14 +58,6 @@ local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local COST_DRIVER_THRESHOLD = 1.5
 local COMBAT_LATCH_ATTACK_SECONDS = 1.25
 
-local BREATHING_KEYWORDS = {
-    "mask", "respirator", "gas", "hazmat", "filter", "welding", "visor",
-}
-
-local BREATHING_LOCATION_HINTS = {
-    "face", "mask", "head", "eyes", "neck",
-}
-
 local activeFormulaState = nil
 
 local function log(message)
@@ -421,8 +413,6 @@ local function bindSharedContexts()
         Classifier = Classifier,
         armorKeywords = (Classifier and Classifier.ARMOR_KEYWORDS) or {},
         armorLocationHints = (Classifier and Classifier.ARMOR_LOCATION_HINTS) or {},
-        breathingKeywords = BREATHING_KEYWORDS,
-        breathingLocationHints = BREATHING_LOCATION_HINTS,
         clamp = clamp,
         computeArmorProfile = function(playerObj)
             return LoadModel.computeArmorProfile(playerObj)

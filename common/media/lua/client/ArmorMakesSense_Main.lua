@@ -169,14 +169,6 @@ local classifierArmorKeywords = (modules.Classifier and modules.Classifier.ARMOR
 local classifierArmorLocationHints = (modules.Classifier and modules.Classifier.ARMOR_LOCATION_HINTS) or {}
 local classifierProtectiveTagHints = (modules.Classifier and modules.Classifier.PROTECTIVE_TAG_HINTS) or {}
 
-local BREATHING_KEYWORDS = {
-    "mask", "respirator", "gas", "hazmat", "filter", "welding", "visor"
-}
-
-local BREATHING_LOCATION_HINTS = {
-    "face", "mask", "head", "eyes", "neck"
-}
-
 local function log(message)
     print("[ArmorMakesSense] " .. tostring(message))
 end
@@ -561,8 +553,6 @@ local onPlayerUpdate = moduleCall("Runtime", "onPlayerUpdate")
 contextCoreCStatic = {
     armorKeywords = classifierArmorKeywords,
     armorLocationHints = classifierArmorLocationHints,
-    breathingKeywords = BREATHING_KEYWORDS,
-    breathingLocationHints = BREATHING_LOCATION_HINTS,
     protectiveTagHints = classifierProtectiveTagHints,
     resetMuscleStrain = resetMuscleStrain,
     resetCharacterToEquilibrium = resetCharacterToEquilibrium,

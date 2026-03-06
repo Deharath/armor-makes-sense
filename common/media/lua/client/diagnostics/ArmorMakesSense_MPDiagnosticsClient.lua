@@ -13,19 +13,7 @@ if type(MP) ~= "table" then
 end
 
 local function diagnosticsEnabled()
-    if MP and MP.DEV_DIAGNOSTICS_ENABLED == true then
-        return true
-    end
-    if _G.ams_enable_mp_diagnostics == true then
-        return true
-    end
-    if type(isDebugEnabled) == "function" then
-        local okDebug, enabled = pcall(isDebugEnabled)
-        if okDebug and enabled == true then
-            return true
-        end
-    end
-    return false
+    return true
 end
 
 if not diagnosticsEnabled() then
@@ -110,16 +98,28 @@ function ams_mp_diag_last()
         return nil
     end
     log(string.format(
-        "diag last: user=%s id=%s end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f physical=%.2f drivers=%d activity=%s",
+        "diag last: user=%s id=%s reason=%s version=%s build=%s end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f physical=%.2f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
         tostring(lastDiagDump.player or "unknown"),
         tostring(lastDiagDump.online_id or -1),
+        tostring(lastDiagDump.reason or "na"),
+        tostring(lastDiagDump.script_version or "unknown"),
+        tostring(lastDiagDump.script_build or "unknown"),
         tonumber(lastDiagDump.endurance) or -1,
         tonumber(lastDiagDump.fatigue) or -1,
         tonumber(lastDiagDump.thirst) or -1,
         tonumber(lastDiagDump.load_norm) or 0,
         tonumber(lastDiagDump.physical_load) or 0,
+        tonumber(lastDiagDump.breathing_load) or 0,
+        tonumber(lastDiagDump.rigidity_load) or 0,
+        tonumber(lastDiagDump.effective_load) or 0,
+        tonumber(lastDiagDump.breathing_contribution) or 0,
+        tonumber(lastDiagDump.thermal_contribution) or 0,
         #(lastDiagDump.drivers or {}),
-        tostring(lastDiagDump.activity_label or "idle")
+        tonumber(lastDiagDump.items_count) or 0,
+        tonumber(lastDiagDump.breathing_item_count) or 0,
+        tostring(lastDiagDump.activity_label or "idle"),
+        tostring(lastDiagDump.thermal_hot == true),
+        tostring(lastDiagDump.thermal_cold == true)
     ))
     return lastDiagDump
 end
@@ -138,16 +138,25 @@ local function onServerCommand(module, command, args)
 
     lastDiagDump = args
     log(string.format(
-        "diag dump recv user=%s id=%s reason=%s end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s",
+        "diag dump recv user=%s id=%s reason=%s version=%s build=%s end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f physical=%.2f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
         tostring(args.player or "unknown"),
         tostring(args.online_id or -1),
         tostring(args.reason or "na"),
+        tostring(args.script_version or "unknown"),
+        tostring(args.script_build or "unknown"),
         tonumber(args.endurance) or -1,
         tonumber(args.fatigue) or -1,
         tonumber(args.thirst) or -1,
         tonumber(args.load_norm) or 0,
         tonumber(args.physical_load) or 0,
+        tonumber(args.breathing_load) or 0,
+        tonumber(args.rigidity_load) or 0,
+        tonumber(args.effective_load) or 0,
+        tonumber(args.breathing_contribution) or 0,
+        tonumber(args.thermal_contribution) or 0,
         #(args.drivers or {}),
+        tonumber(args.items_count) or 0,
+        tonumber(args.breathing_item_count) or 0,
         tostring(args.activity_label or "idle"),
         tostring(args.thermal_hot == true),
         tostring(args.thermal_cold == true)

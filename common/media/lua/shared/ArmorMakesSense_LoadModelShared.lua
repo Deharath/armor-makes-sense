@@ -4,6 +4,8 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 local Core = ArmorMakesSense.Core
 Core.LoadModel = Core.LoadModel or {}
 local Classifier = ArmorMakesSense and ArmorMakesSense.Classifier
+pcall(require, "ArmorMakesSense_BreathingClassifier")
+local BreathingClassifier = ArmorMakesSense and ArmorMakesSense.BreathingClassifier
 
 local LoadModel = Core.LoadModel
 local C = {}
@@ -193,7 +195,6 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
         or (classifierEval and classifierEval.hasProtectiveTag)
         or ((classifier and type(classifier.hasAnyProtectiveTag) == "function") and classifier.hasAnyProtectiveTag(item, scriptItem))
         or hasAnyProtectiveTagFallback(item, scriptItem)
-    local hasBreathingTag = ctx("containsAny")(itemName, ctx("breathingKeywords")) or ctx("containsAny")(locationName, ctx("breathingLocationHints"))
     local keywordMatch = (classifierSignals and classifierSignals.keywordMatch) or ctx("containsAny")(itemName, ctx("armorKeywords"))
     local locationMatch = (classifierSignals and classifierSignals.locationMatch) or ctx("containsAny")(locationName, ctx("armorLocationHints"))
 
@@ -242,19 +243,22 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
     wearabilityBase = wearabilityBase + (math.max(water, 0) * 0.25)
     local thermalLoad = wearabilityBase
     local breathingLoad = 0
-
-    local itemType = ctx("lower")(ctx("safeMethod")(item, "getType") or ctx("safeMethod")(item, "getFullType") or "")
-    local isNoFilter = string.find(itemType, "nofilter", 1, true) ~= nil
-    if hasBreathingTag and not isNoFilter then
-        breathingLoad = breathingLoad + 2.40
-        thermalLoad = thermalLoad + 0.90
-    end
-    if string.find(locationName, "mask", 1, true) or string.find(itemName, "mask", 1, true) then
-        breathingLoad = breathingLoad + 0.90
-        thermalLoad = thermalLoad + 0.45
-    end
-    if string.find(locationName, "maskeyes", 1, true) or string.find(locationName, "maskfull", 1, true) then
-        breathingLoad = breathingLoad + 0.45
+    local breathingClass = "none"
+    local breathingHasFilter = nil
+    local breathingReasons = nil
+    local breathingSignals = (BreathingClassifier and type(BreathingClassifier.computeSignals) == "function")
+        and BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
+        or nil
+    if type(breathingSignals) == "table" then
+        breathingLoad = tonumber(breathingSignals.breathingLoad) or 0
+        thermalLoad = thermalLoad + (tonumber(breathingSignals.thermalLoad) or 0)
+        breathingClass = tostring(breathingSignals.class or "none")
+        if breathingSignals.hasFilter ~= nil then
+            breathingHasFilter = breathingSignals.hasFilter == true
+        end
+        if type(breathingSignals.reasons) == "table" then
+            breathingReasons = breathingSignals.reasons
+        end
     end
 
     if not isArmor then
@@ -268,6 +272,9 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
             thermalLoad = ctx("clamp")(thermalLoad, 0, 20),
             breathingLoad = ctx("clamp")(breathingLoad, 0, 12),
             rigidityLoad = ctx("clamp")(civilianRigidity, 0, 64),
+            breathingClass = breathingClass,
+            breathingHasFilter = breathingHasFilter,
+            breathingReasons = breathingReasons,
             discomfort = discomfort,
             weightUsed = tonumber(weight) or 0,
             weightSource = tostring(weightSource),
@@ -295,6 +302,9 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
         thermalLoad = ctx("clamp")(thermalLoad, 0, 20),
         breathingLoad = ctx("clamp")(breathingLoad, 0, 8),
         rigidityLoad = ctx("clamp")(rigidityLoad, 0, 64),
+        breathingClass = breathingClass,
+        breathingHasFilter = breathingHasFilter,
+        breathingReasons = breathingReasons,
         discomfort = discomfort,
         weightUsed = tonumber(weight) or 0,
         weightSource = tostring(weightSource),

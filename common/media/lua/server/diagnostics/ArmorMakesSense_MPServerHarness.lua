@@ -21,19 +21,7 @@ if type(MP) ~= "table" then
 end
 
 local function diagnosticsEnabled()
-    if MP and MP.DEV_DIAGNOSTICS_ENABLED == true then
-        return true
-    end
-    if _G.ams_enable_mp_diagnostics == true then
-        return true
-    end
-    if type(isDebugEnabled) == "function" then
-        local okDebug, enabled = pcall(isDebugEnabled)
-        if okDebug and enabled == true then
-            return true
-        end
-    end
-    return false
+    return true
 end
 
 if not diagnosticsEnabled() then

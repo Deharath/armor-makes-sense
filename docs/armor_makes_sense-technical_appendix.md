@@ -192,15 +192,32 @@ thermalLoad =
   + (max(water,0) * 0.25)
 ```
 
-Breathing increments:
-- breathing-tag hit: `+2.40 breathing`, `+0.90 thermal` — skipped when item type contains `nofilter` (depleted filter detection via `getType()`)
-- mask name/location hit: `+0.90 breathing`, `+0.45 thermal`
-- `maskeyes`/`maskfull`: `+0.45 breathing`
+Breathing classification is now class-based and uses structured signals first:
+- slot classes:
+  - `mask` -> face covering
+  - `maskeyes` -> face covering
+  - `maskfull` -> dedicated full-face slot floor (currently mapped to face covering for breathing)
+  - `fullsuithead` -> sealed suit
+- exact respiratory tags:
+  - `gasmask`, `gasmasknofilter`
+  - `respirator`, `respiratornofilter`
+  - `weldingmask` (treated as face covering for breathing)
+  - `hazmatsuit`, `scba` (sealed suit), `scbanotank` (sealed mask)
+- tag authority policy:
+  - if a respiratory tag class is present, it is authoritative
+  - keyword inference is fallback-only when respiratory tags are absent
+- strict minimal fallback: token/suffix identity matches such as `gasmask`, `respirator`, `weldingmask`, `hazmat`, `dustmask`, `surgicalmask`, `bandanamask`
+- decorative/cosmetic safety:
+  - tags like `ismemento`/`cosmetic`/`decorative` suppress keyword escalation to reduce false positives
+- generic `head` / `neck` slots do not trigger breathing by themselves.
 
-Filter-aware tiers:
-- gas mask with filter: `2.40 + 0.90 + 0.45 = 3.75`
-- gas mask without filter: `0.90 + 0.45 = 1.35`
-- respirator with filter: `2.40 + 0.90 = 3.30`
+Class outputs:
+- face covering: `0 breathing`, `0 thermal`
+- respirator with filter: `3.30 breathing`, `1.35 thermal`
+- respirator without filter: `0.90 breathing`, `0.45 thermal`
+- sealed mask with filter: `3.75 breathing`, `1.35 thermal`
+- sealed mask without filter: `1.35 breathing`, `0.45 thermal`
+- sealed suit: `3.75 breathing`, `1.35 thermal`
 
 Armor/non-armor split:
 - non-armor rigidity: `weight * 5 + discomfort * 12`
@@ -442,9 +459,11 @@ Injected through Starlit `onFillItemTooltip` listener.
 
 Display conditions:
 - Burden row if `physicalLoad >= 1.5` (bar normalized to `TOOLTIP_BAR_MAX=28`)
-- Breathing row if `breathingLoad >= 1.2`
-  - `1.2..3.44`: Restricted
-  - `>=3.45`: Heavily Restricted
+- Breathing row if `breathingLoad >= 0.8`
+- Breathing tiers:
+  - `0.8 .. 1.99`: `Mildly Restricted`
+  - `2.0 .. 3.44`: `Restricted`
+  - `>= 3.45`: `Heavily Restricted`
 
 Shoulderpad tooltip cleanup removes stale vanilla backpack-conflict rows.
 
@@ -461,6 +480,12 @@ Panel thermal labels use runtime snapshot:
 - Burdensome if `hotStrain > 0.15`
 - Helpful if `coldAppropriateness > 0.30`
 - else Neutral
+
+Panel composition is additive rather than mode-exclusive:
+- summary lines such as `No armor burden.`, `Light clothing -- minimal burden.`, and `Low weight, but heat-sensitive outfit.` are informational only
+- breathing renders whenever `breathingLoad >= 0.8`, even if there is no burden row or thermal is burdensome
+- thermal can render alongside breathing and burden instead of replacing them
+- `Cost Drivers` remain physical-only (`physicalLoad >= 1.5`)
 
 Sleep estimate shown when `rigidityLoad >= 10` using:
 

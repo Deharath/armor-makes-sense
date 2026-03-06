@@ -1,6 +1,6 @@
 # Armor Makes Sense
 
-**Build 42 singleplayer mod for Project Zomboid.**
+**Build 42 mod for Project Zomboid.**
 
 Armor is a physical tradeoff, not a psychological penalty. This mod replaces vanilla's discomfort system with physical costs: endurance drain, muscle strain, breathing restriction, thermal pressure, and sleep recovery penalties -- all through vanilla's existing systems.
 
@@ -38,8 +38,8 @@ Requires Project Zomboid Build 42 (42.14.0+). Singleplayer only.
 
 ## Compatibility
 
-- Singleplayer only
-- Build 42.14.0+
+- Multiplayer compatible
+- Build 42.14.1+
 - Armor from other mods should work -- items are classified based on their defense stats, weight, and item properties (not yet tested with all armor mods)
 - Requires [Starlit Library](https://steamcommunity.com/sharedfiles/filedetails/?id=3378285185) for tooltip UI integration
 

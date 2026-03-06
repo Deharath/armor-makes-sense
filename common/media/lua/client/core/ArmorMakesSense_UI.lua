@@ -1082,13 +1082,40 @@ local function attachBurdenTabToScreen(screen)
                 screen._amsBurdenPanel = panel
                 screen._amsBurdenAttached = true
                 panel.screenRef = screen
+                screen._amsBurdenTabHost = host
 
                 local tabStripW = 0
                 pcall(function()
-                    tabStripW = host:getWidthOfAllTabs()
+                    tabStripW = tonumber(host:getWidthOfAllTabs()) or 0
                 end)
                 if tabStripW <= 0 then tabStripW = 480 end
                 panel.canonicalW = tabStripW
+
+                local tabSafetyPad = 2
+                local minWindowW = math.max(tabStripW + tabSafetyPad, tonumber(screen.width) or 0)
+                screen._amsMinCharacterInfoWidth = minWindowW
+                host._amsMinTabHostWidth = minWindowW
+
+                if not screen._amsOriginalSetWidth and type(screen.setWidth) == "function" then
+                    screen._amsOriginalSetWidth = screen.setWidth
+                    screen.setWidth = function(self, width, ...)
+                        local clamped = math.max(tonumber(width) or 0, tonumber(self._amsMinCharacterInfoWidth) or 0)
+                        return self:_amsOriginalSetWidth(clamped, ...)
+                    end
+                end
+                if not host._amsOriginalSetWidth and type(host.setWidth) == "function" then
+                    host._amsOriginalSetWidth = host.setWidth
+                    host.setWidth = function(self, width, ...)
+                        local clamped = math.max(tonumber(width) or 0, tonumber(self._amsMinTabHostWidth) or 0)
+                        return self:_amsOriginalSetWidth(clamped, ...)
+                    end
+                end
+
+                pcall(function() host:setWidth(minWindowW) end)
+                pcall(function() screen:setWidth(minWindowW) end)
+                host.scrollX = 0
+                host.smoothScrollX = 0
+                host.smoothScrollTargetX = nil
 
                 return true
             end

@@ -476,6 +476,7 @@ Clothing change detection:
 
 Tab behavior:
 - attempts injection into character info tabs (patches `ISCharacterInfoWindow.createChildren`),
+- clamps the character window to at least the full tab-strip width so all tab buttons stay visible without horizontal arrow scrolling,
 - retroactively attaches to any already-created instance,
 - falls back to standalone `AMSBurdenWindow` on injection failure.
 

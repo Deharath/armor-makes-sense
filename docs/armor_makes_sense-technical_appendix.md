@@ -76,10 +76,10 @@ Runtime split:
 - `client/ArmorMakesSense_Main.lua` — client boot facade: defines `SCRIPT_VERSION` / `SCRIPT_BUILD`, requires modules in load order, builds the client context, wires modules, registers SP runtime events, and exposes the public API surface
 - `client/ArmorMakesSense_MPClientRuntime.lua` — MP client snapshot transport/UI bridge
 - `server/ArmorMakesSense_MPServerRuntime.lua` — MP gameplay/runtime path and snapshot sender
+- `media/sandbox-options.txt` — custom sandbox option definitions for server-authoritative AMS gameplay toggles
 
 ### Shared
 - `shared/ArmorMakesSense_Config.lua` — tuning defaults
-- `shared/ArmorMakesSense_ModOptionsShared.lua` — sandbox and PZAPI ModOptions integration
 - `shared/ArmorMakesSense_MPCompat.lua` — MP constants and command names
 - `shared/ArmorMakesSense_ArmorClassifier.lua` — armor-vs-civilian classification
 - `shared/ArmorMakesSense_BreathingClassifier.lua` — respiratory classification

@@ -1,2 +1,9 @@
-Sandbox_ArmorMakesSense_EnableSystem=Enable Armor Physical Load
-Sandbox_ArmorMakesSense_EnableSystem_tooltip=Applies armor-related physical costs to endurance and sleep recovery.
+Sandbox_EN = {
+    Sandbox_ArmorMakesSense = "Armor Makes Sense",
+    Sandbox_ArmorMakesSense_EnableSystem = "Enable Armor Physical Load",
+    Sandbox_ArmorMakesSense_EnableSystem_tooltip = "Applies armor-related physical costs to endurance and sleep recovery.",
+    Sandbox_ArmorMakesSense_EnableMuscleStrainModel = "Armor Increases Melee Strain",
+    Sandbox_ArmorMakesSense_EnableMuscleStrainModel_tooltip = "When enabled, heavier armor adds extra vanilla melee muscle strain during combat. Turn this off to remove the armor-based strain effect.",
+    Sandbox_ArmorMakesSense_EnableSleepPenaltyModel = "Armor Reduces Sleep Recovery",
+    Sandbox_ArmorMakesSense_EnableSleepPenaltyModel_tooltip = "When enabled, sleeping in restrictive armor reduces overnight endurance recovery and increases next-day fatigue. Turn this off to remove the armor-based sleep penalty.",
+}

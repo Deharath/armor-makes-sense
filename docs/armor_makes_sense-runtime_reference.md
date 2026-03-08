@@ -76,7 +76,6 @@ Profile and environment are sampled once outside the catch-up slice loop.
 Client/SP (`State.getOptions()`) precedence:
 1. `ArmorMakesSense.DEFAULTS`
 2. `SandboxVars.ArmorMakesSense`
-3. `PZAPI.ModOptions:getOptions("ArmorMakesSense")`
 
 `DebugLogging` follows game debug mode (`isDebugEnabled()` / `getCore():isDebug*`).
 

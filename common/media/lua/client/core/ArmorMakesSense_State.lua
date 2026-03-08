@@ -43,30 +43,6 @@ function State.getOptions()
         end
     end
 
-    if PZAPI and PZAPI.ModOptions and PZAPI.ModOptions.getOptions then
-        local modOptions = PZAPI.ModOptions:getOptions(ctx("modOptionsId"))
-        if modOptions then
-            for key, defaultValue in pairs(options) do
-                local option = ctx("safeMethod")(modOptions, "getOption", key)
-                if option then
-                    local value = ctx("safeMethod")(option, "getValue")
-                    if value ~= nil then
-                        if type(defaultValue) == "boolean" then
-                            options[key] = ctx("toBoolean")(value)
-                        elseif type(defaultValue) == "number" then
-                            local parsed = tonumber(value)
-                            if parsed then
-                                options[key] = parsed
-                            end
-                        elseif type(defaultValue) == "string" then
-                            options[key] = tostring(value)
-                        end
-                    end
-                end
-            end
-        end
-    end
-
     return options
 end
 

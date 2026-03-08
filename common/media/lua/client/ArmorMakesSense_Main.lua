@@ -16,10 +16,6 @@ local okMpClientRuntime, errMpClientRuntime = pcall(require, "ArmorMakesSense_MP
 if not okMpClientRuntime then
     print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_MPClientRuntime :: " .. tostring(errMpClientRuntime))
 end
-local okModOptionsShared, errModOptionsShared = pcall(require, "ArmorMakesSense_ModOptionsShared")
-if not okModOptionsShared then
-    print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_ModOptionsShared :: " .. tostring(errModOptionsShared))
-end
 local okClassifier, errClassifier = pcall(require, "ArmorMakesSense_ArmorClassifier")
 if not okClassifier then
     print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_ArmorClassifier :: " .. tostring(errClassifier))
@@ -60,7 +56,6 @@ require "testing/ArmorMakesSense_BenchRunner"
 
 local Mod = ArmorMakesSense
 local MOD_KEY = "ArmorMakesSenseState"
-local MOD_OPTIONS_ID = "ArmorMakesSense"
 local mpCompat = (okMpCompat and mpCompatOrErr) or (ArmorMakesSense and ArmorMakesSense.MP) or {}
 local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.1.3")
 local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-03-05-v112")
@@ -687,7 +682,6 @@ contextCoreBStatic = {
 
 stateContextStatic = {
     defaults = Mod.DEFAULTS,
-    modOptionsId = MOD_OPTIONS_ID,
     modKey = MOD_KEY,
     getWorldAgeMinutes = getWorldAgeMinutes,
     safeMethod = safeMethod,

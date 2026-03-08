@@ -1,0 +1,17 @@
+VERSION = 1,
+
+option EnableMuscleStrainModel
+{
+    type = boolean,
+    default = true,
+    page = ArmorMakesSense,
+    translation = ArmorMakesSense_EnableMuscleStrainModel,
+}
+
+option EnableSleepPenaltyModel
+{
+    type = boolean,
+    default = true,
+    page = ArmorMakesSense,
+    translation = ArmorMakesSense_EnableSleepPenaltyModel,
+}

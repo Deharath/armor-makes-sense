@@ -7,7 +7,7 @@ _As of March 7, 2026_
 ## Boot Structure
 
 `ArmorMakesSense_Main.lua` is the client entry facade. On client load it:
-- requires shared modules (`Config`, `MPCompat`, `ModOptionsShared`, classifier/load/physiology shared helpers)
+- requires shared modules (`Config`, `MPCompat`, classifier/load/physiology shared helpers)
 - requires client core/model/testing modules
 - builds and injects the shared context for client-side systems
 - registers the SP client runtime
@@ -78,7 +78,7 @@ Server/MP (`MPServerRuntime.getOptions()`) precedence:
 1. `ArmorMakesSense.DEFAULTS`
 2. `SandboxVars.ArmorMakesSense`
 
-The dedicated server reads sandbox values; PZAPI ModOptions apply on the client side.
+Client/SP uses the same sandbox-backed gameplay toggles.
 
 ## Multiplayer State
 

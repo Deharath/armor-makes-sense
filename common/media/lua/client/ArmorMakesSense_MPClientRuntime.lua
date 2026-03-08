@@ -283,6 +283,7 @@ local function parseServerSnapshot(args)
             if type(row) == "table" then
                 parsedDrivers[#parsedDrivers + 1] = {
                     label = tostring(row.label or "Unknown Item"),
+                    fullType = tostring(row.full_type or ""),
                     physical = tonumber(row.physical) or 0,
                 }
             end

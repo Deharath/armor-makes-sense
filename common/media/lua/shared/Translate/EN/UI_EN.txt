@@ -40,10 +40,16 @@ UI_EN = {
     UI_AMS_Activity_Heavy = "Significant during running. Heavy during sprinting.",
 
 
-    UI_AMS_Help_Title = "Armor Makes Sense -- How It Works",
-    UI_AMS_Help_Burden = "Burden: Your armor's physical weight and bulk. Heavier armor drains more endurance during physical activity and slows recovery between efforts. Melee combat in heavy armor also increases muscle strain per swing. The bar shows total burden as a fraction of the heaviest possible loadout.",
-    UI_AMS_Help_Thermal = "Thermal: In hot weather, armor amplifies endurance drain. In cold weather, insulating armor reduces burden. Wet armor provides less insulation. Burdensome = heat is costing you. Helpful = insulation is working for you.",
-    UI_AMS_Help_Breathing = "Breathing: Respirators, gas masks, and other sealed headgear restrict airflow, increasing exertion cost during physical activity.",
-    UI_AMS_Help_Sleep = "Sleep: Sleeping in rigid armor slows recovery. The percentage shows the estimated extra time needed to fully rest.",
-    UI_AMS_Help_CostDrivers = "Cost Drivers: Shows which of your worn items contribute most to your total burden, sorted by impact.",
+    UI_AMS_Help_Title = "Armor Makes Sense",
+    UI_AMS_Help_Overview = "Overview: Armor costs scale with activity. Standing still or walking costs almost nothing. Running, sprinting, and fighting is where heavy armor makes itself felt. The heavier your outfit, the faster you tire during exertion and the slower you recover afterward.",
+    UI_AMS_Help_Burden = "Burden: The total physical weight and bulk of your worn armor. The bar shows your current load on a fixed scale. Heavier loadouts drain endurance faster during running, sprinting, and melee combat. In heavy armor, your arms also tire faster per swing.",
+    UI_AMS_Help_Thermal = "Thermal: Weather interacts with your armor. In hot weather, heavy armor amplifies endurance drain -- the panel shows this as Burdensome. In cold weather, insulating armor works in your favor, reducing effective burden -- shown as Helpful. Wet armor loses insulation.",
+    UI_AMS_Help_Breathing = "Breathing: Respirators, gas masks, and other sealed headgear restrict airflow. This adds to your exertion cost during physical activity. The severity is shown as Mildly Restricted, Restricted, or Heavily Restricted depending on the gear.",
+    UI_AMS_Help_Sleep = "Sleep: Sleeping in rigid armor slows recovery. The percentage shows the estimated extra time needed to fully rest. Take off heavy gear before bed.",
+    UI_AMS_Help_CostDrivers = "Cost Drivers: Shows which worn items contribute most to your total burden, sorted by impact. If one item dominates the list, swapping it out will make the biggest difference.",
+    UI_AMS_Help_ExportTitleDesc = "Support Reports: If something feels wrong, use this to save a snapshot of your current loadout, burden calculations, mod list, and game state to a text file. Attach it when reporting a problem.",
+    UI_AMS_Help_ExportButton = "Export Support Report",
+    UI_AMS_Help_ExportShort = "Save Report",
+    UI_AMS_Help_ExportSaved = "Saved",
+    UI_AMS_Help_ExportFailed = "Export failed",
 }

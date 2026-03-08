@@ -395,6 +395,7 @@ local function collectSnapshotDrivers(playerObj)
             if physical >= COST_DRIVER_THRESHOLD then
                 drivers[#drivers + 1] = {
                     label = getItemDisplayLabel(item),
+                    fullType = tostring(safeCall(item, "getFullType") or safeCall(item, "getType") or ""),
                     physical = physical,
                 }
             end
@@ -551,6 +552,7 @@ local function sendSnapshot(playerObj, snapshot, reason)
             if type(row) == "table" then
                 snapshotDrivers[#snapshotDrivers + 1] = {
                     label = tostring(row.label or "Unknown Item"),
+                    full_type = tostring(row.fullType or ""),
                     physical = tonumber(row.physical) or 0,
                 }
             end

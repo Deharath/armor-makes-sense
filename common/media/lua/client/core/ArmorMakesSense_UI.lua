@@ -39,6 +39,29 @@ local function tr(key, fallback)
     return value
 end
 
+local function wrapTextLines(text, wrapW, font, tm)
+    local words = {}
+    for w in string.gmatch(text or "", "%S+") do
+        words[#words + 1] = w
+    end
+    local lines = {}
+    local line = ""
+    for wi = 1, #words do
+        local testLine = (line == "") and words[wi] or (line .. " " .. words[wi])
+        local testW = (tm and font) and (tonumber(ctx("safeMethod")(tm, "MeasureStringX", font, testLine)) or (#testLine * 8)) or (#testLine * 8)
+        if testW > wrapW and line ~= "" then
+            lines[#lines + 1] = line
+            line = words[wi]
+        else
+            line = testLine
+        end
+    end
+    if line ~= "" then
+        lines[#lines + 1] = line
+    end
+    return lines
+end
+
 local function clamp01(value)
     return (ctx("clamp") and ctx("clamp")(tonumber(value) or 0, 0, 1)) or 0
 end
@@ -81,6 +104,20 @@ local function burdenTierFromTotal(physicalLoad)
         return tr("UI_AMS_Tier_Heavy", "Heavy"), "heavy"
     end
     return tr("UI_AMS_Tier_Extreme", "Extreme"), "extreme"
+end
+
+local function showExportResultModal(playerNum, ok, detail)
+    if not ISModalDialog then
+        return false
+    end
+    local label = ok
+        and tr("UI_AMS_Help_ExportSaved", "Saved")
+        or tr("UI_AMS_Help_ExportFailed", "Export failed")
+    local body = label .. ":\n" .. tostring(detail or "")
+    local modal = ISModalDialog:new(0, 0, 360, 120, body, false, nil, nil, tonumber(playerNum) or 0)
+    modal:initialise()
+    modal:addToUIManager()
+    return true
 end
 
 -- -----------------------------------------------------------------------------
@@ -407,6 +444,31 @@ local function collectCostDrivers(player)
     return rows
 end
 
+local function resolveDriverLabelForClient(player, row)
+    local fullType = tostring(row and row.fullType or "")
+    if fullType == "" or not player then
+        return tostring(row and row.label or "Unknown Item")
+    end
+
+    local wornItems = ctx("safeMethod")(player, "getWornItems")
+    local count = tonumber(ctx("safeMethod")(wornItems, "size")) or 0
+    for i = 0, count - 1 do
+        local worn = ctx("safeMethod")(wornItems, "get", i)
+        local item = worn and ctx("safeMethod")(worn, "getItem")
+        if item then
+            local itemFullType = tostring(ctx("safeMethod")(item, "getFullType") or ctx("safeMethod")(item, "getType") or "")
+            if itemFullType == fullType then
+                local displayName = tostring(ctx("safeMethod")(item, "getDisplayName") or ctx("safeMethod")(item, "getName") or "")
+                if displayName ~= "" then
+                    return displayName
+                end
+            end
+        end
+    end
+
+    return tostring(row and row.label or fullType or "Unknown Item")
+end
+
 local function resolveThermalEffect(runtimeSnapshot)
     local hotStrain = tonumber(runtimeSnapshot and runtimeSnapshot.hotStrain) or 0
     local coldAppropriateness = tonumber(runtimeSnapshot and runtimeSnapshot.coldAppropriateness) or 0
@@ -433,6 +495,7 @@ local AMSHelpPanel = nil
 local AMSHelpWindow = nil
 local AMSBurdenPanel = nil
 local AMSBurdenWindow = nil
+local HELP_BUTTON_HEIGHT = 22
 
 toggleHelpWindow = function()
     if helpWindow then
@@ -447,12 +510,12 @@ toggleHelpWindow = function()
     local sh = core and ctx("safeMethod")(core, "getScreenHeight") or 600
     local font = UIFont and UIFont.Small or nil
     local tm = type(getTextManager) == "function" and getTextManager() or nil
-    local w = math.min(math.floor(sw * 0.35), 480)
-    w = math.max(w, 320)
+    local w = math.min(math.floor(sw * 0.40), 540)
+    w = math.max(w, 360)
     local titleBarH = 24
     local contentH = measureHelpText(w - 28, font, tm)
     local h = contentH + titleBarH + 8
-    h = math.min(h, math.floor(sh * 0.8))
+    h = math.min(h, math.floor(sh * 0.75))
     local wx = math.floor((sw - w) / 2)
     local wy = math.floor((sh - h) / 2)
     helpWindow = AMSHelpWindow:new(wx, wy, w, h)
@@ -486,14 +549,31 @@ local function ensurePanelClasses()
     function AMSBurdenPanel:createChildren()
         ISPanel.createChildren(self)
         if ISButton then
-            local btnW = 52
+            local gap = 6
+            local helpW = 52
+            local exportW = 110
             local btnH = 20
-            self.helpBtn = ISButton:new(self.width - btnW - 6, 4, btnW, btnH, "? Help", self, AMSBurdenPanel.onHelpClick)
+            local rightEdge = self.width - gap
+
+            self.helpBtn = ISButton:new(rightEdge - helpW, 4, helpW, btnH, "? Help", self, AMSBurdenPanel.onHelpClick)
             self.helpBtn:initialise()
             self.helpBtn:instantiate()
             self.helpBtn.borderColor = { r = 0.4, g = 0.4, b = 0.4, a = 0.7 }
             self.helpBtn.backgroundColor = { r = 0.15, g = 0.15, b = 0.15, a = 0.8 }
             self:addChild(self.helpBtn)
+
+            self.exportBtn = ISButton:new(rightEdge - helpW - gap - exportW, 4, exportW, btnH,
+                tr("UI_AMS_Help_ExportShort", "Export"),
+                self, AMSBurdenPanel.onExportClick)
+            self.exportBtn:initialise()
+            self.exportBtn:instantiate()
+            self.exportBtn.borderColor = { r = 0.4, g = 0.4, b = 0.4, a = 0.7 }
+            self.exportBtn.backgroundColor = { r = 0.15, g = 0.15, b = 0.15, a = 0.8 }
+            self.exportBtn:setTooltip(tr(
+                "UI_AMS_Help_ExportTitleDesc",
+                "Save a support report with your current loadout, burden calculations, mod list, and game state."
+            ))
+            self:addChild(self.exportBtn)
         end
     end
 
@@ -501,11 +581,32 @@ local function ensurePanelClasses()
         toggleHelpWindow()
     end
 
+    function AMSBurdenPanel:onExportClick()
+        local exportFn = ctx("exportSupportReport")
+        if type(exportFn) ~= "function" then
+            return
+        end
+        local ok, pathOrNil, err = exportFn()
+        if ok then
+            local savedPath = tostring(pathOrNil or "Lua/ams_reports/")
+            showExportResultModal(self.playerNum, true, savedPath)
+        else
+            local failure = tostring(err or "unknown")
+            showExportResultModal(self.playerNum, false, failure)
+        end
+    end
+
     function AMSBurdenPanel:prerender()
         self:collectSnapshot(false)
         if self.helpBtn then
-            local btnW = 52
-            self.helpBtn:setX(self.width - btnW - 6)
+            local gap = 6
+            local helpW = 52
+            local exportW = 110
+            local rightEdge = self.width - gap
+            self.helpBtn:setX(rightEdge - helpW)
+            if self.exportBtn then
+                self.exportBtn:setX(rightEdge - helpW - gap - exportW)
+            end
         end
     end
 
@@ -634,6 +735,12 @@ local function ensurePanelClasses()
                 end
             end
             costDrivers = type(runtime and runtime.drivers) == "table" and runtime.drivers or {}
+            for i = 1, #costDrivers do
+                local row = costDrivers[i]
+                if type(row) == "table" then
+                    row.label = resolveDriverLabelForClient(player, row)
+                end
+            end
         else
             profile = ctx("computeArmorProfile")(player) or {}
             burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
@@ -940,34 +1047,23 @@ local function ensurePanelClasses()
     end
 
     local helpSections = {
-        { key = "UI_AMS_Help_Burden",      fallback = "Burden: Your armor's physical weight and bulk. Heavier armor drains more endurance during physical activity and slows recovery between efforts. Melee combat in heavy armor also increases muscle strain per swing. The bar shows total burden as a fraction of the heaviest possible loadout." },
-        { key = "UI_AMS_Help_Thermal",      fallback = "Thermal: In hot weather, armor amplifies endurance drain. In cold weather, insulating armor reduces burden. Wet armor provides less insulation. Burdensome = heat is costing you. Helpful = insulation is working for you." },
-        { key = "UI_AMS_Help_Breathing",    fallback = "Breathing: Face coverings and sealed headgear restrict airflow, increasing exertion cost during physical activity." },
-        { key = "UI_AMS_Help_Sleep",        fallback = "Sleep: Sleeping in rigid armor slows recovery. The percentage shows the estimated extra time needed to fully rest." },
-        { key = "UI_AMS_Help_CostDrivers",  fallback = "Cost Drivers: Shows which of your worn items contribute most to your total burden, sorted by impact." },
+        { key = "UI_AMS_Help_Overview",        fallback = "Overview: Armor costs scale with activity. Standing still or walking costs almost nothing. Running, sprinting, and fighting is where heavy armor makes itself felt. The heavier your outfit, the faster you tire during exertion and the slower you recover afterward." },
+        { key = "UI_AMS_Help_Burden",          fallback = "Burden: The total physical weight and bulk of your worn armor. The bar shows your current load on a fixed scale. Heavier loadouts drain endurance faster during running, sprinting, and melee combat. In heavy armor, your arms also tire faster per swing." },
+        { key = "UI_AMS_Help_Thermal",         fallback = "Thermal: Weather interacts with your armor. In hot weather, heavy armor amplifies endurance drain -- the panel shows this as Burdensome. In cold weather, insulating armor works in your favor, reducing effective burden -- shown as Helpful. Wet armor loses insulation." },
+        { key = "UI_AMS_Help_Breathing",       fallback = "Breathing: Respirators, gas masks, and other sealed headgear restrict airflow. This adds to your exertion cost during physical activity. The severity is shown as Mildly Restricted, Restricted, or Heavily Restricted depending on the gear." },
+        { key = "UI_AMS_Help_Sleep",           fallback = "Sleep: Sleeping in rigid armor slows recovery. The percentage shows the estimated extra time needed to fully rest. Take off heavy gear before bed." },
+        { key = "UI_AMS_Help_CostDrivers",     fallback = "Cost Drivers: Shows which worn items contribute most to your total burden, sorted by impact. If one item dominates the list, swapping it out will make the biggest difference." },
+        { key = "UI_AMS_Help_ExportTitleDesc",  fallback = "Support Reports: If something feels wrong, use this to save a snapshot of your current loadout, burden calculations, mod list, and game state to a text file. Attach it when reporting a problem." },
     }
 
-    local function wrapTextLines(text, wrapW, font, tm)
-        local words = {}
-        for w in string.gmatch(text or "", "%S+") do
-            words[#words + 1] = w
-        end
-        local lines = {}
-        local line = ""
-        for wi = 1, #words do
-            local testLine = (line == "") and words[wi] or (line .. " " .. words[wi])
-            local testW = (tm and font) and (tonumber(ctx("safeMethod")(tm, "MeasureStringX", font, testLine)) or (#testLine * 8)) or (#testLine * 8)
-            if testW > wrapW and line ~= "" then
-                lines[#lines + 1] = line
-                line = words[wi]
-            else
-                line = testLine
-            end
-        end
-        if line ~= "" then
-            lines[#lines + 1] = line
-        end
-        return lines
+    local HELP_SECTION_GAP = 10
+    local HELP_DIVIDER_GAP = 6
+    local HELP_CONTENT_LEFT_PAD = 14
+    local HELP_CONTENT_RIGHT_PAD = 20
+
+    local function getHelpContentWidth(panelWidth)
+        local scrollBarW = tonumber(_G.SCROLL_BAR_WIDTH) or 13
+        return math.max(120, (tonumber(panelWidth) or 0) - HELP_CONTENT_LEFT_PAD - HELP_CONTENT_RIGHT_PAD - scrollBarW)
     end
 
     measureHelpText = function(wrapW, font, tm)
@@ -975,6 +1071,9 @@ local function ensurePanelClasses()
         local lineH = fontH + 4
         local y = 10
         for i = 1, #helpSections do
+            if i > 1 then
+                y = y + HELP_DIVIDER_GAP + 1 + HELP_DIVIDER_GAP
+            end
             local text = tr(helpSections[i].key, helpSections[i].fallback)
             local colonPos = string.find(text, ": ", 1, true)
             if colonPos then
@@ -985,9 +1084,25 @@ local function ensurePanelClasses()
             else
                 y = y + lineH
             end
-            y = y + 4
+            y = y + HELP_SECTION_GAP
         end
         return y + 10
+    end
+
+    function AMSHelpPanel:createChildren()
+        ISPanel.createChildren(self)
+        self:addScrollBars()
+        self:setScrollChildren(true)
+    end
+
+    function AMSHelpPanel:prerender()
+        self:setStencilRect(0, 0, self.width, self.height)
+        ISPanel.prerender(self)
+        local font = UIFont and UIFont.Small or nil
+        local tm = type(getTextManager) == "function" and getTextManager() or nil
+        local wrapW = getHelpContentWidth(self.width)
+        local textH = measureHelpText(wrapW, font, tm)
+        self:setScrollHeight(textH)
     end
 
     function AMSHelpPanel:render()
@@ -995,14 +1110,20 @@ local function ensurePanelClasses()
         local tm = type(getTextManager) == "function" and getTextManager() or nil
         local fontH = (tm and font) and (tonumber(ctx("safeMethod")(tm, "getFontHeight", font)) or 18) or 18
         local lineH = fontH + 4
-        local wrapW = self.width - 28
-        local x = 14
+        local wrapW = getHelpContentWidth(self.width)
+        local x = HELP_CONTENT_LEFT_PAD
         local y = 10
 
         local cHeader = { 1.0, 0.90, 0.65 }
         local cBody = { 0.88, 0.85, 0.80 }
+        local cDivider = { 0.30, 0.30, 0.30 }
 
         for i = 1, #helpSections do
+            if i > 1 then
+                y = y + HELP_DIVIDER_GAP
+                self:drawRect(x, y, wrapW, 1, 0.25, cDivider[1], cDivider[2], cDivider[3])
+                y = y + 1 + HELP_DIVIDER_GAP
+            end
             local text = tr(helpSections[i].key, helpSections[i].fallback)
             local colonPos = string.find(text, ": ", 1, true)
             if colonPos then
@@ -1019,8 +1140,11 @@ local function ensurePanelClasses()
                 self:drawText(text, x, y, cBody[1], cBody[2], cBody[3], 1.0, font)
                 y = y + lineH
             end
-            y = y + 4
+            y = y + HELP_SECTION_GAP
         end
+
+        ISPanel.render(self)
+        self:clearStencilRect()
     end
 
     if ISCollapsableWindow then
@@ -1031,13 +1155,22 @@ local function ensurePanelClasses()
             setmetatable(window, self)
             self.__index = self
             window.resizable = false
-            window.title = tr("UI_AMS_Help_Title", "Armor Makes Sense -- How It Works")
+            local versionTag = ""
+            if type(ctx("getLoadedModVersion")) == "function" then
+                local v = ctx("getLoadedModVersion")()
+                if v then
+                    versionTag = " v" .. tostring(v)
+                end
+            end
+            window.title = tr("UI_AMS_Help_Title", "Armor Makes Sense") .. versionTag
             return window
         end
 
         function AMSHelpWindow:createChildren()
             ISCollapsableWindow.createChildren(self)
-            self.helpPanel = AMSHelpPanel:new(0, 24, self.width, self.height - 24)
+            local titleBarH = 24
+            pcall(function() titleBarH = self:titleBarHeight() end)
+            self.helpPanel = AMSHelpPanel:new(0, titleBarH + 1, self.width, self.height - titleBarH - 1)
             self.helpPanel:initialise()
             self.helpPanel:instantiate()
             self.helpPanel:setAnchorRight(true)

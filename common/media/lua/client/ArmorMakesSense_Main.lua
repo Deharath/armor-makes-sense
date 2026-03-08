@@ -38,6 +38,7 @@ require "core/ArmorMakesSense_Tick"
 require "core/ArmorMakesSense_Combat"
 require "core/ArmorMakesSense_Strain"
 require "core/ArmorMakesSense_WearDebug"
+require "core/ArmorMakesSense_SupportReport"
 require "core/ArmorMakesSense_Runtime"
 require "core/ArmorMakesSense_Stats"
 require "models/ArmorMakesSense_Physiology"
@@ -117,6 +118,7 @@ local modules = {
     Combat = resolve("Core", "Combat"),
     Strain = resolve("Core", "Strain"),
     WearDebug = resolve("Core", "WearDebug"),
+    SupportReport = resolve("Core", "SupportReport"),
     Runtime = resolve("Core", "Runtime"),
     Stats = resolve("Core", "Stats"),
     Physiology = resolve("Models", "Physiology"),
@@ -464,6 +466,7 @@ configureTestingContext = function()
             LoadModel = modules.LoadModel,
             UI = modules.UI,
             WearDebug = modules.WearDebug,
+            SupportReport = modules.SupportReport,
             Combat = modules.Combat,
             Strain = modules.Strain,
             Runtime = modules.Runtime,
@@ -530,6 +533,7 @@ getStaticCombatSnapshot = function(player)
 end
 
 local getVanillaMuscleStrainFactor = moduleCall("Strain", "getVanillaMuscleStrainFactor")
+local exportSupportReport = moduleCall("SupportReport", "writeCurrentPlayerReport")
 
 local isMeleeStrainEligible = moduleCall("Strain", "isMeleeStrainEligible", false)
 
@@ -651,6 +655,7 @@ contextCoreAStatic = {
     setCurrentGameSpeed = setCurrentGameSpeed,
     getGameVersionTag = getGameVersionTag,
     getLoadedModVersion = getLoadedModVersion,
+    exportSupportReport = exportSupportReport,
     setCachedEnableSystem = function(value) cachedEnableSystem = toBoolean(value) end,
     setRuntimeDisabled = function(value) runtimeDisabled = toBoolean(value) end,
 }

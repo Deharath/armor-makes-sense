@@ -25,10 +25,7 @@ local function diagnosticsEnabled()
 end
 
 local function minuteSummaryEnabled()
-    if _G.ams_enable_mp_diag_minute_summary == true then
-        return true
-    end
-    return false
+    return true
 end
 
 if not diagnosticsEnabled() then
@@ -237,6 +234,10 @@ local function buildDumpPayload(playerObj, reason)
         thermal_contribution = tonumber(uiSnapshot.thermalContribution) or 0,
         thermal_pressure_scale = tonumber(uiSnapshot.thermalPressureScale) or 0,
         endurance_env_factor = tonumber(uiSnapshot.enduranceEnvFactor) or 1,
+        endurance_before_ams = tonumber(uiSnapshot.enduranceBeforeAms),
+        endurance_after_ams = tonumber(uiSnapshot.enduranceAfterAms),
+        endurance_natural_delta = tonumber(uiSnapshot.enduranceNaturalDelta),
+        endurance_applied_delta = tonumber(uiSnapshot.enduranceAppliedDelta),
         activity_label = tostring(snapshot.activityLabel or "idle"),
         thermal_hot = snapshot.thermalHot == true,
         thermal_cold = snapshot.thermalCold == true,
@@ -254,16 +255,24 @@ end
 local function emitMinuteSummary(playerObj)
     local payload = buildDumpPayload(playerObj, "minute")
     log(string.format(
-        "[MIN] user=%s id=%d end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f physical=%.2f breathing=%.2f rigidity=%.2f drivers=%d activity=%s hot=%s cold=%s pending=%.3f",
+        "[MIN] user=%s id=%d end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f eff=%.2f physical=%.2f breathing=%.2f rigidity=%.2f envF=%.3f thermContrib=%.3f breathContrib=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d activity=%s hot=%s cold=%s pending=%.3f",
         tostring(payload.player),
         tonumber(payload.online_id) or -1,
         tonumber(payload.endurance) or -1,
         tonumber(payload.fatigue) or -1,
         tonumber(payload.thirst) or -1,
         tonumber(payload.load_norm) or 0,
+        tonumber(payload.effective_load) or 0,
         tonumber(payload.physical_load) or 0,
         tonumber(payload.breathing_load) or 0,
         tonumber(payload.rigidity_load) or 0,
+        tonumber(payload.endurance_env_factor) or 1,
+        tonumber(payload.thermal_contribution) or 0,
+        tonumber(payload.breathing_contribution) or 0,
+        payload.endurance_before_ams ~= nil and string.format("%.4f", payload.endurance_before_ams) or "na",
+        payload.endurance_after_ams ~= nil and string.format("%.4f", payload.endurance_after_ams) or "na",
+        payload.endurance_natural_delta ~= nil and string.format("%.4f", payload.endurance_natural_delta) or "na",
+        payload.endurance_applied_delta ~= nil and string.format("%.4f", payload.endurance_applied_delta) or "na",
         #(payload.drivers or {}),
         tostring(payload.activity_label or "idle"),
         tostring(payload.thermal_hot == true),
@@ -292,7 +301,7 @@ local function sendDiagDump(playerObj, reason)
     end
 
     log(string.format(
-        "[DUMP] sent user=%s id=%d reason=%s version=%s build=%s loadNorm=%.3f physical=%.2f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
+        "[DUMP] sent user=%s id=%d reason=%s version=%s build=%s loadNorm=%.3f physical=%.2f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f envF=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
         tostring(payload.player),
         tonumber(payload.online_id) or -1,
         tostring(payload.reason),
@@ -305,8 +314,12 @@ local function sendDiagDump(playerObj, reason)
         tonumber(payload.effective_load) or 0,
         tonumber(payload.breathing_contribution) or 0,
         tonumber(payload.thermal_contribution) or 0,
-        #(payload.drivers or {})
-        ,
+        tonumber(payload.endurance_env_factor) or 1,
+        payload.endurance_before_ams ~= nil and string.format("%.4f", payload.endurance_before_ams) or "na",
+        payload.endurance_after_ams ~= nil and string.format("%.4f", payload.endurance_after_ams) or "na",
+        payload.endurance_natural_delta ~= nil and string.format("%.4f", payload.endurance_natural_delta) or "na",
+        payload.endurance_applied_delta ~= nil and string.format("%.4f", payload.endurance_applied_delta) or "na",
+        #(payload.drivers or {}),
         tonumber(payload.items_count) or 0,
         tonumber(payload.breathing_item_count) or 0,
         tostring(payload.activity_label or "idle"),

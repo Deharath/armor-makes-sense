@@ -218,15 +218,13 @@ function Runtime.registerEvents(mod)
 
     local bootOptions = ctx("getOptions")()
     ctx("setCachedEnableSystem")(true)
-    ctx("setCachedDebugLogging")(ctx("toBoolean")(bootOptions.DebugLogging))
     local loadedVersion = ctx("getLoadedModVersion")()
     ctx("log")(string.format(
-        "[BOOT] signature modVersion=%s scriptVersion=%s build=%s EnableSystem=%s DebugLogging=%s",
+        "[BOOT] signature modVersion=%s scriptVersion=%s build=%s EnableSystem=%s",
         loadedVersion,
         tostring(ctx("scriptVersion")),
         tostring(ctx("scriptBuild")),
-        tostring(ctx("isSystemEnabledCached")()),
-        tostring(ctx("isDebugLoggingCached")())
+        tostring(ctx("isSystemEnabledCached")())
     ))
     ctx("log")(string.format(
         "[BOOT_MP] side=client isClient=%s isServer=%s isMultiplayer=%s ingame=%s scriptVersion=%s build=%s",

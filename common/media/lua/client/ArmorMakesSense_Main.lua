@@ -65,7 +65,7 @@ local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.1.3")
 local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-03-05-v112")
 local warned = {}
 local cachedEnableSystem = true
-local cachedDebugLogging = false
+
 local errorKeys = {}
 local runtimeDisabled = false
 local suppressCountThisMinute = 0
@@ -613,7 +613,7 @@ contextCoreCStatic = {
     runGuarded = runGuarded,
     tickPlayer = tickPlayer,
     tickBenchRunner = tickBenchRunner,
-    isDebugLoggingCached = function() return cachedDebugLogging end,
+
     ensureSwingState = ensureSwingState,
     getVanillaMuscleStrainFactor = getVanillaMuscleStrainFactor,
     isMeleeStrainEligible = isMeleeStrainEligible,
@@ -652,7 +652,6 @@ contextCoreAStatic = {
     getGameVersionTag = getGameVersionTag,
     getLoadedModVersion = getLoadedModVersion,
     setCachedEnableSystem = function(value) cachedEnableSystem = toBoolean(value) end,
-    setCachedDebugLogging = function(value) cachedDebugLogging = toBoolean(value) end,
     setRuntimeDisabled = function(value) runtimeDisabled = toBoolean(value) end,
 }
 
@@ -695,7 +694,6 @@ if modules.Tick and type(modules.Tick.setContext) == "function" then
     modules.Tick.setContext({
         ensureState = ensureState,
         getOptions = getOptions,
-        setCachedDebugLogging = function(value) cachedDebugLogging = toBoolean(value) end,
         logOptionsSnapshot = logOptionsSnapshot,
         setCachedEnableSystem = function(value) cachedEnableSystem = toBoolean(value) end,
         getWorldAgeMinutes = getWorldAgeMinutes,

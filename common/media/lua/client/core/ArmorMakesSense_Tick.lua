@@ -26,11 +26,6 @@ function Tick.tickPlayer(player)
 
     local state = ctx("ensureState")(player)
     local options = ctx("getOptions")()
-    local benchRunner = state and state.benchRunner
-    local benchActive = benchRunner and benchRunner.active == true
-    local benchVerbose = benchRunner and benchRunner.logVerbose == true
-    local allowDebugLogs = options.DebugLogging and ((not benchActive) or benchVerbose)
-    ctx("setCachedDebugLogging")(ctx("toBoolean")(options.DebugLogging))
     ctx("logOptionsSnapshot")(options)
     ctx("setCachedEnableSystem")(true)
     if ctx("updateUiLayer") then
@@ -172,9 +167,6 @@ function Tick.tickPlayer(player)
         return
     end
 
-    if allowDebugLogs then
-        ctx("resetSuppressCounters")()
-    end
 end
 
 return Tick

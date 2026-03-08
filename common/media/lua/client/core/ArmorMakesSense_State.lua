@@ -67,27 +67,6 @@ function State.getOptions()
         end
     end
 
-    -- Debug behavior is controlled by game launch mode (-debug), not mod options.
-    local debugEnabled = false
-    if type(isDebugEnabled) == "function" then
-        local ok, value = pcall(isDebugEnabled)
-        if ok then
-            debugEnabled = ctx("toBoolean")(value)
-        end
-    end
-    if (not debugEnabled) and type(getCore) == "function" then
-        local core = getCore()
-        local debugValue = nil
-        if core then
-            debugValue = ctx("safeMethod")(core, "isDebug")
-            if debugValue == nil then
-                debugValue = ctx("safeMethod")(core, "isDebugEnabled")
-            end
-        end
-        debugEnabled = ctx("toBoolean")(debugValue)
-    end
-    options.DebugLogging = debugEnabled
-
     return options
 end
 

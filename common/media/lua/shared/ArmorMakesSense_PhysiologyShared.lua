@@ -59,38 +59,6 @@ local function resolveVentilationDemand(player, options, activityFactor, activit
     return clampValue(demand, 0.15, 1.0)
 end
 
-local function resolveBenchDebugTags(player)
-    local ensureState = ctx("ensureState")
-    if type(ensureState) ~= "function" then
-        return "na", "unknown", "unknown"
-    end
-    local state = ensureState(player)
-    local runner = state and state.benchRunner
-    if not (runner and runner.active) then
-        return "na", "unknown", "unknown"
-    end
-    local pending = runner.pending
-    local setId = pending and pending.setDef and pending.setDef.id or "unknown"
-    local scenarioId = pending and pending.scenarioId or "unknown"
-    return tostring(runner.id or "na"), tostring(setId), tostring(scenarioId)
-end
-
-local function allowVerboseDebugLogs(player, options)
-    if not (options and options.DebugLogging) then
-        return false
-    end
-    local ensureState = ctx("ensureState")
-    if type(ensureState) ~= "function" then
-        return true
-    end
-    local state = ensureState(player)
-    local runner = state and state.benchRunner
-    if runner and runner.active and runner.logVerbose ~= true then
-        return false
-    end
-    return true
-end
-
 local function normalizePositive(value, pivot, span, cap)
     local num = tonumber(value)
     if num == nil then
@@ -358,14 +326,6 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
     return payload.scale, payload.pressure, payload.hotStrain, payload.coldStrain, payload.bodyTemp, payload
 end
 
-local function formatDebugValue(value, precision)
-    local num = tonumber(value)
-    if num == nil then
-        return "na"
-    end
-    return string.format("%." .. tostring(precision or 4) .. "f", num)
-end
-
 collectThermoregulatorTelemetry = function(player)
     local safeMethod = ctx("safeMethod")
     if type(safeMethod) ~= "function" then
@@ -452,48 +412,6 @@ collectThermoregulatorTelemetry = function(player)
     return telemetry
 end
 
-local function buildThermalTelemetryFields(player)
-    local telemetry = type(player) == "table" and player.telemetry or collectThermoregulatorTelemetry(player)
-    local thermalModel = type(player) == "table" and player.model or nil
-    if not telemetry then
-        return "skinTemp=na perspiration=na shivering=na bloodVessels=na vasodilation=na vasoconstriction=na bodyResponse=na primaryDelta=na secondaryDelta=na bodyWetness=na clothingWetness=na insulation=na windResistance=na coreTemp=na heatGeneration=na fluidsMultiplier=na energyMultiplier=na fatigueMultiplier=na bodyHeatDelta=na coreRateOfChange=na externalAirTemp=na airAndWindTemp=na dbgPrimaryTotal=na dbgSecondaryTotal=na hotStrain=na coldStrain=na coldResidual=na coldAppropriateness=na enduranceEnvFactor=na nodeCount=0"
-    end
-
-    return string.format(
-        "skinTemp=%s perspiration=%s shivering=%s bloodVessels=%s vasodilation=%s vasoconstriction=%s bodyResponse=%s primaryDelta=%s secondaryDelta=%s bodyWetness=%s clothingWetness=%s insulation=%s windResistance=%s coreTemp=%s heatGeneration=%s fluidsMultiplier=%s energyMultiplier=%s fatigueMultiplier=%s bodyHeatDelta=%s coreRateOfChange=%s externalAirTemp=%s airAndWindTemp=%s dbgPrimaryTotal=%s dbgSecondaryTotal=%s hotStrain=%s coldStrain=%s coldResidual=%s coldAppropriateness=%s enduranceEnvFactor=%s nodeCount=%d",
-        formatDebugValue(telemetry.skinTemp, 4),
-        formatDebugValue(telemetry.perspiration, 4),
-        formatDebugValue(telemetry.shivering, 4),
-        formatDebugValue(telemetry.bloodVessels, 4),
-        formatDebugValue(telemetry.vasodilation, 4),
-        formatDebugValue(telemetry.vasoconstriction, 4),
-        formatDebugValue(telemetry.bodyResponse, 4),
-        formatDebugValue(telemetry.primaryDelta, 4),
-        formatDebugValue(telemetry.secondaryDelta, 4),
-        formatDebugValue(telemetry.bodyWetness, 4),
-        formatDebugValue(telemetry.clothingWetness, 4),
-        formatDebugValue(telemetry.insulation, 4),
-        formatDebugValue(telemetry.windResistance, 4),
-        formatDebugValue(telemetry.coreTemp, 4),
-        formatDebugValue(telemetry.heatGeneration, 4),
-        formatDebugValue(telemetry.fluidsMultiplier, 4),
-        formatDebugValue(telemetry.energyMultiplier, 4),
-        formatDebugValue(telemetry.fatigueMultiplier, 4),
-        formatDebugValue(telemetry.bodyHeatDelta, 4),
-        formatDebugValue(telemetry.coreRateOfChange, 4),
-        formatDebugValue(telemetry.externalAirTemp, 4),
-        formatDebugValue(telemetry.airAndWindTemp, 4),
-        formatDebugValue(telemetry.dbgPrimaryTotal, 4),
-        formatDebugValue(telemetry.dbgSecondaryTotal, 4),
-        formatDebugValue(thermalModel and thermalModel.hotStrain or nil, 4),
-        formatDebugValue(thermalModel and thermalModel.coldStrain or nil, 4),
-        formatDebugValue(thermalModel and thermalModel.coldResidual or nil, 4),
-        formatDebugValue(thermalModel and thermalModel.coldAppropriateness or nil, 4),
-        formatDebugValue(thermalModel and thermalModel.enduranceEnvFactor or nil, 4),
-        tonumber(telemetry.nodeCount) or 0
-    )
-end
-
 function Physiology.setContext(context)
     C = context or {}
 end
@@ -568,36 +486,11 @@ function Physiology.updateRecoveryTrace(state, options, nowMinutes, dtMinutes, p
         end
 
         if recovered then
-            if options.DebugLogging then
-                ctx("log")(string.format(
-                    "[debug] recovery done dt=%.2f endStart=%.3f endNow=%.3f sitMin=%.2f standMin=%.2f postureStart=%s postureEnd=%s phyStart=%.2f piecesStart=%d",
-                    math.max(0, nowMinutes - (trace.startMinute or nowMinutes)),
-                    tonumber(trace.startEndurance) or -1,
-                    enduranceNow,
-                    tonumber(trace.sitMinutes) or 0,
-                    tonumber(trace.standMinutes) or 0,
-                    tostring(trace.postureStart or "stand"),
-                    postureLabel,
-                    tonumber(trace.startPhysicalLoad) or 0,
-                    tonumber(trace.startArmorPieces) or 0
-                ))
-            end
             trace.active = false
             return
         end
 
         if not idleLike then
-            if options.DebugLogging then
-                ctx("log")(string.format(
-                    "[debug] recovery stop reason=activity act=%s dt=%.2f endStart=%.3f endNow=%.3f sitMin=%.2f standMin=%.2f",
-                    activityLabel,
-                    math.max(0, nowMinutes - (trace.startMinute or nowMinutes)),
-                    tonumber(trace.startEndurance) or -1,
-                    enduranceNow,
-                    tonumber(trace.sitMinutes) or 0,
-                    tonumber(trace.standMinutes) or 0
-                ))
-            end
             trace.active = false
             return
         end
@@ -617,16 +510,6 @@ function Physiology.updateRecoveryTrace(state, options, nowMinutes, dtMinutes, p
         trace.sitMinutes = 0
         trace.standMinutes = 0
         trace.sampleMinutes = 0
-
-        if options.DebugLogging then
-            ctx("log")(string.format(
-                "[debug] recovery start end=%.3f posture=%s phy=%.2f pieces=%d",
-                enduranceNow,
-                postureLabel,
-                tonumber(profile.physicalLoad) or 0,
-                tonumber(profile.armorCount) or 0
-            ))
-        end
     end
 end
 
@@ -643,14 +526,6 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
         state.sleepSnapshot = {
             rigidityLoad = tonumber(profile.rigidityLoad) or 0,
         }
-        if options.DebugLogging then
-            local rigidityNorm = ctx("softNorm")(tonumber(state.sleepSnapshot.rigidityLoad) or 0, 80.0, 2.0)
-            ctx("log")(string.format(
-                "[debug] sleep start rigidity=%.3f rigidityNorm=%.4f",
-                tonumber(state.sleepSnapshot.rigidityLoad) or 0,
-                tonumber(rigidityNorm) or 0
-            ))
-        end
     end
 
     if sleeping then
@@ -920,45 +795,6 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
         if type(markUiDirty) == "function" then
             markUiDirty()
         end
-    end
-
-    if allowVerboseDebugLogs(player, options) then
-        ctx("log")(string.format(
-            "[debug] endModel end=%.3f final=%.3f delta=%.4f nat=%.4f regenScale=%.3f drain=%.4f loadEff=%.2f loadN=%.2f act=%.2f heat=%.2f wet=%.2f dt=%.2f",
-            endurance,
-            controlled,
-            enduranceDelta,
-            naturalDelta,
-            regenScale,
-            drainApplied,
-            effectiveLoad,
-            loadNorm,
-            activityFactor,
-            heatFactor,
-            wetFactor,
-            dtMinutes
-        ))
-        local runId, setId, scenarioId = resolveBenchDebugTags(player)
-        local bodyTempValue = bodyTemp and string.format("%.4f", bodyTemp) or "na"
-        local thermalTelemetry = buildThermalTelemetryFields({
-            telemetry = thermalModel and thermalModel.telemetry or nil,
-            model = thermalModel,
-        })
-        ctx("log")(string.format(
-            "[AMS_DEBUG_THERM] id=%s set=%s scenario=%s channel=endurance heatFactor=%.4f bodyTemp=%s thermalHotStrain=%.4f thermalColdStrain=%.4f thermalColdResidual=%.4f thermalAppropriateness=%.4f thermalPressure=%.4f thermalPressureScale=%.4f %s",
-            runId,
-            setId,
-            scenarioId,
-            tonumber(heatFactor) or 1.0,
-            bodyTempValue,
-            thermalHotStrain,
-            thermalColdStrain,
-            tonumber(thermalModel and thermalModel.coldResidual) or 0,
-            tonumber(thermalModel and thermalModel.coldAppropriateness) or 0,
-            thermalPressure,
-            thermalPressureScale,
-            thermalTelemetry
-        ))
     end
 
     return enduranceDelta

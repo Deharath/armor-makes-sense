@@ -40,7 +40,6 @@ function Tick.tickPlayer(player)
     if type(getAutoRunnerPhase) == "function" then
         autoPhase = getAutoRunnerPhase(player, state, nowMinutes)
     end
-    ctx("logWearChanges")(player, state, options, nowMinutes)
     local elapsedMinutes = nowMinutes - state.lastUpdateGameMinutes
     state.lastUpdateGameMinutes = nowMinutes
 

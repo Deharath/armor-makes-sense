@@ -6,7 +6,7 @@ _As of March 7, 2026_
 
 ## Scope
 
-Armor Makes Sense (AMS) is a Build 42 armor-physiology mod with singleplayer and multiplayer runtime paths. `StarlitLibrary` is a hard dependency and provides the tooltip injection hook used by the UI layer.
+Armor Makes Sense (AMS) is a Build 42 armor-physiology mod with singleplayer and multiplayer runtime paths. The UI layer owns its inventory-tooltip integration directly by patching `ISToolTipInv.render` and populating `ObjectTooltip` layouts through vanilla `DoTooltipEmbedded`.
 
 The codebase is organized around five technical references:
 - Runtime systems: [armor_makes_sense-runtime_reference.md](./armor_makes_sense-runtime_reference.md)
@@ -96,7 +96,7 @@ Runtime split:
 - `client/core/ArmorMakesSense_Utils.lua` — utility helpers
 - `client/core/ArmorMakesSense_Environment.lua` — client environment and activity sampling
 - `client/core/ArmorMakesSense_LoadModel.lua` — client load-model wrapper
-- `client/core/ArmorMakesSense_UI.lua` — tooltip and burden UI
+- `client/core/ArmorMakesSense_UI.lua` — local inventory-tooltip patch and burden UI
 - `client/core/ArmorMakesSense_ContextFactory.lua` — client context builder
 - `client/core/ArmorMakesSense_ContextBinder.lua` — context injector
 - `client/core/ArmorMakesSense_ContextRefs.lua` — stable context references

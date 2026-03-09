@@ -130,7 +130,8 @@ local TT_VALUE_DEFAULT = { 1.0, 1.0, 1.0, 1.0 }
 local TT_VALUE_BREATHING = { 1.0, 0.80, 0.40, 1.0 }
 local TT_VALUE_BREATHING_HEAVY = { 1.0, 0.45, 0.35, 1.0 }
 local TT_BAR_BURDEN = { 0.95, 0.70, 0.25, 1.0 }
-local TT_SEPARATOR = { 0.60, 0.60, 0.60, 1.0 }
+local AMSTooltipPatched = false
+local originalISToolTipInvRender = nil
 
 local function addLayoutRow(layout, payload)
     local row = ctx("safeMethod")(layout, "addItem")
@@ -167,80 +168,6 @@ local function isShoulderpadFamilyItem(item, location)
     return string.find(loweredFullType, "shoulderpad", 1, true) ~= nil
 end
 
-local function pruneBackpackTooltipRow(layout, item, starlitUI)
-    if not layout or not item then
-        return
-    end
-    if not isShoulderpadFamilyItem(item) then
-        return
-    end
-
-    local rows = layout.items
-    if not rows then
-        return
-    end
-
-    local noBackpackText = getText and getText("Tooltip_item_NoBackpack") or "Can't wear with a backpack."
-    local noBackpackTextLower = ctx("lower")(tostring(noBackpackText or ""))
-    local itemTooltip = tostring(ctx("safeMethod")(item, "getTooltip") or "")
-    local count = tonumber(ctx("safeMethod")(rows, "size")) or 0
-    local toRemove = {}
-    for i = count - 1, 0, -1 do
-        local row = ctx("safeMethod")(rows, "get", i)
-        local label = tostring((row and row.label) or ctx("safeMethod")(row, "getLabel") or "")
-        local value = tostring((row and row.value) or ctx("safeMethod")(row, "getValue") or "")
-        local normalized = string.gsub(label, "^%s+", "")
-        normalized = string.gsub(normalized, "%s+$", "")
-        local normalizedLower = ctx("lower")(normalized)
-        local normalizedValue = string.gsub(value, "^%s+", "")
-        normalizedValue = string.gsub(normalizedValue, "%s+$", "")
-        local normalizedValueLower = ctx("lower")(normalizedValue)
-
-        local isNoBackpack = (
-            normalized == tostring(noBackpackText or "")
-            or normalizedValue == tostring(noBackpackText or "")
-            or (noBackpackTextLower ~= "" and (
-                string.find(normalizedLower, noBackpackTextLower, 1, true) ~= nil
-                or string.find(normalizedValueLower, noBackpackTextLower, 1, true) ~= nil
-            ))
-        )
-        local isEmptyPlaceholder = (
-            normalized == "\"\"" or normalizedValue == "\"\""
-            or (normalized == "" and normalizedValue == "")
-        )
-        local isItemTooltipBlank = (itemTooltip == "" or itemTooltip == "\"\"")
-
-        if isNoBackpack or (isItemTooltipBlank and isEmptyPlaceholder) then
-            toRemove[#toRemove + 1] = row
-        end
-    end
-
-    for i = 1, #toRemove do
-        local row = toRemove[i]
-        local removed = false
-        if type(starlitUI) == "table" and type(starlitUI.removeTooltipElement) == "function" then
-            local ok = pcall(starlitUI.removeTooltipElement, layout, row)
-            if ok then
-                removed = true
-            end
-        end
-        if not removed and row then
-            pcall(function()
-                rows:remove(row)
-                removed = true
-            end)
-        end
-        if not removed and row then
-            row.label = ""
-            row.value = ""
-            row.hasValue = false
-            row.couldHaveValue = false
-            row.progressFraction = 0
-            row.height = 0
-        end
-    end
-end
-
 local function stripAmsPrefix(text)
     local value = tostring(text or "")
     value = string.gsub(value, "^%s*AMS%s+", "")
@@ -262,6 +189,29 @@ local function isTooltipWearable(item)
     local scriptItem = ctx("safeMethod")(item, "getScriptItem")
     local bodyLocation = tostring(ctx("safeMethod")(scriptItem, "getBodyLocation") or "")
     return location ~= "" or bodyLocation ~= ""
+end
+
+local function getTooltipPadding(tooltip)
+    local padLeft = tonumber(tooltip and tooltip.padLeft)
+    local padRight = tonumber(tooltip and tooltip.padRight)
+    local padTop = tonumber(tooltip and tooltip.padTop)
+    local padBottom = tonumber(tooltip and tooltip.padBottom)
+    if padLeft and padRight and padTop and padBottom then
+        return padLeft, padRight, padTop, padBottom
+    end
+
+    local font = tooltip and ctx("safeMethod")(tooltip, "getFont") or nil
+    local tm = _G.TextManager and _G.TextManager.instance or nil
+    local charWidth = tonumber(tm and font and ctx("safeMethod")(tm, "MeasureStringX", font, "1")) or 5
+    if charWidth < 1 then
+        charWidth = 5
+    end
+    charWidth = charWidth + 2
+    local verticalPad = math.floor(charWidth / 2)
+    if verticalPad < 1 then
+        verticalPad = 2
+    end
+    return charWidth + 1, charWidth, verticalPad, verticalPad
 end
 
 local function injectTooltipRowsWithLayout(layout, item)
@@ -307,40 +257,142 @@ local function injectTooltipRowsWithLayout(layout, item)
         return
     end
 
-    if #rows >= 2 then
-        addLayoutRow(layout, {
-            label = "----------------",
-            labelColor = TT_SEPARATOR,
-            value = "",
-        })
-    end
-
     for i = 1, #rows do
         addLayoutRow(layout, rows[i])
     end
 end
 
-local starlitHookInstalled = false
+local function renderTooltipLayoutForItem(item, tooltip)
+    if not item or not tooltip then
+        return false
+    end
 
-local function installStarlitHook()
-    if starlitHookInstalled then
+    local layout = ctx("safeMethod")(tooltip, "beginLayout")
+    if not layout then
+        return false
+    end
+
+    local ok = pcall(function()
+        ctx("safeMethod")(layout, "setMinLabelWidth", 80)
+        ctx("safeMethod")(layout, "setMinValueWidth", 80)
+        item:DoTooltipEmbedded(tooltip, layout, 0)
+        injectTooltipRowsWithLayout(layout, item)
+
+        local padLeft, padRight, padTop, padBottom = getTooltipPadding(tooltip)
+        local lineSpacing = tonumber(ctx("safeMethod")(tooltip, "getLineSpacing")) or 14
+        local top = padTop + lineSpacing + 5
+        local height = tonumber(ctx("safeMethod")(layout, "render", padLeft, top, tooltip)) or top
+        ctx("safeMethod")(tooltip, "endLayout", layout)
+
+        local width = tonumber(ctx("safeMethod")(tooltip, "getWidth")) or 0
+        if width < 150 then
+            width = 150
+        end
+
+        if instanceof(item, "InventoryContainer") then
+            if width < 160 then
+                width = 160
+            end
+            local container = ctx("safeMethod")(item, "getItemContainer")
+            local items = container and ctx("safeMethod")(container, "getItems")
+            local maxX = width - padRight
+            if items and not ctx("safeMethod")(items, "isEmpty") then
+                local seenItems = {}
+                local xOffset = padLeft
+                height = height + 4
+                local itemCount = tonumber(ctx("safeMethod")(items, "size")) or 0
+                for i = itemCount - 1, 0, -1 do
+                    local containerItem = ctx("safeMethod")(items, "get", i)
+                    local name = containerItem and tostring(ctx("safeMethod")(containerItem, "getName") or "")
+                    if not seenItems[name] then
+                        seenItems[name] = true
+                        local tex = containerItem and ctx("safeMethod")(containerItem, "getTex")
+                        if tex then
+                            ctx("safeMethod")(tooltip, "DrawTextureScaledAspect", tex, xOffset, height, 16, 16, 1, 1, 1, 1)
+                        end
+                        xOffset = xOffset + 17
+                        if xOffset + 16 > maxX then
+                            break
+                        end
+                    end
+                end
+                height = height + 16
+            end
+        end
+
+        ctx("safeMethod")(tooltip, "setHeight", math.floor(height + padBottom))
+        ctx("safeMethod")(tooltip, "setWidth", math.floor(width))
+    end)
+
+    if not ok then
+        pcall(function()
+            ctx("safeMethod")(tooltip, "endLayout", layout)
+        end)
+        return false
+    end
+
+    return true
+end
+
+local function installTooltipRenderPatch()
+    if AMSTooltipPatched then
         return true
     end
 
-    local ok, starlitUI = pcall(require, "Starlit/client/ui/InventoryUI")
-    if not ok or type(starlitUI) ~= "table" then
-        return false
-    end
-    if not starlitUI.onFillItemTooltip or type(starlitUI.onFillItemTooltip.addListener) ~= "function" then
+    if not ISToolTipInv or type(ISToolTipInv.render) ~= "function" then
         return false
     end
 
-    starlitUI.onFillItemTooltip:addListener(function(tooltip, layout, item)
-        pcall(pruneBackpackTooltipRow, layout, item, starlitUI)
-        pcall(injectTooltipRowsWithLayout, layout, item)
-    end)
-    starlitHookInstalled = true
-    ctx("logOnce")("ui_tooltip_starlit", "[UI] AMS tooltip rows registered via Starlit onFillItemTooltip event.")
+    originalISToolTipInvRender = originalISToolTipInvRender or ISToolTipInv.render
+    ISToolTipInv.render = function(self)
+        local item = self and self.item
+        if not item or instanceof(item, "FluidContainer") then
+            return originalISToolTipInvRender(self)
+        end
+
+        local itemMt = nil
+        local mtOk, mtValue = pcall(getmetatable, item)
+        if mtOk and type(mtValue) == "table" then
+            itemMt = mtValue
+        end
+        local itemIndex = itemMt and type(itemMt.__index) == "table" and itemMt.__index or nil
+        local originalDoTooltip = itemIndex and itemIndex.DoTooltip or nil
+        if type(originalDoTooltip) ~= "function" then
+            return originalISToolTipInvRender(self)
+        end
+
+        local restoreTooltip = nil
+        if isShoulderpadFamilyItem(item) then
+            local tooltipKey = tostring(ctx("safeMethod")(item, "getTooltip") or "")
+            if tooltipKey ~= "" then
+                restoreTooltip = tooltipKey
+                pcall(function()
+                    item:setTooltip(nil)
+                end)
+            end
+        end
+
+        itemIndex.DoTooltip = function(overriddenItem, tooltip)
+            if not renderTooltipLayoutForItem(overriddenItem, tooltip) then
+                return originalDoTooltip(overriddenItem, tooltip)
+            end
+        end
+
+        local ok, result = pcall(originalISToolTipInvRender, self)
+        itemIndex.DoTooltip = originalDoTooltip
+        if restoreTooltip ~= nil then
+            pcall(function()
+                item:setTooltip(restoreTooltip)
+            end)
+        end
+        if not ok then
+            error(result)
+        end
+        return result
+    end
+
+    AMSTooltipPatched = true
+    ctx("logOnce")("ui_tooltip_patch_installed", "[UI] AMS tooltip rows registered via pre-render ISToolTipInv patch.")
     return true
 end
 
@@ -349,12 +401,12 @@ local function installTooltipHook()
         return
     end
 
-    if installStarlitHook() then
+    if installTooltipRenderPatch() then
         tooltipHookInstalled = true
         return
     end
 
-    ctx("logErrorOnce")("ui_tooltip_starlit_missing", "[UI] Starlit Library missing: AMS tooltip rows unavailable.")
+    ctx("logErrorOnce")("ui_tooltip_patch_missing", "[UI] ISToolTipInv patch unavailable: AMS tooltip rows unavailable.")
     tooltipHookInstalled = true
 end
 

@@ -6,7 +6,7 @@ _As of March 7, 2026_
 
 ## Tooltip Rows
 
-Tooltip rows are injected through Starlit `onFillItemTooltip`.
+Tooltip rows are injected through an AMS-local `ISToolTipInv.render` patch that builds a vanilla `ObjectTooltip` layout via `InventoryItem:DoTooltipEmbedded(...)`.
 
 Display conditions:
 - burden row if `physicalLoad >= 1.5`

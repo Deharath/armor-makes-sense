@@ -33,7 +33,6 @@ require "core/ArmorMakesSense_State"
 require "core/ArmorMakesSense_Tick"
 require "core/ArmorMakesSense_Combat"
 require "core/ArmorMakesSense_Strain"
-require "core/ArmorMakesSense_WearDebug"
 require "core/ArmorMakesSense_SupportReport"
 require "core/ArmorMakesSense_Runtime"
 require "core/ArmorMakesSense_Stats"
@@ -112,7 +111,6 @@ local modules = {
     Tick = resolve("Core", "Tick"),
     Combat = resolve("Core", "Combat"),
     Strain = resolve("Core", "Strain"),
-    WearDebug = resolve("Core", "WearDebug"),
     SupportReport = resolve("Core", "SupportReport"),
     Runtime = resolve("Core", "Runtime"),
     Stats = resolve("Core", "Stats"),
@@ -395,8 +393,6 @@ tickBenchRunner = function(player, state)
     return result
 end
 
-local logWearChanges = moduleCall("WearDebug", "logWearChanges")
-
 local itemToArmorSignal = moduleCall("LoadModel", "itemToArmorSignal")
 
 local computeArmorProfile = modules.ContextRefs.computeArmorProfile
@@ -460,7 +456,6 @@ configureTestingContext = function()
             Environment = modules.Environment,
             LoadModel = modules.LoadModel,
             UI = modules.UI,
-            WearDebug = modules.WearDebug,
             SupportReport = modules.SupportReport,
             Combat = modules.Combat,
             Strain = modules.Strain,
@@ -697,7 +692,6 @@ if modules.Tick and type(modules.Tick.setContext) == "function" then
         setCachedEnableSystem = function(value) cachedEnableSystem = toBoolean(value) end,
         getWorldAgeMinutes = getWorldAgeMinutes,
         runPlayerStartupChecks = runPlayerStartupChecks,
-        logWearChanges = logWearChanges,
         clamp = clamp,
         getEndurance = getEndurance,
         setWetness = setWetness,

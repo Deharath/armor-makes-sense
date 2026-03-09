@@ -34,6 +34,28 @@ local function smoothstep01(value)
     return x * x * (3 - (2 * x))
 end
 
+local THERMAL_HOT_ON_THRESHOLD = 0.14
+local THERMAL_HOT_OFF_THRESHOLD = 0.08
+local THERMAL_COLD_ON_THRESHOLD = 0.12
+local THERMAL_COLD_OFF_THRESHOLD = 0.06
+local THERMAL_COLD_CONTEXT_MIN = 0.16
+local THERMAL_COLD_CONTEXT_FULL = 0.60
+local THERMAL_PRESSURE_DEADBAND = 0.18
+local THERMAL_AMBIENT_COLD_TEMP = 22.0
+local THERMAL_AMBIENT_HOT_TEMP = 38.0
+local THERMAL_AMBIENT_FLOOR = 0.06
+local THERMAL_CORE_ESCALATOR_WEIGHT = 0.35
+
+local function thermalPressureToScale(pressure)
+    local deadband = clampValue(THERMAL_PRESSURE_DEADBAND, 0, 0.95)
+    local normalized = clampValue(
+        ((tonumber(pressure) or 0) - deadband) / math.max(0.05, 1.0 - deadband),
+        0,
+        1.0
+    )
+    return smoothstep01(normalized)
+end
+
 local function resolveVentilationDemand(player, options, activityFactor, activityLabel)
     local idleFactor = clampValue(tonumber(options and options.ActivityIdle) or 0.35, 0.2, 1.8)
     local sprintFactor = clampValue(tonumber(options and options.ActivitySprint) or 1.35, 0.2, 1.8)
@@ -176,7 +198,7 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
     end
 
     local heatComponent = clampValue(((tonumber(heatFactor) or 1.0) - 1.00) / 0.15, 0, 1.6)
-    local tempHotComponent = clampValue((tonumber(bodyTemp) and ((bodyTemp - 37.00) / 0.80) or 0), 0, 1.6)
+    local tempHotComponent = clampValue((tonumber(bodyTemp) and ((bodyTemp - 37.55) / 1.20) or 0), 0, 1.6)
     local tempColdComponent = clampValue((tonumber(bodyTemp) and ((36.90 - bodyTemp) / 1.20) or 0), 0, 1.6)
 
     local payload = {
@@ -191,8 +213,7 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
         payload.coldAppropriateness = 0
         payload.coldResidual = payload.coldStrain
         payload.pressure = clampValue(payload.hotStrain + payload.coldResidual, 0, 1.8)
-        local smoothInput = clampValue(payload.pressure, 0, 1.0)
-        payload.scale = smoothInput * smoothInput * (3 - (2 * smoothInput))
+        payload.scale = thermalPressureToScale(payload.pressure)
         local fallbackEnv = ((tonumber(heatFactor) or 1.0) * 0.70) + ((tonumber(wetFactor) or 1.0) * 0.30)
         payload.enduranceEnvFactor = clampValue(fallbackEnv, 0.70, 2.40)
 
@@ -217,15 +238,36 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
         local coreHot = tempHotComponent
         local coreCold = tempColdComponent
 
+        -- Peripheral effort = how hard the body is working to cool.
+        -- Ambient context = whether the environment makes that effort armor-relevant.
+        -- Core evidence = secondary escalator for genuinely rising body heat.
+        local peripheralHot = clampValue(
+            (skinHot * 0.22)
+                + (perspirationNorm * 0.18)
+                + (vasodilationNorm * 0.08)
+                + (fluidsNorm * 0.06),
+            0,
+            1.4
+        )
+        local coreHotEvidence = clampValue(
+            (bodyHeatHot * 0.32)
+                + (coreHot * 0.30)
+                + (coreTrendHot * 0.14)
+                + (heatGenerationNorm * 0.12),
+            0,
+            1.4
+        )
+        local airTemp = math.max(
+            tonumber(telemetry.externalAirTemp) or 20,
+            tonumber(telemetry.airAndWindTemp) or 20
+        )
+        local ambientContext = clampValue(
+            (airTemp - THERMAL_AMBIENT_COLD_TEMP) / math.max(1, THERMAL_AMBIENT_HOT_TEMP - THERMAL_AMBIENT_COLD_TEMP),
+            0, 1.0
+        )
+        local modulatedPeripheral = peripheralHot * (THERMAL_AMBIENT_FLOOR + ((1 - THERMAL_AMBIENT_FLOOR) * ambientContext))
         local rawHot = clampValue(
-            (skinHot * 0.34)
-                + (perspirationNorm * 0.27)
-                + (vasodilationNorm * 0.10)
-                + (fluidsNorm * 0.12)
-                + (bodyHeatHot * 0.08)
-                + (coreHot * 0.05)
-                + (coreTrendHot * 0.02)
-                + (heatComponent * 0.10),
+            modulatedPeripheral + (coreHotEvidence * THERMAL_CORE_ESCALATOR_WEIGHT),
             0,
             1.8
         )
@@ -241,10 +283,22 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
             1.8
         )
 
-        local hotSmoothed = computeAsymmetricEma(thermalState, "hotEma", rawHot, 0.55, 0.20)
-        local coldSmoothed = computeAsymmetricEma(thermalState, "coldEma", rawCold, 0.48, 0.18)
-        local hotStrain = applySignalGate(thermalState, "hotActive", hotSmoothed, 0.08, 0.04)
-        local coldStrain = applySignalGate(thermalState, "coldActive", coldSmoothed, 0.07, 0.03)
+        local hotSmoothed = computeAsymmetricEma(thermalState, "hotEma", rawHot, 0.55, 0.38)
+        local coldSmoothed = computeAsymmetricEma(thermalState, "coldEma", rawCold, 0.48, 0.32)
+        local hotStrain = applySignalGate(
+            thermalState,
+            "hotActive",
+            hotSmoothed,
+            THERMAL_HOT_ON_THRESHOLD,
+            THERMAL_HOT_OFF_THRESHOLD
+        )
+        local coldStrain = applySignalGate(
+            thermalState,
+            "coldActive",
+            coldSmoothed,
+            THERMAL_COLD_ON_THRESHOLD,
+            THERMAL_COLD_OFF_THRESHOLD
+        )
 
         local bodyWetness = normalizeWetSample(telemetry.bodyWetness)
         local clothingWetness = normalizeWetSample(telemetry.clothingWetness)
@@ -278,8 +332,8 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
         local coldContext = clampValue(math.max(coldStrain, ambientCold, shiveringNorm * 0.80, coreCold * 0.60), 0, 1.6)
 
         local coldAppropriateness = 0
-        if coldContext >= 0.08 and protectionEvidence >= 0.10 then
-            local contextScale = clampValue(coldContext / 0.45, 0.25, 1.0)
+        if coldContext >= THERMAL_COLD_CONTEXT_MIN and protectionEvidence >= 0.10 then
+            local contextScale = clampValue(coldContext / THERMAL_COLD_CONTEXT_FULL, 0.15, 1.0)
             coldAppropriateness = clampValue(
                 ((protectionEvidence * 0.58) + (outcomeEvidence * 0.42))
                     * contextScale
@@ -295,18 +349,19 @@ local function resolveThermalPressureScale(player, state, heatFactor, wetFactor)
         local coldResidualScale = 1 - coldAppropriateness
         local coldResidual = clampValue(coldStrain * coldResidualScale * coldResidualScale, 0, 1.8)
         local pressure = clampValue(hotStrain + coldResidual, 0, 1.8)
-        local smoothInput = clampValue(pressure, 0, 1.0)
-        local scale = smoothInput * smoothInput * (3 - (2 * smoothInput))
+        local scale = thermalPressureToScale(pressure)
         local coldShiverLoad = clampValue((shiveringNorm * coldResidualScale * 0.70) + (coldResidual * 0.30), 0, 1.8)
+
+        local thermalBurdenFactor = scale
 
         payload.hotStrain = hotStrain
         payload.coldStrain = coldStrain
         payload.coldAppropriateness = coldAppropriateness
         payload.coldResidual = coldResidual
         payload.pressure = pressure
-        payload.scale = scale
+        payload.scale = thermalBurdenFactor
         payload.enduranceEnvFactor = clampValue(
-            0.92 + (hotStrain * 0.72) + (coldShiverLoad * 0.45) + (heatGenerationNorm * 0.22) + (wetnessPenalty * 0.20),
+            1.0 + (thermalBurdenFactor * 1.05) + (coldShiverLoad * 0.45) + (wetnessPenalty * 0.20),
             0.70,
             2.40
         )
@@ -564,6 +619,9 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
 end
 
 local function computeThermalContribution(player, state, options, wearabilityLoad, heatFactor, wetFactor)
+    if not options.EnableThermalModel then
+        return 0, 0, 0, 0, nil, nil, 0
+    end
     local thermalPressureScale, thermalPressure, thermalHotStrain, thermalColdStrain, bodyTemp, thermalModel =
         resolveThermalPressureScale(player, state, heatFactor, wetFactor)
     local thermalContribution = wearabilityLoad * (tonumber(options.ThermalEnduranceWeight) or 0.35) * thermalPressureScale
@@ -765,7 +823,7 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     end
     local snapshotHotStrain = tonumber(thermalModel and thermalModel.hotStrain) or 0
     local snapshotColdAppropriateness = tonumber(thermalModel and thermalModel.coldAppropriateness) or 0
-    local thermalUiState = snapshotHotStrain > 0.15 and "hot" or (snapshotColdAppropriateness > 0.30 and "cold" or "neutral")
+    local thermalUiState = snapshotHotStrain > 0.24 and "hot" or (snapshotColdAppropriateness > 0.45 and "cold" or "neutral")
     local prevThermalUiState = state.uiRuntimeSnapshot and state.uiRuntimeSnapshot.thermalUiState or nil
     state.uiRuntimeSnapshot = {
         loadNorm = loadNorm,

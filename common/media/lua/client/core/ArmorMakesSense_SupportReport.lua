@@ -174,6 +174,7 @@ local function collectActiveMods()
 end
 
 local PLAYER_FACING_OPTIONS = {
+    EnableThermalModel = true,
     EnableMuscleStrainModel = true,
     EnableSleepPenaltyModel = true,
 }
@@ -384,7 +385,18 @@ local function collectMpSnapshot(state)
         breathingLoad = tonumber(snapshot.breathingLoad) or nil,
         rigidityLoad = tonumber(snapshot.rigidityLoad) or nil,
         effectiveLoad = tonumber(snapshot.effectiveLoad) or nil,
+        thermalContribution = tonumber(snapshot.thermalContribution) or nil,
+        breathingContribution = tonumber(snapshot.breathingContribution) or nil,
+        hotStrain = tonumber(snapshot.hotStrain) or nil,
+        coldAppropriateness = tonumber(snapshot.coldAppropriateness) or nil,
+        thermalPressureScale = tonumber(snapshot.thermalPressureScale) or nil,
         enduranceEnvFactor = tonumber(snapshot.enduranceEnvFactor) or nil,
+        enduranceBeforeAms = tonumber(snapshot.enduranceBeforeAms) or nil,
+        enduranceAfterAms = tonumber(snapshot.enduranceAfterAms) or nil,
+        enduranceNaturalDelta = tonumber(snapshot.enduranceNaturalDelta) or nil,
+        enduranceAppliedDelta = tonumber(snapshot.enduranceAppliedDelta) or nil,
+        lastAppliedDtMinutes = tonumber(snapshot.lastAppliedDtMinutes) or nil,
+        catchupPendingMinutes = tonumber(snapshot.catchupPendingMinutes) or nil,
         activityLabel = tostring(snapshot.activityLabel or "idle"),
         ageSeconds = ageSeconds,
         drivers = type(snapshot.drivers) == "table" and snapshot.drivers or {},
@@ -489,7 +501,7 @@ local function buildReport(player)
     appendLine(lines, string.format("thermal_load=%s", formatNumber(profile.thermalLoad, 3)))
     appendLine(lines, string.format("breathing_load=%s", formatNumber(profile.breathingLoad, 3)))
     appendLine(lines, string.format("rigidity_load=%s", formatNumber(profile.rigidityLoad, 3)))
-    appendLine(lines, string.format("effective_load=%s", formatNumber(profile.combinedLoad, 3)))
+    appendLine(lines, string.format("combined_load=%s", formatNumber(profile.combinedLoad, 3)))
     appendLine(lines, string.format("burden_tier=%s", burdenTierLabel(profile.physicalLoad)))
     appendLine(lines, string.format("armor_count=%s", formatScalar(profile.armorCount)))
     appendLine(lines, string.format("sleep_penalty=%s", formatScalar(sleepPenaltyLabel(profile.rigidityLoad))))
@@ -506,9 +518,9 @@ local function buildReport(player)
             appendLine(lines, string.format("thermalContribution=%s", formatNumber(runtime.thermalContribution, 4)))
             appendLine(lines, string.format("breathingContribution=%s", formatNumber(runtime.breathingContribution, 4)))
             appendLine(lines, string.format("hotStrain=%s", formatNumber(runtime.hotStrain, 4)))
-            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(runtime.hotStrain) or 0) > 0.15)))
+            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(runtime.thermalPressureScale) or 0) >= 0.15)))
             appendLine(lines, string.format("coldAppropriateness=%s", formatNumber(runtime.coldAppropriateness, 4)))
-            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(runtime.coldAppropriateness) or 0) > 0.30)))
+            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(runtime.coldAppropriateness) or 0) > 0.45)))
             appendLine(lines, string.format("thermalPressureScale=%s", formatNumber(runtime.thermalPressureScale, 4)))
             appendLine(lines, string.format("enduranceEnvFactor=%s", formatNumber(runtime.enduranceEnvFactor, 4)))
             appendLine(lines, string.format("activityLabel=%s", formatScalar(runtime.activityLabel)))
@@ -536,10 +548,21 @@ local function buildReport(player)
             appendLine(lines, string.format("breathingLoad=%s", formatNumber(mpSnapshot.breathingLoad, 3)))
             appendLine(lines, string.format("rigidityLoad=%s", formatNumber(mpSnapshot.rigidityLoad, 3)))
             appendLine(lines, string.format("effectiveLoad=%s", formatNumber(mpSnapshot.effectiveLoad, 3)))
+            appendLine(lines, string.format("thermalContribution=%s", formatNumber(mpSnapshot.thermalContribution, 4)))
+            appendLine(lines, string.format("breathingContribution=%s", formatNumber(mpSnapshot.breathingContribution, 4)))
             appendLine(lines, string.format("enduranceEnvFactor=%s", formatNumber(mpSnapshot.enduranceEnvFactor, 4)))
             appendLine(lines, string.format("activityLabel=%s", formatScalar(mpSnapshot.activityLabel)))
-            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(mpSnapshot.hotStrain) or 0) > 0)))
-            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(mpSnapshot.coldAppropriateness) or 0) > 0)))
+            appendLine(lines, string.format("hotStrain=%s", formatNumber(mpSnapshot.hotStrain, 4)))
+            appendLine(lines, string.format("coldAppropriateness=%s", formatNumber(mpSnapshot.coldAppropriateness, 4)))
+            appendLine(lines, string.format("thermalPressureScale=%s", formatNumber(mpSnapshot.thermalPressureScale, 4)))
+            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(mpSnapshot.thermalPressureScale) or 0) >= 0.15)))
+            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(mpSnapshot.coldAppropriateness) or 0) > 0.45)))
+            appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(mpSnapshot.enduranceBeforeAms, 4)))
+            appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(mpSnapshot.enduranceAfterAms, 4)))
+            appendLine(lines, string.format("enduranceNaturalDelta=%s", formatNumber(mpSnapshot.enduranceNaturalDelta, 4)))
+            appendLine(lines, string.format("enduranceAppliedDelta=%s", formatNumber(mpSnapshot.enduranceAppliedDelta, 4)))
+            appendLine(lines, string.format("lastAppliedDtMinutes=%s", formatNumber(mpSnapshot.lastAppliedDtMinutes, 4)))
+            appendLine(lines, string.format("catchupPendingMinutes=%s", formatNumber(mpSnapshot.catchupPendingMinutes, 4)))
             local serverDrivers = mpSnapshot.drivers or {}
             if #serverDrivers > 0 then
                 for i = 1, #serverDrivers do

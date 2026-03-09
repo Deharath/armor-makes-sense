@@ -470,16 +470,26 @@ local function resolveDriverLabelForClient(player, row)
 end
 
 local function resolveThermalEffect(runtimeSnapshot)
-    local hotStrain = tonumber(runtimeSnapshot and runtimeSnapshot.hotStrain) or 0
+    local thermalScale = tonumber(runtimeSnapshot and runtimeSnapshot.thermalPressureScale) or 0
     local coldAppropriateness = tonumber(runtimeSnapshot and runtimeSnapshot.coldAppropriateness) or 0
-    if hotStrain > 0.15 then
+    if thermalScale >= 0.50 then
+        return tr("UI_AMS_Label_ThermalOppressive", "Oppressive"), { 1.0, 0.45, 0.25, 1.0 }, true,
+            tr("UI_AMS_Annotation_HeatOppressive", "Overheating in heavy gear"),
+            { 0.95, 0.40, 0.25, 0.90 }
+    end
+    if thermalScale >= 0.15 then
         return tr("UI_AMS_Label_ThermalBurdensome", "Burdensome"), { 1.0, 0.74, 0.35, 1.0 }, true,
-            tr("UI_AMS_Annotation_HeatAmplifying", "Heat amplifying armor costs"),
+            tr("UI_AMS_Annotation_HeatBurdensome", "Heat increasing exertion cost"),
             { 0.90, 0.65, 0.35, 0.90 }
     end
-    if coldAppropriateness > 0.30 then
+    if thermalScale > 0.01 then
+        return tr("UI_AMS_Label_ThermalWarm", "Warm"), { 1.0, 0.88, 0.55, 1.0 }, false,
+            tr("UI_AMS_Annotation_HeatWarm", "Armor retaining body heat"),
+            { 0.85, 0.78, 0.50, 0.90 }
+    end
+    if coldAppropriateness > 0.45 then
         return tr("UI_AMS_Label_ThermalHelpful", "Helpful"), { 0.65, 0.95, 0.65, 1.0 }, false,
-            tr("UI_AMS_Annotation_ColdHelping", "Cold weather -- insulation reducing burden"),
+            tr("UI_AMS_Annotation_ColdHelping", "Insulation reducing cold strain"),
             { 0.55, 0.80, 0.55, 0.90 }
     end
     return tr("UI_AMS_Label_ThermalNeutral", "Neutral"), { 0.82, 0.82, 0.82, 1.0 }, false, nil, nil

@@ -12,6 +12,7 @@ ArmorMakesSense.DEFAULTS = {
     WetAmplifierStrength = 0.18,
 
     -- Secondary physical effects.
+    EnableThermalModel = true,
     EnableMuscleStrainModel = true,
     EnableSleepPenaltyModel = true,
     MuscleStrainMaxExtra = 0.15,

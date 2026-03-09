@@ -261,14 +261,16 @@ Thermal pressure uses thermoregulator telemetry when available:
 
 Mechanics:
 - asymmetric EMA smoothing
-- hot and cold gates
+- hot and cold gates with a wider neutral deadband
+- hot-side pressure leans on sustained core/body-heat evidence; peripheral sweat/skin signals assist but do not dominate by themselves
 - cold appropriateness reducing residual cold burden
-- `thermalPressureScale` from smoothstep pressure
+- `thermalPressureScale` from smoothstep pressure after a deadband floor
+- hot-side scale is capped below full strength while body temperature remains below `37.5C`
 - `enduranceEnvFactor` clamped to `0.70..2.40`
 
 Runtime snapshot thermal state:
-- hot if `hotStrain > 0.15`
-- cold-helpful if `coldAppropriateness > 0.30`
+- hot if `hotStrain > 0.24`
+- cold-helpful if `coldAppropriateness > 0.45`
 - otherwise neutral
 
 ### Endurance Regen Throttling

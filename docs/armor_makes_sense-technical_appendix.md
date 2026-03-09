@@ -21,6 +21,8 @@ Core design intent:
 - replace vanilla discomfort gameplay pressure with physical costs
 - keep discomfort pinned to zero
 - model endurance pressure, thermal pressure, breathing restriction, melee muscle strain, and sleep recovery slowdown
+- keep mild thermal drift near neutral so ordinary walking does not constantly flip armor between helpful and burdensome
+- prefer sustained core/body-heat evidence over short-lived movement warmth when classifying hot-side thermal burden
 
 Runtime split:
 - singleplayer uses the full client runtime (`Runtime`, `Tick`, `Combat`, client `Physiology`)

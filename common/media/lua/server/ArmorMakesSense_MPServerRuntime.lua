@@ -511,11 +511,22 @@ local function buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
         rigidityLoad = tonumber(profile.rigidityLoad) or 0,
         armorCount = tonumber(profile.armorCount) or 0,
         effectiveLoad = tonumber(uiSnapshot.effectiveLoad) or tonumber(profile.combinedLoad) or 0,
+        thermalContribution = tonumber(uiSnapshot.thermalContribution) or 0,
+        breathingContribution = tonumber(uiSnapshot.breathingContribution) or 0,
         drivers = drivers or {},
         activityLabel = tostring(activityLabel or uiSnapshot.activityLabel or "idle"),
-        thermalHot = hotStrain > 0.15,
-        thermalCold = coldAppropriateness > 0.30,
+        hotStrain = hotStrain,
+        coldAppropriateness = coldAppropriateness,
+        thermalHot = hotStrain > 0.24,
+        thermalCold = coldAppropriateness > 0.45,
+        thermalPressureScale = tonumber(uiSnapshot.thermalPressureScale) or 0,
         enduranceEnvFactor = tonumber(uiSnapshot.enduranceEnvFactor) or 1,
+        enduranceBeforeAms = tonumber(uiSnapshot.enduranceBeforeAms) or 0,
+        enduranceAfterAms = tonumber(uiSnapshot.enduranceAfterAms) or 0,
+        enduranceNaturalDelta = tonumber(uiSnapshot.enduranceNaturalDelta) or 0,
+        enduranceAppliedDelta = tonumber(uiSnapshot.enduranceAppliedDelta) or 0,
+        lastAppliedDtMinutes = tonumber(mpState.lastAppliedDtMinutes) or 0,
+        catchupPendingMinutes = tonumber(mpState.pendingCatchupMinutes) or 0,
         updatedMinute = tonumber(uiSnapshot.updatedMinute) or getWorldAgeMinutes(),
     }
 end
@@ -536,11 +547,21 @@ local function sendSnapshot(playerObj, snapshot, reason)
         rigidity_load = tonumber(snapshot.rigidityLoad) or 0,
         armor_count = tonumber(snapshot.armorCount) or 0,
         effective_load = tonumber(snapshot.effectiveLoad) or 0,
+        thermal_contribution = tonumber(snapshot.thermalContribution) or 0,
+        breathing_contribution = tonumber(snapshot.breathingContribution) or 0,
         activity_label = tostring(snapshot.activityLabel or "idle"),
+        hot_strain = tonumber(snapshot.hotStrain) or 0,
+        cold_appropriateness = tonumber(snapshot.coldAppropriateness) or 0,
         thermal_hot = snapshot.thermalHot == true,
         thermal_cold = snapshot.thermalCold == true,
         thermal_pressure_scale = tonumber(snapshot.thermalPressureScale) or 0,
         endurance_env_factor = tonumber(snapshot.enduranceEnvFactor) or 1,
+        endurance_before_ams = tonumber(snapshot.enduranceBeforeAms) or 0,
+        endurance_after_ams = tonumber(snapshot.enduranceAfterAms) or 0,
+        endurance_natural_delta = tonumber(snapshot.enduranceNaturalDelta) or 0,
+        endurance_applied_delta = tonumber(snapshot.enduranceAppliedDelta) or 0,
+        last_applied_dt_minutes = tonumber(snapshot.lastAppliedDtMinutes) or 0,
+        catchup_pending_minutes = tonumber(snapshot.catchupPendingMinutes) or 0,
         updated_minute = tonumber(snapshot.updatedMinute) or 0,
         reason = tostring(reason or "tick"),
     }
@@ -629,6 +650,7 @@ local function updatePlayer(playerObj, reason)
 
         mpState.pendingCatchupMinutes = math.max(0, mpState.pendingCatchupMinutes - dtMinutes)
         processed = processed + 1
+        mpState.lastAppliedDtMinutes = dtMinutes
 
         local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, dtMinutes, profile, heatFactor, wetFactor)
         if not okSleep then

@@ -1,5 +1,13 @@
 VERSION = 1,
 
+option EnableThermalModel
+{
+    type = boolean,
+    default = true,
+    page = ArmorMakesSense,
+    translation = ArmorMakesSense_EnableThermalModel,
+}
+
 option EnableMuscleStrainModel
 {
     type = boolean,

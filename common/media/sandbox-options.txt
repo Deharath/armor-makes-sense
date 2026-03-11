@@ -1,6 +1,6 @@
 VERSION = 1,
 
-option EnableThermalModel
+option ArmorMakesSense.EnableThermalModel
 {
     type = boolean,
     default = true,
@@ -8,7 +8,7 @@ option EnableThermalModel
     translation = ArmorMakesSense_EnableThermalModel,
 }
 
-option EnableMuscleStrainModel
+option ArmorMakesSense.EnableMuscleStrainModel
 {
     type = boolean,
     default = true,
@@ -16,7 +16,7 @@ option EnableMuscleStrainModel
     translation = ArmorMakesSense_EnableMuscleStrainModel,
 }
 
-option EnableSleepPenaltyModel
+option ArmorMakesSense.EnableSleepPenaltyModel
 {
     type = boolean,
     default = true,

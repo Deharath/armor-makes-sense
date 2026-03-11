@@ -29,6 +29,7 @@ Runtime split:
 - multiplayer uses a server runtime (`MPServerRuntime`) for endurance, fatigue, discomfort suppression, and melee strain
 - multiplayer clients request and cache server snapshots through `MPClientRuntime` for UI display
 - shared load/model code lives in `shared/` so SP and MP use the same armor profile math
+- custom sandbox options must use dotted ids such as `ArmorMakesSense.EnableThermalModel`; `page = ArmorMakesSense` only affects sandbox UI grouping and does not create `SandboxVars.ArmorMakesSense`
 
 ## Build Layout
 

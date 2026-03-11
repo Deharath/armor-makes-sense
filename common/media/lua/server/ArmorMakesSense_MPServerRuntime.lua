@@ -587,15 +587,54 @@ local function sendSnapshot(playerObj, snapshot, reason)
     end
 end
 
-local function buildFreshSnapshot(playerObj, mpState, options)
+local function buildFreshSnapshot(playerObj, mpState, options, preserveEnduranceBaseline)
     activeFormulaState = mpState
     local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
-    activeFormulaState = nil
     if not okInputs then
+        activeFormulaState = nil
         log("shared model input prep failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
         return nil
     end
+    local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, 0, profile, heatFactor, wetFactor)
+    if not okSleep then
+        activeFormulaState = nil
+        log("sleep model failed during snapshot refresh player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(sleepErr))
+        return nil
+    end
+    local previousEnduranceObserved = tonumber(mpState.lastEnduranceObserved)
+    local okEndurance, enduranceErr = pcall(
+        Physiology.applyEnduranceModel,
+        playerObj,
+        mpState,
+        options,
+        0,
+        profile,
+        heatFactor,
+        wetFactor,
+        activityFactor,
+        activityLabel,
+        postureLabel
+    )
+    activeFormulaState = nil
+    if not okEndurance then
+        log("endurance model failed during snapshot refresh player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(enduranceErr))
+        return nil
+    end
+    if preserveEnduranceBaseline then
+        mpState.lastEnduranceObserved = previousEnduranceObserved
+    end
     return buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
+end
+
+local function isSessionBoundaryReason(reason)
+    return reason == "onconnected" or reason == "oncreateplayer"
+end
+
+local function resetCatchupState(playerObj, mpState, nowMinute)
+    mpState.lastUpdateGameMinutes = tonumber(nowMinute) or 0
+    mpState.pendingCatchupMinutes = 0
+    mpState.lastAppliedDtMinutes = 0
+    mpState.lastEnduranceObserved = tonumber(getEndurance(playerObj))
 end
 
 local function updatePlayer(playerObj, reason)
@@ -605,17 +644,20 @@ local function updatePlayer(playerObj, reason)
     end
     enforceDiscomfortInvariant(playerObj)
 
+    local normalizedReason = lower(reason)
     local nowMinute = tonumber(getWorldAgeMinutes()) or 0
+    if isSessionBoundaryReason(normalizedReason) then
+        resetCatchupState(playerObj, mpState, nowMinute)
+    end
     local lastMinute = tonumber(mpState.lastUpdateGameMinutes) or nowMinute
     local elapsed = math.max(0, nowMinute - lastMinute)
     mpState.lastUpdateGameMinutes = nowMinute
     mpState.pendingCatchupMinutes = (tonumber(mpState.pendingCatchupMinutes) or 0) + elapsed
 
     if mpState.pendingCatchupMinutes <= 0 then
-        local normalizedReason = lower(reason)
         if normalizedReason ~= "minute" and normalizedReason ~= "tick" then
             local options = getOptions()
-            local freshSnapshot = buildFreshSnapshot(playerObj, mpState, options)
+            local freshSnapshot = buildFreshSnapshot(playerObj, mpState, options, not isSessionBoundaryReason(normalizedReason))
             if freshSnapshot then
                 mpState.runtimeSnapshot = freshSnapshot
                 sendSnapshot(playerObj, freshSnapshot, reason)
@@ -638,7 +680,8 @@ local function updatePlayer(playerObj, reason)
     local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
     if not okInputs then
         activeFormulaState = nil
-        log("shared model input prep failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
+        resetCatchupState(playerObj, mpState, nowMinute)
+        log("shared model input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
         return
     end
 

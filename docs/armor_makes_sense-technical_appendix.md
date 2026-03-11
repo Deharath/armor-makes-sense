@@ -1,8 +1,8 @@
-# Armor Makes Sense — Technical Appendix (v1.1.4)
+# Armor Makes Sense — Technical Appendix (v1.2.2)
 
-_As of March 7, 2026_  
-`SCRIPT_VERSION=1.1.4`  
-`SCRIPT_BUILD=ams-b42-2026-03-07-v114`
+_As of March 11, 2026_  
+`SCRIPT_VERSION=1.2.2`  
+`SCRIPT_BUILD=ams-b42-2026-03-11-v122`
 
 ## Scope
 
@@ -28,6 +28,9 @@ Runtime split:
 - singleplayer uses the full client runtime (`Runtime`, `Tick`, `Combat`, client `Physiology`)
 - multiplayer uses a server runtime (`MPServerRuntime`) for endurance, fatigue, discomfort suppression, and melee strain
 - multiplayer clients request and cache server snapshots through `MPClientRuntime` for UI display
+- multiplayer session-start snapshot requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline time is not replayed as live endurance drain
+- MP snapshot refresh runs the shared physiology path at `dt=0` so runtime snapshot fields stay current without applying gameplay drain
+- if MP shared-input preparation fails, the server drops pending catch-up instead of retrying an unbounded stale backlog
 - shared load/model code lives in `shared/` so SP and MP use the same armor profile math
 - custom sandbox options must use dotted ids such as `ArmorMakesSense.EnableThermalModel`; `page = ArmorMakesSense` only affects sandbox UI grouping and does not create `SandboxVars.ArmorMakesSense`
 

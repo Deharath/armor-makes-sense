@@ -1,8 +1,8 @@
-# Armor Makes Sense — Multiplayer Reference (v1.1.4)
+# Armor Makes Sense — Multiplayer Reference (v1.2.2)
 
-_As of March 7, 2026_  
-`SCRIPT_VERSION=1.1.4`  
-`SCRIPT_BUILD=ams-b42-2026-03-07-v114`
+_As of March 11, 2026_  
+`SCRIPT_VERSION=1.2.2`  
+`SCRIPT_BUILD=ams-b42-2026-03-11-v122`
 
 ## Boot Structure
 
@@ -27,6 +27,7 @@ Multiplayer server:
 - `MPServerRuntime` owns gameplay authority
 - `EveryOneMinute` advances player state and catch-up slices
 - `OnClientCommand` handles snapshot requests
+- client session-start requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline world time is not replayed on reconnect
 - `OnWeaponSwing` applies armor-based strain overlay
 - `OnPlayerUpdate` enforces discomfort invariant between snapshot sends
 
@@ -51,6 +52,8 @@ Client flow:
 
 Server flow:
 - `MPServerRuntime` recomputes or reuses the latest runtime snapshot for the requesting player
+- fresh request snapshots run the shared physiology path at `dt=0` so UI/runtime fields refresh without applying gameplay drain
+- if shared input preparation fails, pending catch-up is discarded instead of being allowed to accumulate into a large replay backlog
 - the snapshot payload includes:
   - `loadNorm`
   - `physicalLoad`

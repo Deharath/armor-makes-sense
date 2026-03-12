@@ -349,6 +349,9 @@ local function installTooltipRenderPatch()
         if not item or instanceof(item, "FluidContainer") then
             return originalISToolTipInvRender(self)
         end
+        if not isTooltipWearable(item) then
+            return originalISToolTipInvRender(self)
+        end
 
         local itemMt = nil
         local mtOk, mtValue = pcall(getmetatable, item)

@@ -1,12 +1,12 @@
-# Armor Makes Sense — UI Reference (v1.1.4)
+# Armor Makes Sense — UI Reference (v1.2.3)
 
-_As of March 7, 2026_  
-`SCRIPT_VERSION=1.1.4`  
-`SCRIPT_BUILD=ams-b42-2026-03-07-v114`
+_As of March 12, 2026_  
+`SCRIPT_VERSION=1.2.3`  
+`SCRIPT_BUILD=ams-b42-2026-03-12-v123`
 
 ## Tooltip Rows
 
-Tooltip rows are injected through an AMS-local `ISToolTipInv.render` patch that builds a vanilla `ObjectTooltip` layout via `InventoryItem:DoTooltipEmbedded(...)`.
+Tooltip rows are injected through an AMS-local `ISToolTipInv.render` patch that only intercepts wearable-item tooltips and builds a vanilla `ObjectTooltip` layout via `InventoryItem:DoTooltipEmbedded(...)`.
 
 Display conditions:
 - burden row if `physicalLoad >= 1.5`

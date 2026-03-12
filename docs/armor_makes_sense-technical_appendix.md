@@ -1,12 +1,12 @@
-# Armor Makes Sense — Technical Appendix (v1.2.2)
+# Armor Makes Sense — Technical Appendix (v1.2.3)
 
-_As of March 11, 2026_  
-`SCRIPT_VERSION=1.2.2`  
-`SCRIPT_BUILD=ams-b42-2026-03-11-v122`
+_As of March 12, 2026_  
+`SCRIPT_VERSION=1.2.3`  
+`SCRIPT_BUILD=ams-b42-2026-03-12-v123`
 
 ## Scope
 
-Armor Makes Sense (AMS) is a Build 42 armor-physiology mod with singleplayer and multiplayer runtime paths. The UI layer owns its inventory-tooltip integration directly by patching `ISToolTipInv.render` and populating `ObjectTooltip` layouts through vanilla `DoTooltipEmbedded`.
+Armor Makes Sense (AMS) is a Build 42 armor-physiology mod with singleplayer and multiplayer runtime paths. The UI layer owns its inventory-tooltip integration directly by patching `ISToolTipInv.render` for wearable items only and populating `ObjectTooltip` layouts through vanilla `DoTooltipEmbedded`.
 
 The codebase is organized around five technical references:
 - Runtime systems: [armor_makes_sense-runtime_reference.md](./armor_makes_sense-runtime_reference.md)

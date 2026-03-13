@@ -31,6 +31,8 @@ Runtime split:
 - multiplayer session-start snapshot requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline time is not replayed as live endurance drain
 - MP snapshot refresh runs the shared physiology path at `dt=0` so runtime snapshot fields stay current without applying gameplay drain
 - if MP shared-input preparation fails, the server drops pending catch-up instead of retrying an unbounded stale backlog
+- release builds keep a hidden server-first MP incident recorder that freezes suspicious endurance events and mirrors them into support reports without exposing separate debug UI
+- the MP runtime also applies one conservative burst-drain guard: if AMS-only endurance loss becomes abnormal inside a single server update invocation, replay stops and the remaining pending replay is discarded
 - shared load/model code lives in `shared/` so SP and MP use the same armor profile math
 - custom sandbox options must use dotted ids such as `ArmorMakesSense.EnableThermalModel`; `page = ArmorMakesSense` only affects sandbox UI grouping and does not create `SandboxVars.ArmorMakesSense`
 
@@ -82,11 +84,13 @@ Runtime split:
 - `client/ArmorMakesSense_Main.lua` — client boot facade: defines `SCRIPT_VERSION` / `SCRIPT_BUILD`, requires modules in load order, builds the client context, wires modules, registers SP runtime events, and exposes the public API surface
 - `client/ArmorMakesSense_MPClientRuntime.lua` — MP client snapshot transport/UI bridge
 - `server/ArmorMakesSense_MPServerRuntime.lua` — MP gameplay/runtime path and snapshot sender
+- `server/ArmorMakesSense_MPIncidentRecorder.lua` — MP incident ring buffer, trigger detection, and frozen-trace export
 - `media/sandbox-options.txt` — custom sandbox option definitions for server-authoritative AMS gameplay toggles
 
 ### Shared
 - `shared/ArmorMakesSense_Config.lua` — tuning defaults
 - `shared/ArmorMakesSense_MPCompat.lua` — MP constants and command names
+- `shared/ArmorMakesSense_MPIncidentSchema.lua` — MP incident trace shape, thresholds, and trigger ids
 - `shared/ArmorMakesSense_ArmorClassifier.lua` — armor-vs-civilian classification
 - `shared/ArmorMakesSense_BreathingClassifier.lua` — respiratory classification
 - `shared/ArmorMakesSense_LoadModelShared.lua` — shared item-to-load and profile aggregation
@@ -109,6 +113,7 @@ Runtime split:
 - `client/core/ArmorMakesSense_Tick.lua` — per-minute tick pipeline
 - `client/core/ArmorMakesSense_Combat.lua` — combat event forwarding
 - `client/core/ArmorMakesSense_Strain.lua` — SP strain overlay
+- `client/core/ArmorMakesSense_IncidentTrace.lua` — client-held mirrored MP incident traces and support-report section formatter
 - `client/core/ArmorMakesSense_WearDebug.lua` — worn-item telemetry
 - `client/core/ArmorMakesSense_Runtime.lua` — SP lifecycle management
 - `client/core/ArmorMakesSense_Stats.lua` — stat IO and bench reset helpers

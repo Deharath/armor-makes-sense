@@ -12,6 +12,11 @@ if type(MP) ~= "table" then
     return
 end
 
+local okIncidentTrace, incidentTraceOrErr = pcall(require, "core/ArmorMakesSense_IncidentTrace")
+local IncidentTrace = okIncidentTrace and type(incidentTraceOrErr) == "table"
+    and incidentTraceOrErr
+    or (ArmorMakesSense and ArmorMakesSense.Core and ArmorMakesSense.Core.IncidentTrace)
+
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local SNAPSHOT_INTERVAL_SECONDS = math.max(1, math.floor(tonumber(MP.SNAPSHOT_FALLBACK_SECONDS) or 2))
 local SNAPSHOT_STALE_SECONDS = math.max(10, SNAPSHOT_INTERVAL_SECONDS * 4)
@@ -258,6 +263,7 @@ local function sendSnapshotRequest(playerObj, reason, force)
         reason = tostring(reason or "fallback"),
         world_minute = math.floor(getWorldAgeMinutes()),
         activity_label = tostring(getClientActivityLabel(playerObj)),
+        incident_seq = tonumber(IncidentTrace and IncidentTrace.getSeq and IncidentTrace.getSeq() or 0) or 0,
         script_version = tostring(MP.SCRIPT_VERSION),
         script_build = tostring(MP.SCRIPT_BUILD),
     }
@@ -335,6 +341,9 @@ local function onServerCommand(module, command, args)
 
         state.mpServerSnapshot = snapshot
         mpClient.lastSnapshotWallSecond = getWallClockSeconds()
+        if IncidentTrace and type(IncidentTrace.applyServerIncident) == "function" and type(args.incident_trace) == "table" then
+            IncidentTrace.applyServerIncident(args.incident_trace)
+        end
         if not firstSnapshotLogged then
             firstSnapshotLogged = true
             log(string.format(
@@ -355,6 +364,9 @@ end
 
 local function onConnected()
     clearSnapshotState(getLocalPlayer(), true)
+    if IncidentTrace and type(IncidentTrace.clear) == "function" then
+        IncidentTrace.clear()
+    end
     ensureMpUiHooks(getLocalPlayer())
     sendSnapshotRequest(getLocalPlayer(), "OnConnected", true)
 end
@@ -388,6 +400,9 @@ local function onCreatePlayer(playerIndex, playerObj)
     end
     local player = playerObj or getLocalPlayer()
     clearSnapshotState(player, true)
+    if IncidentTrace and type(IncidentTrace.clear) == "function" then
+        IncidentTrace.clear()
+    end
     ensureMpUiHooks(player)
     sendSnapshotRequest(player, "OnCreatePlayer", true)
 end

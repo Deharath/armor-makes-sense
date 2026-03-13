@@ -581,6 +581,15 @@ local function buildReport(player)
             appendLine(lines, "server_snapshot=unavailable")
         end
         appendLine(lines, "")
+
+        local appendIncidentTraceSection = ctx("appendIncidentTraceSection")
+        if type(appendIncidentTraceSection) == "function" then
+            appendIncidentTraceSection(lines)
+        else
+            appendLine(lines, "## Incident Trace")
+            appendLine(lines, "incident=unavailable")
+            appendLine(lines, "")
+        end
     end
 
     -- Worn Items

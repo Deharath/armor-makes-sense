@@ -53,6 +53,13 @@ if not okPhysiology or type(physiologyOrErr) ~= "table" then
 end
 local Physiology = physiologyOrErr
 
+local okIncidentRecorder, incidentRecorderOrErr = pcall(require, "ArmorMakesSense_MPIncidentRecorder")
+if not okIncidentRecorder or type(incidentRecorderOrErr) ~= "table" then
+    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_MPIncidentRecorder :: " .. tostring(incidentRecorderOrErr))
+    return
+end
+local IncidentRecorder = incidentRecorderOrErr
+
 local DEFAULTS = ArmorMakesSense.DEFAULTS or {}
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local COST_DRIVER_THRESHOLD = 1.5
@@ -454,6 +461,9 @@ local function bindSharedContexts()
     if type(Physiology.setContext) == "function" then
         Physiology.setContext(context)
     end
+    if type(IncidentRecorder.setContext) == "function" then
+        IncidentRecorder.setContext(context)
+    end
 end
 
 bindSharedContexts()
@@ -531,7 +541,103 @@ local function buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
     }
 end
 
-local function sendSnapshot(playerObj, snapshot, reason)
+local function getMovementFlags(playerObj)
+    return {
+        moving = toBoolean(safeCall(playerObj, "isMoving")),
+        playerMoving = toBoolean(safeCall(playerObj, "isPlayerMoving")),
+        running = toBoolean(safeCall(playerObj, "isRunning")),
+        sprinting = toBoolean(safeCall(playerObj, "isSprinting")),
+        aiming = toBoolean(safeCall(playerObj, "isAiming")),
+        attackStarted = toBoolean(safeCall(playerObj, "isAttackStarted")),
+    }
+end
+
+local function getItemFullType(item)
+    local fullType = tostring(safeCall(item, "getFullType") or "")
+    if fullType ~= "" then
+        return fullType
+    end
+    local scriptItem = safeCall(item, "getScriptItem")
+    fullType = tostring(safeCall(scriptItem, "getFullName") or "")
+    if fullType ~= "" then
+        return fullType
+    end
+    return tostring(safeCall(item, "getType") or "unknown")
+end
+
+local function buildEquipmentSignature(playerObj)
+    local wornItems = safeCall(playerObj, "getWornItems")
+    if not wornItems then
+        return "", 0
+    end
+    local count = tonumber(safeCall(wornItems, "size")) or 0
+    local parts = {}
+    for i = 0, count - 1 do
+        local worn = safeCall(wornItems, "get", i)
+        local item = worn and safeCall(worn, "getItem")
+        if item then
+            local locationName = tostring(safeCall(worn, "getLocation") or safeCall(item, "getBodyLocation") or "unknown")
+            parts[#parts + 1] = locationName .. "=" .. tostring(getItemFullType(item))
+        end
+    end
+    table.sort(parts)
+    return table.concat(parts, ";"), #parts
+end
+
+local function buildTopDriverLabels(drivers)
+    local parts = {}
+    if type(drivers) ~= "table" then
+        return parts
+    end
+    local limit = math.min(3, #drivers)
+    for i = 1, limit do
+        local driver = drivers[i] or {}
+        parts[#parts + 1] = string.format(
+            "%s (%s)",
+            tostring(driver.label or "Unknown Item"),
+            string.format("%.1f", tonumber(driver.physical) or 0)
+        )
+    end
+    return parts
+end
+
+local function buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile, drivers, snapshot, activityLabel)
+    local uiSnapshot = type(mpState.uiRuntimeSnapshot) == "table" and mpState.uiRuntimeSnapshot or {}
+    local equipSignature, wornCount = buildEquipmentSignature(playerObj)
+    local flags = getMovementFlags(playerObj)
+    return {
+        worldMinute = tonumber(getWorldAgeMinutes()) or 0,
+        reason = tostring(reason or "tick"),
+        dtMinutes = tonumber(dtMinutes) or 0,
+        pendingCatchupMinutes = tonumber(mpState.pendingCatchupMinutes) or 0,
+        activityLabel = tostring(activityLabel or snapshot.activityLabel or "idle"),
+        moving = flags.moving == true,
+        playerMoving = flags.playerMoving == true,
+        running = flags.running == true,
+        sprinting = flags.sprinting == true,
+        aiming = flags.aiming == true,
+        attackStarted = flags.attackStarted == true,
+        enduranceBeforeAms = tonumber(uiSnapshot.enduranceBeforeAms) or 0,
+        enduranceAfterAms = tonumber(uiSnapshot.enduranceAfterAms) or 0,
+        enduranceNaturalDelta = tonumber(uiSnapshot.enduranceNaturalDelta) or 0,
+        enduranceAppliedDelta = tonumber(uiSnapshot.enduranceAppliedDelta) or 0,
+        effectiveLoad = tonumber(snapshot.effectiveLoad) or 0,
+        loadNorm = tonumber(snapshot.loadNorm) or 0,
+        physicalLoad = tonumber(profile.physicalLoad) or 0,
+        thermalLoad = tonumber(profile.thermalLoad) or 0,
+        breathingLoad = tonumber(profile.breathingLoad) or 0,
+        rigidityLoad = tonumber(profile.rigidityLoad) or 0,
+        thermalContribution = tonumber(snapshot.thermalContribution) or 0,
+        breathingContribution = tonumber(snapshot.breathingContribution) or 0,
+        enduranceEnvFactor = tonumber(snapshot.enduranceEnvFactor) or 1,
+        thermalPressureScale = tonumber(snapshot.thermalPressureScale) or 0,
+        equipSignature = equipSignature,
+        wornCount = wornCount,
+        topDrivers = buildTopDriverLabels(drivers),
+    }
+end
+
+local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncidentSeq)
     if type(sendServerCommand) ~= "function" then
         return
     end
@@ -565,6 +671,12 @@ local function sendSnapshot(playerObj, snapshot, reason)
         updated_minute = tonumber(snapshot.updatedMinute) or 0,
         reason = tostring(reason or "tick"),
     }
+
+    local incidentSeq, incidentPayload = IncidentRecorder.buildSnapshotIncidentPayload(playerObj, mpState, clientIncidentSeq)
+    args.incident_seq = tonumber(incidentSeq) or 0
+    if type(incidentPayload) == "table" then
+        args.incident_trace = incidentPayload
+    end
 
     local snapshotDrivers = {}
     if type(snapshot.drivers) == "table" then
@@ -637,7 +749,7 @@ local function resetCatchupState(playerObj, mpState, nowMinute)
     mpState.lastEnduranceObserved = tonumber(getEndurance(playerObj))
 end
 
-local function updatePlayer(playerObj, reason)
+local function updatePlayer(playerObj, reason, requestArgs)
     local _, mpState = ensurePlayerState(playerObj)
     if not mpState then
         return
@@ -648,6 +760,7 @@ local function updatePlayer(playerObj, reason)
     local nowMinute = tonumber(getWorldAgeMinutes()) or 0
     if isSessionBoundaryReason(normalizedReason) then
         resetCatchupState(playerObj, mpState, nowMinute)
+        IncidentRecorder.clearSession(playerObj, mpState, nowMinute)
     end
     local lastMinute = tonumber(mpState.lastUpdateGameMinutes) or nowMinute
     local elapsed = math.max(0, nowMinute - lastMinute)
@@ -660,12 +773,12 @@ local function updatePlayer(playerObj, reason)
             local freshSnapshot = buildFreshSnapshot(playerObj, mpState, options, not isSessionBoundaryReason(normalizedReason))
             if freshSnapshot then
                 mpState.runtimeSnapshot = freshSnapshot
-                sendSnapshot(playerObj, freshSnapshot, reason)
+                sendSnapshot(playerObj, mpState, freshSnapshot, reason, requestArgs and requestArgs.incident_seq)
                 return
             end
         end
         if type(mpState.runtimeSnapshot) == "table" then
-            sendSnapshot(playerObj, mpState.runtimeSnapshot, reason)
+            sendSnapshot(playerObj, mpState, mpState.runtimeSnapshot, reason, requestArgs and requestArgs.incident_seq)
         end
         return
     end
@@ -675,11 +788,16 @@ local function updatePlayer(playerObj, reason)
     local maxSlices = math.max(1, math.floor(tonumber(options.DtCatchupMaxSlices) or 240))
     local processed = 0
     local snapshot = nil
+    IncidentRecorder.beginInvocation(playerObj, mpState, {
+        reason = normalizedReason,
+        worldMinute = nowMinute,
+    })
 
     activeFormulaState = mpState
     local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
     if not okInputs then
         activeFormulaState = nil
+        IncidentRecorder.finishInvocation(playerObj, mpState)
         resetCatchupState(playerObj, mpState, nowMinute)
         log("shared model input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
         return
@@ -719,15 +837,26 @@ local function updatePlayer(playerObj, reason)
         end
 
         snapshot = buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
+        local incidentResult = IncidentRecorder.recordSlice(
+            playerObj,
+            mpState,
+            buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile, drivers, snapshot, activityLabel)
+        )
+        if incidentResult.abortReplay then
+            mpState.pendingCatchupMinutes = 0
+            snapshot = buildFreshSnapshot(playerObj, mpState, options, false) or snapshot
+            break
+        end
     end
     activeFormulaState = nil
+    IncidentRecorder.finishInvocation(playerObj, mpState)
 
     if snapshot == nil and type(mpState.runtimeSnapshot) == "table" then
         snapshot = mpState.runtimeSnapshot
     end
     if snapshot then
         mpState.runtimeSnapshot = snapshot
-        sendSnapshot(playerObj, snapshot, reason)
+        sendSnapshot(playerObj, mpState, snapshot, reason, requestArgs and requestArgs.incident_seq)
     end
 end
 
@@ -746,7 +875,7 @@ local function onClientCommand(module, command, playerObj, args)
         return
     end
 
-    updatePlayer(playerObj, args and args.reason or "request")
+    updatePlayer(playerObj, args and args.reason or "request", args)
 end
 
 local function onEveryOneMinute()

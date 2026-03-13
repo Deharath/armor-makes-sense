@@ -33,6 +33,7 @@ require "core/ArmorMakesSense_State"
 require "core/ArmorMakesSense_Tick"
 require "core/ArmorMakesSense_Combat"
 require "core/ArmorMakesSense_Strain"
+require "core/ArmorMakesSense_IncidentTrace"
 require "core/ArmorMakesSense_SupportReport"
 require "core/ArmorMakesSense_Runtime"
 require "core/ArmorMakesSense_Stats"
@@ -111,6 +112,7 @@ local modules = {
     Tick = resolve("Core", "Tick"),
     Combat = resolve("Core", "Combat"),
     Strain = resolve("Core", "Strain"),
+    IncidentTrace = resolve("Core", "IncidentTrace"),
     SupportReport = resolve("Core", "SupportReport"),
     Runtime = resolve("Core", "Runtime"),
     Stats = resolve("Core", "Stats"),
@@ -456,6 +458,7 @@ configureTestingContext = function()
             Environment = modules.Environment,
             LoadModel = modules.LoadModel,
             UI = modules.UI,
+            IncidentTrace = modules.IncidentTrace,
             SupportReport = modules.SupportReport,
             Combat = modules.Combat,
             Strain = modules.Strain,
@@ -646,6 +649,12 @@ contextCoreAStatic = {
     getGameVersionTag = getGameVersionTag,
     getLoadedModVersion = getLoadedModVersion,
     exportSupportReport = exportSupportReport,
+    appendIncidentTraceSection = function(lines)
+        if modules.IncidentTrace and type(modules.IncidentTrace.appendReportSection) == "function" then
+            return modules.IncidentTrace.appendReportSection(lines)
+        end
+        return nil
+    end,
     setCachedEnableSystem = function(value) cachedEnableSystem = toBoolean(value) end,
     setRuntimeDisabled = function(value) runtimeDisabled = toBoolean(value) end,
 }

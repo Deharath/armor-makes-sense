@@ -28,6 +28,7 @@ Multiplayer server:
 - `EveryOneMinute` advances player state and catch-up slices
 - `OnClientCommand` handles snapshot requests
 - client session-start requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline world time is not replayed on reconnect
+- a release-path incident recorder keeps a short rolling server trace per player and freezes suspicious endurance events for later support-report export
 - `OnWeaponSwing` applies armor-based strain overlay
 - `OnPlayerUpdate` enforces discomfort invariant between snapshot sends
 
@@ -49,11 +50,13 @@ Client flow:
 - load/connect/player-create/clothing changes request a snapshot immediately
 - repeated requests are throttled to the cadence defined by `SNAPSHOT_FALLBACK_SECONDS`
 - cache expiry is `max(10, fallback * 4)` seconds
+- snapshot requests include the latest known incident sequence so the server only mirrors new frozen incidents
 
 Server flow:
 - `MPServerRuntime` recomputes or reuses the latest runtime snapshot for the requesting player
 - fresh request snapshots run the shared physiology path at `dt=0` so UI/runtime fields refresh without applying gameplay drain
 - if shared input preparation fails, pending catch-up is discarded instead of being allowed to accumulate into a large replay backlog
+- if AMS applies an abnormal burst of endurance loss during one server update invocation, the runtime freezes an incident trace, aborts further replay in that invocation, clears pending replay, and rebuilds a fresh `dt=0` snapshot
 - the snapshot payload includes:
   - `loadNorm`
   - `physicalLoad`
@@ -65,15 +68,19 @@ Server flow:
   - `thermalPressureScale`
   - `enduranceEnvFactor`
   - `updatedMinute`
+  - `incidentSeq`
   - thermal hot/cold flags
   - physical cost drivers
+  - optional `incidentTrace` payload when the client is behind the server-held frozen incident
 
 Client storage:
 - parsed snapshots are stored in `player:getModData()[STATE_KEY].mpServerSnapshot`
+- the latest mirrored incident trace is cached client-side and appended to support reports
 
 UI behavior:
 - burden, thermal, breathing, and sleep panel data read from the latest server snapshot
 - missing or expired snapshots return the panel to its waiting state
+- the `Save Report` flow remains client-side, but MP reports now include a hidden `Incident Trace` section when the server has frozen one for that player
 
 ## Multiplayer Option Resolution
 
@@ -98,6 +105,7 @@ Server-side MP state:
 - `mpServer.lastSnapshotSentSecond`
 - `mpServer.recentCombatUntilMinute`
 - `mpServer.thermalModelState`
+- `mpServer.incidentRecorder`
 
 ## Diagnostics Stack
 
@@ -162,11 +170,14 @@ MP server context path:
 
 - `client/ArmorMakesSense_MPClientRuntime.lua` — snapshot transport and UI bridge
 - `server/ArmorMakesSense_MPServerRuntime.lua` — gameplay authority and snapshot sender
+- `server/ArmorMakesSense_MPIncidentRecorder.lua` — hidden server incident trace recorder and burst-drain guard helper
 - `shared/ArmorMakesSense_MPCompat.lua` — MP constants
+- `shared/ArmorMakesSense_MPIncidentSchema.lua` — frozen incident trace shape and thresholds
 - `shared/ArmorMakesSense_LoadModelShared.lua` — shared load-model math
 - `shared/ArmorMakesSense_EnvironmentShared.lua` — shared environment sampling
 - `shared/ArmorMakesSense_PhysiologyShared.lua` — shared physiology formulas
 - `shared/ArmorMakesSense_StrainShared.lua` — shared strain logic
+- `client/core/ArmorMakesSense_IncidentTrace.lua` — client cache/formatting for mirrored MP incident traces
 - `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua` — client diagnostics receive/logging
 - `client/diagnostics/ArmorMakesSense_MPClientHarness.lua` — client harness ping path
 - `server/diagnostics/ArmorMakesSense_MPDiagnosticsServer.lua` — server diagnostics dump/minute summaries

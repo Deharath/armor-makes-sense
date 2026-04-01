@@ -163,10 +163,15 @@ function Recorder.recordSlice(playerObj, mpState, row)
         end
     end
 
+    local hadFrozen = type(state.frozen) == "table"
     local triggerId = detectTrigger(state, row)
     if triggerId then
-        freezeIncident(state, triggerId, row)
-    elseif type(state.frozen) == "table" and state.postRemaining > 0 then
+        if hadFrozen and state.postRemaining > 0 then
+            extendFrozen(state, row)
+        else
+            freezeIncident(state, triggerId, row)
+        end
+    elseif hadFrozen and state.postRemaining > 0 then
         extendFrozen(state, row)
     end
 
@@ -175,7 +180,8 @@ function Recorder.recordSlice(playerObj, mpState, row)
         and (tonumber(invocation.cumulativeAppliedDelta) or 0) <= cumulativeThreshold
 
     if abortReplay then
-        local frozen = freezeIncident(state, Schema.TRIGGERS.CUMULATIVE_APPLIED_DROP, row)
+        local frozen = type(state.frozen) == "table" and state.frozen
+            or freezeIncident(state, Schema.TRIGGERS.CUMULATIVE_APPLIED_DROP, row)
         if frozen then
             frozen.guardTripped = true
         end

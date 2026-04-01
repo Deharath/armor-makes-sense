@@ -15,6 +15,24 @@ local function ctx(name)
     return C[name]
 end
 
+local function getCompat()
+    local compatGetter = ctx("getCompat")
+    if type(compatGetter) == "function" then
+        return compatGetter()
+    end
+    if type(compatGetter) == "table" then
+        return compatGetter
+    end
+    return nil
+end
+
+local function isCmsFatigueCompatActive()
+    local compat = getCompat()
+    return type(compat) == "table"
+        and type(compat.hasCapability) == "function"
+        and compat:hasCapability("CaffeineMakesSense", "fatigue_coordinator")
+end
+
 local function clampValue(value, minimum, maximum)
     local clamp = ctx("clamp")
     if type(clamp) == "function" then
@@ -568,11 +586,157 @@ function Physiology.updateRecoveryTrace(state, options, nowMinutes, dtMinutes, p
     end
 end
 
+local function playerHasTrait(player, traitName, traitEnum)
+    local safeMethod = ctx("safeMethod")
+    if type(safeMethod) ~= "function" or not player then
+        return false
+    end
+    if traitEnum and _G.CharacterTrait and CharacterTrait[traitEnum] ~= nil then
+        return safeMethod(player, "hasTrait", CharacterTrait[traitEnum]) == true
+    end
+    return safeMethod(player, "hasTrait", traitName) == true
+end
+
+local function getBedQualityMultiplier(player)
+    local safeMethod = ctx("safeMethod")
+    if type(safeMethod) ~= "function" then
+        return 1.0
+    end
+
+    local bedType = tostring(safeMethod(player, "getBedType") or "")
+    if bedType == "averageBedPillow" then
+        return 1.05
+    end
+    if bedType == "goodBed" then
+        return 1.10
+    end
+    if bedType == "goodBedPillow" then
+        return 1.15
+    end
+    if bedType == "badBed" then
+        return 0.90
+    end
+    if bedType == "badBedPillow" then
+        return 0.95
+    end
+    if bedType == "floor" then
+        return 0.60
+    end
+    if bedType == "floorPillow" then
+        return 0.75
+    end
+    return 1.0
+end
+
+local function getVanillaSleepRecoveryRatePerHour(player, fatigue)
+    local currentFatigue = tonumber(fatigue)
+    if currentFatigue == nil or currentFatigue <= 0 then
+        return 0
+    end
+
+    local sleepMul = 1.0
+    if playerHasTrait(player, "Insomniac", "INSOMNIAC") then
+        sleepMul = sleepMul * 0.5
+    end
+    if playerHasTrait(player, "NightOwl", "NIGHT_OWL") then
+        sleepMul = sleepMul * 1.4
+    end
+
+    local traitMul = 1.0
+    if playerHasTrait(player, "NeedsLessSleep", "NEEDS_LESS_SLEEP") then
+        traitMul = 0.75
+    elseif playerHasTrait(player, "NeedsMoreSleep", "NEEDS_MORE_SLEEP") then
+        traitMul = 1.18
+    end
+
+    local bedQualityMultiplier = getBedQualityMultiplier(player)
+    if currentFatigue <= 0.3 then
+        return (0.3 / (7.0 * traitMul)) * sleepMul * bedQualityMultiplier
+    end
+    return (0.7 / (5.0 * traitMul)) * sleepMul * bedQualityMultiplier
+end
+
+local function getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
+    local rigidityNorm = ctx("softNorm")(tonumber(snapshot and snapshot.rigidityLoad) or 0, 80.0, 2.0)
+    if rigidityNorm <= 0 then
+        return 0
+    end
+
+    local fatigue = tonumber(currentFatigue)
+    if fatigue == nil then
+        fatigue = ctx("getFatigue")(player)
+    end
+    if fatigue == nil then
+        return 0
+    end
+
+    local baseRate = math.max(0, tonumber(options.SleepRigidityFatigueRate) or 0.003)
+    local fatigueScale = math.max(0.1, 1.0 - fatigue)
+    local counteractRatePerHour = rigidityNorm * baseRate * fatigueScale
+    local vanillaRecoveryRatePerHour = getVanillaSleepRecoveryRatePerHour(player, fatigue)
+    if vanillaRecoveryRatePerHour <= 0 then
+        return 0
+    end
+
+    return clampValue(counteractRatePerHour / vanillaRecoveryRatePerHour, 0, 0.95)
+end
+
 function Physiology.applySleepTransition(player, state, options, dtMinutes, profile, heatFactor, wetFactor)
     if not options.EnableSleepPenaltyModel then
         state.sleepSnapshot = nil
         state.wasSleeping = false
         return
+    end
+    if isCmsFatigueCompatActive() then
+        local sleeping = ctx("toBoolean")(ctx("safeMethod")(player, "isAsleep"))
+        local wasSleeping = ctx("toBoolean")(state.wasSleeping)
+        if sleeping and not state.sleepSnapshot then
+            state.sleepSnapshot = {
+                rigidityLoad = tonumber(profile.rigidityLoad) or 0,
+            }
+        end
+        if (not sleeping) and wasSleeping and state.sleepSnapshot then
+            state.sleepSnapshot = nil
+        end
+        state.wasSleeping = sleeping
+        return 0
+    end
+
+    local result = Physiology.computeSleepPenaltyContribution(
+        player,
+        state,
+        options,
+        dtMinutes,
+        profile,
+        heatFactor,
+        wetFactor,
+        nil
+    )
+
+    local fatigue = ctx("getFatigue")(player)
+    local penaltyFraction = clampValue(tonumber(result and result.penaltyFraction) or 0, 0, 0.95)
+    local sampleMinutes = math.max(0, tonumber(dtMinutes) or 0)
+    local extraFatigue = 0
+    if fatigue ~= nil and penaltyFraction > 0 and sampleMinutes > 0 then
+        local vanillaRecoveryRatePerHour = getVanillaSleepRecoveryRatePerHour(player, fatigue)
+        local recoveredFatigue = vanillaRecoveryRatePerHour * (sampleMinutes / 60.0)
+        extraFatigue = recoveredFatigue * penaltyFraction
+    end
+    if extraFatigue > 0 then
+        if fatigue ~= nil then
+            ctx("setFatigue")(player, math.min(0.85, fatigue + extraFatigue))
+        end
+    end
+end
+
+function Physiology.computeSleepPenaltyContribution(player, state, options, dtMinutes, profile, heatFactor, wetFactor, currentFatigue)
+    if not options.EnableSleepPenaltyModel then
+        state.sleepSnapshot = nil
+        state.wasSleeping = false
+        return {
+            penaltyFraction = 0,
+            sleeping = false,
+        }
     end
 
     local sleeping = ctx("toBoolean")(ctx("safeMethod")(player, "isAsleep"))
@@ -593,29 +757,25 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
         if snapshot.rigidityLoad == nil then
             snapshot.rigidityLoad = tonumber(profile.rigidityLoad) or 0
         end
-        local sampleMinutes = math.max(0, tonumber(dtMinutes) or 0)
-        if sampleMinutes > 0 then
-            local rigidityNorm = ctx("softNorm")(tonumber(snapshot.rigidityLoad) or 0, 80.0, 2.0)
-            if rigidityNorm > 0 then
-                local fatigue = ctx("getFatigue")(player)
-                if fatigue ~= nil then
-                    local baseRate = math.max(0, tonumber(options.SleepRigidityFatigueRate) or 0.003)
-                    local fatigueScale = math.max(0.1, 1.0 - fatigue)
-                    local counteract = rigidityNorm * baseRate * fatigueScale * sampleMinutes / 60.0
-                    local target = fatigue + counteract
-                    local capped = math.min(0.85, target)
-                    if capped > fatigue then
-                        ctx("setFatigue")(player, capped)
-                    end
-                end
-            end
-        end
+        local penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
+        state.lastSleepPenaltyFraction = penaltyFraction
+        state.wasSleeping = sleeping
+        return {
+            penaltyFraction = penaltyFraction,
+            sleeping = true,
+        }
     end
 
     if (not sleeping) and wasSleeping and state.sleepSnapshot then
         state.sleepSnapshot = nil
     end
     state.wasSleeping = sleeping
+    state.lastSleepPenaltyFraction = 0
+
+    return {
+        penaltyFraction = 0,
+        sleeping = sleeping,
+    }
 end
 
 local function computeThermalContribution(player, state, options, wearabilityLoad, heatFactor, wetFactor)
@@ -730,6 +890,49 @@ local function computeEnduranceDrain(controlled, loadNorm, isIdle, activityLabel
     return controlled, drainApplied
 end
 
+local function resolveNmsEnduranceContribution(player, dtMinutes, naturalDelta, endurance, previous)
+    local compat = getCompat()
+    if type(compat) ~= "table" or type(compat.getCallback) ~= "function" then
+        return nil
+    end
+
+    local callback = compat:getCallback("NutritionMakesSense", "computeEnduranceContribution")
+    if type(callback) ~= "function" then
+        return nil
+    end
+
+    local ok, contribution = pcall(callback, player, {
+        dtMinutes = dtMinutes,
+        dtHours = math.max(0, tonumber(dtMinutes) or 0) / 60.0,
+        naturalDelta = naturalDelta,
+        currentEndurance = endurance,
+        previousEndurance = previous,
+    })
+    if not ok or type(contribution) ~= "table" then
+        return nil
+    end
+
+    return contribution
+end
+
+local function recordNmsEnduranceResult(player, controlledEndurance, regenScale, extraDrain)
+    local compat = getCompat()
+    if type(compat) ~= "table" or type(compat.getCallback) ~= "function" then
+        return
+    end
+
+    local callback = compat:getCallback("NutritionMakesSense", "recordEnduranceResult")
+    if type(callback) ~= "function" then
+        return
+    end
+
+    pcall(callback, player, {
+        controlledEndurance = controlledEndurance,
+        regenScale = regenScale,
+        extraDrain = extraDrain,
+    })
+end
+
 local function applyEnduranceCorrection(player, controlled, endurance)
     controlled = ctx("clamp")(controlled, 0, 1)
     if math.abs(controlled - endurance) > 0.0002 then
@@ -769,8 +972,11 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     local isIdle = activityLabel == "idle"
     local isSitting = postureLabel and (string.find(postureLabel, "sit", 1, true) ~= nil)
     local isWalk = activityLabel == "walk"
+    local nmsContribution = resolveNmsEnduranceContribution(player, dtMinutes, naturalDelta, endurance, previous)
+    local nmsRegenScale = tonumber(nmsContribution and nmsContribution.regenScale) or 1.0
+    local nmsDrain = math.max(0, tonumber(nmsContribution and nmsContribution.extraDrain) or 0)
 
-    local controlled, regenScale = computeRegenControlledEndurance(
+    local _, amsRegenScale = computeRegenControlledEndurance(
         previous,
         loadNorm,
         naturalDelta,
@@ -782,6 +988,11 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
         options,
         activityLoadScale
     )
+    local regenScale = amsRegenScale * nmsRegenScale
+    local controlled = endurance
+    if previous ~= nil and naturalDelta > 0 and (loadNorm > 0 or nmsRegenScale < 0.9999) then
+        controlled = previous + (naturalDelta * regenScale)
+    end
 
     local endMoodle = -1
     local moodles = ctx("safeMethod")(player, "getMoodles")
@@ -789,8 +1000,8 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
         endMoodle = tonumber(ctx("safeMethod")(moodles, "getMoodleLevel", MoodleType.ENDURANCE)) or -1
     end
 
-    local drainApplied = 0
-    controlled, drainApplied = computeEnduranceDrain(
+    local amsDrainApplied = 0
+    controlled, amsDrainApplied = computeEnduranceDrain(
         controlled,
         loadNorm,
         isIdle,
@@ -802,6 +1013,10 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
         activityLoadScale,
         dtMinutes
     )
+    if nmsDrain > 0 then
+        controlled = controlled - nmsDrain
+    end
+    local drainApplied = amsDrainApplied + nmsDrain
 
     if previous ~= nil and isIdle and naturalDelta > 0 then
         if controlled < previous then
@@ -813,6 +1028,7 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     end
 
     controlled = applyEnduranceCorrection(player, controlled, endurance)
+    recordNmsEnduranceResult(player, controlled, nmsRegenScale, nmsDrain)
 
     local enduranceDelta = controlled - endurance
     state.lastEnduranceObserved = controlled
@@ -843,6 +1059,11 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
         enduranceAfterAms = controlled,
         enduranceNaturalDelta = naturalDelta,
         enduranceAppliedDelta = enduranceDelta,
+        amsEnduranceRegenScale = amsRegenScale,
+        nmsEnduranceRegenScale = nmsRegenScale,
+        composedEnduranceRegenScale = regenScale,
+        amsEnduranceDrainApplied = amsDrainApplied,
+        nmsEnduranceDrainApplied = nmsDrain,
         enduranceEnvFactor = tonumber(envFactor) or 1,
         activityLabel = activityLabel,
         thermalUiState = thermalUiState,
@@ -856,6 +1077,31 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     end
 
     return enduranceDelta
+end
+
+function Physiology.buildCompatTraceSnapshot(state)
+    local snapshot = type(state) == "table" and type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or {}
+    return {
+        activity_label = tostring(snapshot.activityLabel or ""),
+        load_norm = tonumber(snapshot.loadNorm) or 0,
+        effective_load = tonumber(snapshot.effectiveLoad) or 0,
+        physical_load = tonumber(snapshot.massLoad) or 0,
+        thermal_load = tonumber(snapshot.thermalLoad) or 0,
+        breathing_load = tonumber(snapshot.breathingLoad) or 0,
+        thermal_contribution = tonumber(snapshot.thermalContribution) or 0,
+        breathing_contribution = tonumber(snapshot.breathingContribution) or 0,
+        endurance_env_factor = tonumber(snapshot.enduranceEnvFactor) or 1,
+        endurance_before = tonumber(snapshot.enduranceBeforeAms) or nil,
+        endurance_after = tonumber(snapshot.enduranceAfterAms) or nil,
+        endurance_natural_delta = tonumber(snapshot.enduranceNaturalDelta) or 0,
+        endurance_applied_delta = tonumber(snapshot.enduranceAppliedDelta) or 0,
+        ams_regen_scale = tonumber(snapshot.amsEnduranceRegenScale) or 1,
+        nms_regen_scale = tonumber(snapshot.nmsEnduranceRegenScale) or 1,
+        composed_regen_scale = tonumber(snapshot.composedEnduranceRegenScale) or 1,
+        ams_drain_applied = tonumber(snapshot.amsEnduranceDrainApplied) or 0,
+        nms_drain_applied = tonumber(snapshot.nmsEnduranceDrainApplied) or 0,
+        sleep_penalty_fraction = tonumber(state and state.lastSleepPenaltyFraction) or 0,
+    }
 end
 
 return Physiology

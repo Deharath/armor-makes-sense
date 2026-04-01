@@ -1,8 +1,8 @@
-# Armor Makes Sense — Technical Appendix (v1.2.3)
+# Armor Makes Sense — Technical Appendix (v1.2.5)
 
-_As of March 12, 2026_  
-`SCRIPT_VERSION=1.2.3`  
-`SCRIPT_BUILD=ams-b42-2026-03-12-v123`
+_As of April 2, 2026_  
+`SCRIPT_VERSION=1.2.5`  
+`SCRIPT_BUILD=ams-b42-2026-04-02-v125`
 
 ## Scope
 
@@ -32,6 +32,7 @@ Runtime split:
 - MP snapshot refresh runs the shared physiology path at `dt=0` so runtime snapshot fields stay current without applying gameplay drain
 - if MP shared-input preparation fails, the server drops pending catch-up instead of retrying an unbounded stale backlog
 - release builds keep a hidden server-first MP incident recorder that freezes suspicious endurance events and mirrors them into support reports without exposing separate debug UI
+- mirrored incident traces stay on one `seq` while the server is still filling the post-trigger window, so clients must accept fuller same-seq payloads and the recorder must keep repeated suspicious rows instead of treating them as duplicates
 - the MP runtime also applies one conservative burst-drain guard: if AMS-only endurance loss becomes abnormal inside a single server update invocation, replay stops and the remaining pending replay is discarded
 - shared load/model code lives in `shared/` so SP and MP use the same armor profile math
 - custom sandbox options must use dotted ids such as `ArmorMakesSense.EnableThermalModel`; `page = ArmorMakesSense` only affects sandbox UI grouping and does not create `SandboxVars.ArmorMakesSense`
@@ -89,6 +90,7 @@ Runtime split:
 
 ### Shared
 - `shared/ArmorMakesSense_Config.lua` — tuning defaults
+- `shared/ArmorMakesSense_Compat.lua` — cross-mod compat registry bootstrap
 - `shared/ArmorMakesSense_MPCompat.lua` — MP constants and command names
 - `shared/ArmorMakesSense_MPIncidentSchema.lua` — MP incident trace shape, thresholds, and trigger ids
 - `shared/ArmorMakesSense_ArmorClassifier.lua` — armor-vs-civilian classification
@@ -141,3 +143,22 @@ Runtime split:
 - `client/testing/ArmorMakesSense_BenchRunnerNative.lua` — native movement/combat driver
 - `client/testing/ArmorMakesSense_BenchRunnerStep.lua` — per-step executor and gate evaluator
 - `client/testing/ArmorMakesSense_BenchRunner.lua` — top-level benchmark orchestration
+
+## Cross-Mod Compat
+
+AMS now participates in the shared `MakesSenseCompat` protocol when the other
+`Makes Sense` mods are loaded.
+
+- AMS remains the endurance coordinator in stacked mode because it already owns
+  the catch-up loop and final endurance write.
+- NMS now feeds deprivation-based endurance suppression and activity drain into
+  AMS through compat callbacks instead of racing the live endurance stat.
+- AMS now expresses sleep-in-armor as a penalty fraction against vanilla sleep
+  recovery, which lets standalone AMS stay vanilla-shaped while also giving the
+  planner a coherent signal.
+- when CMS is present, AMS no longer writes sleep fatigue directly.
+- instead, AMS exposes sleep penalty fractions and CMS composes them into its
+  canonical fatigue path during the actual sleep window.
+- AMS now also exposes explicit AMS-vs-NMS endurance attribution for the shared
+  dev compat trace instead of hiding both sources inside one combined applied
+  delta.

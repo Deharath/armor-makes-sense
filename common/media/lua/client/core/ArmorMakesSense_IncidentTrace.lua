@@ -60,6 +60,32 @@ function IncidentTrace.getSeq()
     return tonumber(latestIncident and latestIncident.seq) or 0
 end
 
+local function payloadRowCount(payload)
+    local rows = type(payload and payload.rows) == "table" and payload.rows or nil
+    return rows and #rows or 0
+end
+
+local function isNewerSameSeqPayload(currentPayload, incomingPayload)
+    if type(currentPayload) ~= "table" then
+        return true
+    end
+
+    local incomingRows = payloadRowCount(incomingPayload)
+    local currentRows = payloadRowCount(currentPayload)
+    if incomingRows ~= currentRows then
+        return incomingRows > currentRows
+    end
+
+    if incomingPayload.sealed == true and currentPayload.sealed ~= true then
+        return true
+    end
+    if incomingPayload.guard_tripped == true and currentPayload.guard_tripped ~= true then
+        return true
+    end
+
+    return false
+end
+
 function IncidentTrace.applyServerIncident(payload)
     if type(payload) ~= "table" then
         return false
@@ -68,7 +94,11 @@ function IncidentTrace.applyServerIncident(payload)
     if seq <= 0 then
         return false
     end
-    if latestIncident and seq <= (tonumber(latestIncident.seq) or 0) then
+    local latestSeq = tonumber(latestIncident and latestIncident.seq) or 0
+    if latestIncident and seq < latestSeq then
+        return false
+    end
+    if latestIncident and seq == latestSeq and not isNewerSameSeqPayload(latestIncident, payload) then
         return false
     end
     latestIncident = payload

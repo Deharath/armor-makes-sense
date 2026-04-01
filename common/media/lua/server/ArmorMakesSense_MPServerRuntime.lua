@@ -15,6 +15,7 @@ if not okMpCompat then
     print("[ArmorMakesSense][MP][SERVER][ERROR] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))
     return
 end
+pcall(require, "ArmorMakesSense_Compat")
 
 local MP = (type(mpCompatOrErr) == "table" and mpCompatOrErr) or ArmorMakesSense.MP
 if type(MP) ~= "table" then
@@ -434,6 +435,9 @@ local function bindSharedContexts()
         getFatigue = getFatigue,
         getWetness = getWetness,
         getWorldAgeMinutes = getWorldAgeMinutes,
+        getCompat = function()
+            return ArmorMakesSense.Compat
+        end,
         isMultiplayer = function()
             return true
         end,
@@ -468,6 +472,75 @@ end
 
 bindSharedContexts()
 
+local prepareRuntimeInputs
+
+local function registerCompatProvider()
+    local compat = ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
+    if type(compat) ~= "table" or type(compat.registerProvider) ~= "function" then
+        return
+    end
+
+    compat:registerProvider("ArmorMakesSense", {
+        capabilities = {
+            endurance_coordinator = true,
+            sleep_penalty_provider = true,
+            sleep_planner_penalty_provider = true,
+        },
+        callbacks = {
+            computeSleepPenaltyContribution = function(playerObj, args)
+                local _, mpState = ensurePlayerState(playerObj)
+                if not mpState or type(Physiology.computeSleepPenaltyContribution) ~= "function" then
+                    return {
+                        penaltyFraction = 0,
+                        sleeping = false,
+                    }
+                end
+
+                local options = getOptions()
+                local profile, _, heatFactor, wetFactor = prepareRuntimeInputs(playerObj, options)
+                return Physiology.computeSleepPenaltyContribution(
+                    playerObj,
+                    mpState,
+                    options,
+                    tonumber(args and args.dtMinutes) or 0,
+                    profile,
+                    heatFactor,
+                    wetFactor,
+                    tonumber(args and args.currentFatigue)
+                )
+            end,
+            estimateSleepPlannerPenalty = function(playerObj, args)
+                local _, mpState = ensurePlayerState(playerObj)
+                if not mpState or type(Physiology.computeSleepPenaltyContribution) ~= "function" then
+                    return { penaltyFraction = 0 }
+                end
+
+                local options = getOptions()
+                local profile, _, heatFactor, wetFactor = prepareRuntimeInputs(playerObj, options)
+                return Physiology.computeSleepPenaltyContribution(
+                    playerObj,
+                    mpState,
+                    options,
+                    tonumber(args and args.dtMinutes) or 0,
+                    profile,
+                    heatFactor,
+                    wetFactor,
+                    tonumber(args and args.currentFatigue)
+                )
+            end,
+            buildTraceSnapshot = function(playerObj, _args)
+                local _, mpState = ensurePlayerState(playerObj)
+                if not mpState or type(Physiology.buildCompatTraceSnapshot) ~= "function" then
+                    return {}
+                end
+                return Physiology.buildCompatTraceSnapshot(mpState)
+            end,
+        },
+    })
+end
+
+registerCompatProvider()
+
 local function normalizeActivityLabel(label)
     local value = lower(label)
     if value == "sprint" or value == "run" or value == "walk" or value == "combat" or value == "idle" then
@@ -492,7 +565,7 @@ local function getActivityFactorForLabel(options, activityLabel)
     return clamp(tonumber(options.ActivityIdle) or 0.35, 0.2, 1.8)
 end
 
-local function prepareRuntimeInputs(playerObj, options)
+prepareRuntimeInputs = function(playerObj, options)
     local profile = type(LoadModel.computeArmorProfile) == "function" and LoadModel.computeArmorProfile(playerObj) or nil
     if type(profile) ~= "table" then
         profile = {}

@@ -12,6 +12,7 @@ local okMpCompat, mpCompatOrErr = pcall(require, "ArmorMakesSense_MPCompat")
 if not okMpCompat then
     print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))
 end
+pcall(require, "ArmorMakesSense_Compat")
 local okMpClientRuntime, errMpClientRuntime = pcall(require, "ArmorMakesSense_MPClientRuntime")
 if not okMpClientRuntime then
     print("[ArmorMakesSense][WARN] optional require failed: ArmorMakesSense_MPClientRuntime :: " .. tostring(errMpClientRuntime))
@@ -38,6 +39,7 @@ require "core/ArmorMakesSense_SupportReport"
 require "core/ArmorMakesSense_Runtime"
 require "core/ArmorMakesSense_Stats"
 require "models/ArmorMakesSense_Physiology"
+require "ArmorMakesSense_SleepHooks"
 require "testing/ArmorMakesSense_Gear"
 require "testing/ArmorMakesSense_Commands"
 require "testing/ArmorMakesSense_API"
@@ -117,6 +119,7 @@ local modules = {
     Runtime = resolve("Core", "Runtime"),
     Stats = resolve("Core", "Stats"),
     Physiology = resolve("Models", "Physiology"),
+    SleepHooks = resolve("SleepHooks"),
     Gear = resolve("Testing", "Gear"),
     Commands = resolve("Testing", "Commands"),
     API = resolve("Testing", "API"),
@@ -648,6 +651,9 @@ contextCoreAStatic = {
     setCurrentGameSpeed = setCurrentGameSpeed,
     getGameVersionTag = getGameVersionTag,
     getLoadedModVersion = getLoadedModVersion,
+    getCompat = function()
+        return ArmorMakesSense.Compat
+    end,
     exportSupportReport = exportSupportReport,
     appendIncidentTraceSection = function(lines)
         if modules.IncidentTrace and type(modules.IncidentTrace.appendReportSection) == "function" then
@@ -741,7 +747,85 @@ if modules.Tick and type(modules.Tick.setContext) == "function" then
     })
 end
 
+local function registerCompatProvider()
+    local compat = ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
+    if type(compat) ~= "table" or type(compat.registerProvider) ~= "function" then
+        return
+    end
+
+    compat:registerProvider("ArmorMakesSense", {
+        capabilities = {
+            endurance_coordinator = true,
+            sleep_penalty_provider = true,
+            sleep_planner_penalty_provider = true,
+        },
+        callbacks = {
+            computeSleepPenaltyContribution = function(playerObj, args)
+                local player = playerObj or getLocalPlayer()
+                if not player or not modules.Physiology or type(modules.Physiology.computeSleepPenaltyContribution) ~= "function" then
+                    return {
+                        penaltyFraction = 0,
+                        sleeping = false,
+                    }
+                end
+
+                local state = ensureState(player)
+                local options = getOptions()
+                local profile = computeArmorProfile(player)
+                local heatFactor = getHeatFactor(player, options)
+                local wetFactor = getWetFactor(player, options)
+
+                return modules.Physiology.computeSleepPenaltyContribution(
+                    player,
+                    state,
+                    options,
+                    tonumber(args and args.dtMinutes) or 0,
+                    profile,
+                    heatFactor,
+                    wetFactor,
+                    tonumber(args and args.currentFatigue)
+                )
+            end,
+            estimateSleepPlannerPenalty = function(playerObj, args)
+                local player = playerObj or getLocalPlayer()
+                if not player or not modules.Physiology or type(modules.Physiology.computeSleepPenaltyContribution) ~= "function" then
+                    return { penaltyFraction = 0 }
+                end
+
+                local state = ensureState(player)
+                local options = getOptions()
+                local profile = computeArmorProfile(player)
+                local heatFactor = getHeatFactor(player, options)
+                local wetFactor = getWetFactor(player, options)
+
+                return modules.Physiology.computeSleepPenaltyContribution(
+                    player,
+                    state,
+                    options,
+                    tonumber(args and args.dtMinutes) or 0,
+                    profile,
+                    heatFactor,
+                    wetFactor,
+                    tonumber(args and args.currentFatigue)
+                )
+            end,
+            buildTraceSnapshot = function(playerObj, _args)
+                local player = playerObj or getLocalPlayer()
+                if not player or not modules.Physiology or type(modules.Physiology.buildCompatTraceSnapshot) ~= "function" then
+                    return {}
+                end
+                local state = ensureState(player)
+                return modules.Physiology.buildCompatTraceSnapshot(state)
+            end,
+        },
+    })
+end
+
 configureTestingContext()
+registerCompatProvider()
+if modules.SleepHooks and type(modules.SleepHooks.wrapSleepPlanning) == "function" then
+    modules.SleepHooks.wrapSleepPlanning()
+end
 if modules.Bootstrap and type(modules.Bootstrap.bindApi) == "function" then
     modules.Bootstrap.bindApi(modules.API, {
         logError = logging.logError,

@@ -156,6 +156,12 @@ AMS now participates in the shared `MakesSenseCompat` protocol when the other
 - AMS now expresses sleep-in-armor as a penalty fraction against vanilla sleep
   recovery, which lets standalone AMS stay vanilla-shaped while also giving the
   planner a coherent signal.
+- in multiplayer, AMS now leaves sleep fully vanilla. Sleep planner wrapping and
+  sleep-recovery penalties are singleplayer-only because the dedicated-server
+  sleep/fast-forward seam does not provide a trustworthy hook for custom sleep
+  scheduling.
+- the burden panel follows that rule and hides the `Sleep` row in multiplayer so
+  the UI does not advertise a sleep penalty that AMS no longer applies there.
 - when CMS is present, AMS no longer writes sleep fatigue directly.
 - instead, AMS exposes sleep penalty fractions and CMS composes them into its
   canonical fatigue path during the actual sleep window.

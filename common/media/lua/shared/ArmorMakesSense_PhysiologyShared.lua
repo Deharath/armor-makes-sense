@@ -682,6 +682,13 @@ local function getSleepRigidityPenaltyFraction(player, options, snapshot, curren
 end
 
 function Physiology.applySleepTransition(player, state, options, dtMinutes, profile, heatFactor, wetFactor)
+    if (type(isClient) == "function" and isClient() == true)
+        or (type(isServer) == "function" and isServer() == true) then
+        state.sleepSnapshot = nil
+        state.wasSleeping = false
+        state.lastSleepPenaltyFraction = 0
+        return
+    end
     if not options.EnableSleepPenaltyModel then
         state.sleepSnapshot = nil
         state.wasSleeping = false
@@ -730,6 +737,16 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
 end
 
 function Physiology.computeSleepPenaltyContribution(player, state, options, dtMinutes, profile, heatFactor, wetFactor, currentFatigue)
+    if (type(isClient) == "function" and isClient() == true)
+        or (type(isServer) == "function" and isServer() == true) then
+        state.sleepSnapshot = nil
+        state.wasSleeping = false
+        state.lastSleepPenaltyFraction = 0
+        return {
+            penaltyFraction = 0,
+            sleeping = false,
+        }
+    end
     if not options.EnableSleepPenaltyModel then
         state.sleepSnapshot = nil
         state.wasSleeping = false

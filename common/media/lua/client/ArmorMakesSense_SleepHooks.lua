@@ -25,16 +25,9 @@ local function cmsOwnsPlanner()
         and compat:hasCapability("CaffeineMakesSense", "sleep_planner_coordinator")
 end
 
-local function getTimeOfDay()
-    local gameTime = type(getGameTime) == "function" and getGameTime() or nil
-    if not gameTime then
-        return nil
-    end
-    local ok, value = pcall(gameTime.getTimeOfDay, gameTime)
-    if not ok then
-        return nil
-    end
-    return tonumber(value)
+local function isMultiplayerSession()
+    return (type(isClient) == "function" and isClient() == true)
+        or (type(isServer) == "function" and isServer() == true)
 end
 
 local function getPlayerFromIndex(playerIndex)
@@ -51,6 +44,14 @@ local function getPlayerFromIndex(playerIndex)
         end
     end
     return nil
+end
+
+local function stringContains(value, needle)
+    local text = tostring(value or "")
+    if type(text.contains) == "function" then
+        return text:contains(needle)
+    end
+    return string.find(text, needle, 1, true) ~= nil
 end
 
 local function computeAdjustedHours(playerObj, baseHours)
@@ -76,33 +77,6 @@ local function computeAdjustedHours(playerObj, baseHours)
 
     local extraHours = compat.computePlannerExtraHours(baseHours, penalty)
     return (tonumber(baseHours) or 0) + extraHours
-end
-
-local function adjustForceWakeTime(playerObj)
-    if cmsOwnsPlanner() then
-        return
-    end
-    if not playerObj or type(playerObj.isAsleep) ~= "function" or playerObj:isAsleep() ~= true then
-        return
-    end
-
-    local compat = getCompat()
-    local timeOfDay = getTimeOfDay()
-    local wakeHour = type(playerObj.getForceWakeUpTime) == "function" and playerObj:getForceWakeUpTime() or nil
-    local baseHours = compat and compat.computeHoursUntilWake(timeOfDay, wakeHour) or nil
-    if baseHours == nil or baseHours <= 0 then
-        return
-    end
-
-    local adjustedHours = computeAdjustedHours(playerObj, baseHours)
-    if adjustedHours <= (baseHours + 0.01) then
-        return
-    end
-
-    local adjustedWakeHour = compat.computeWakeHourFromNow(timeOfDay, adjustedHours)
-    if adjustedWakeHour ~= nil and type(playerObj.setForceWakeUpTime) == "function" then
-        playerObj:setForceWakeUpTime(adjustedWakeHour)
-    end
 end
 
 local function wrapSleepDialog()
@@ -145,18 +119,113 @@ local function wrapAutoSleep()
     if ArmorMakesSense._autoSleepPlannerWrapped then
         return
     end
+    if cmsOwnsPlanner() then
+        return
+    end
 
     pcall(require, "ISUI/ISWorldObjectContextMenu")
     if type(ISWorldObjectContextMenu) ~= "table" or type(ISWorldObjectContextMenu.onSleepWalkToComplete) ~= "function" then
         return
     end
 
-    local originalOnSleepWalkToComplete = ISWorldObjectContextMenu.onSleepWalkToComplete
     ISWorldObjectContextMenu.onSleepWalkToComplete = function(playerIndex, bed)
-        originalOnSleepWalkToComplete(playerIndex, bed)
         local playerObj = getPlayerFromIndex(playerIndex)
-        if playerObj then
-            adjustForceWakeTime(playerObj)
+        if not playerObj then
+            return
+        end
+
+        local stats = type(playerObj.getStats) == "function" and playerObj:getStats() or nil
+        local moodles = type(playerObj.getMoodles) == "function" and playerObj:getMoodles() or nil
+        local isZombies = stats and (
+            (tonumber(stats:getNumVisibleZombies()) or 0) > 0
+            or (tonumber(stats:getNumChasingZombies()) or 0) > 0
+            or (tonumber(stats:getNumVeryCloseZombies()) or 0) > 0
+        ) or false
+        if isZombies then
+            HaloTextHelper.addBadText(playerObj, getText("IGUI_Sleep_NotSafe"))
+            return
+        end
+
+        if (tonumber(playerObj:getSleepingTabletEffect()) or 0) < 2000 then
+            local fatigue = stats and stats:get(CharacterStat.FATIGUE) or 0
+            if moodles and moodles:getMoodleLevel(MoodleType.PAIN) >= 2 and fatigue <= 0.85 then
+                HaloTextHelper.addBadText(playerObj, getText("ContextMenu_PainNoSleep"))
+                return
+            end
+            if moodles and moodles:getMoodleLevel(MoodleType.PANIC) >= 1 then
+                HaloTextHelper.addBadText(playerObj, getText("ContextMenu_PanicNoSleep"))
+                return
+            end
+        end
+
+        if playerObj:getVariableBoolean("ExerciseEnded") == false then
+            return
+        end
+
+        ISTimedActionQueue.clear(playerObj)
+
+        local fatigue = tonumber(stats and stats:get(CharacterStat.FATIGUE)) or 0
+        local sleepFor = ZombRand(fatigue * 10, fatigue * 13) + 1
+        local bedType = ISWorldObjectContextMenu.getBedQuality(playerObj, bed)
+        if bedType == "goodBed" or stringContains(bedType, "goodBedPillow") then
+            sleepFor = sleepFor - 1
+        end
+        if bedType == "badBed" or stringContains(bedType, "badBedPillow") then
+            sleepFor = sleepFor + 1
+        end
+        if bedType == "floor" or stringContains(bedType, "floorPillow") then
+            sleepFor = sleepFor * 0.7
+        end
+        if playerObj:hasTrait(CharacterTrait.INSOMNIAC) then
+            sleepFor = sleepFor * 0.5
+        end
+        if playerObj:hasTrait(CharacterTrait.NEEDS_LESS_SLEEP) then
+            sleepFor = sleepFor * 0.75
+        end
+        if playerObj:hasTrait(CharacterTrait.NEEDS_MORE_SLEEP) then
+            sleepFor = sleepFor * 1.18
+        end
+        if sleepFor > 16 then
+            sleepFor = 16
+        end
+        if sleepFor < 3 then
+            sleepFor = 3
+        end
+
+        sleepFor = computeAdjustedHours(playerObj, sleepFor)
+
+        local gameTime = GameTime.getInstance()
+        local sleepHours = sleepFor + gameTime:getTimeOfDay()
+        if sleepHours >= 24 then
+            sleepHours = sleepHours - 24
+        end
+
+        playerObj:setBed(bed)
+        playerObj:setBedType(bedType)
+        playerObj:setForceWakeUpTime(tonumber(sleepHours))
+        playerObj:setAsleepTime(0.0)
+        playerObj:setAsleep(true)
+
+        if playerObj:getVehicle() then
+            playerObj:playSound("VehicleGoToSleep")
+        end
+
+        if isClient() and getServerOptions():getBoolean("SleepAllowed") then
+            UIManager.setFadeBeforeUI(playerIndex, true)
+            UIManager.FadeOut(playerIndex, 1)
+            if playerObj:getVehicle() then
+                sendClientCommand(playerObj, "player", "onVehicleSleep", { id = playerObj:getOnlineID(), isAsleep = true })
+            end
+            return
+        end
+
+        getSleepingEvent():setPlayerFallAsleep(playerObj, sleepFor)
+        UIManager.setFadeBeforeUI(playerObj:getPlayerNum(), true)
+        UIManager.FadeOut(playerObj:getPlayerNum(), 1)
+
+        if IsoPlayer.allPlayersAsleep() then
+            UIManager.getSpeedControls():SetCurrentGameSpeed(3)
+            save(true)
         end
     end
 
@@ -164,6 +233,9 @@ local function wrapAutoSleep()
 end
 
 function SleepHooks.wrapSleepPlanning()
+    if isMultiplayerSession() then
+        return
+    end
     wrapSleepDialog()
     wrapAutoSleep()
     if ArmorMakesSense._sleepPlannerHooksLogged ~= true then

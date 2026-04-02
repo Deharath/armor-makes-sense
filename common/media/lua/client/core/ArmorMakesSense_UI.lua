@@ -694,6 +694,60 @@ local function ensurePanelClasses()
         return thermalBurdensome or thermalAnnotation ~= nil or showBurden or showBreathing or showSleep
     end
 
+    local function isMultiplayerSession()
+        return type(isClient) == "function" and isClient() == true
+    end
+
+    local function buildProfileFromRuntime(runtime)
+        local loadNorm = tonumber(runtime and runtime.loadNorm) or 0
+        local physicalLoad = tonumber(runtime and runtime.physicalLoad)
+        if physicalLoad == nil then
+            physicalLoad = ctx("clamp")(loadNorm / 2.8 * 100.0, 0, 100)
+        end
+        return {
+            physicalLoad = physicalLoad,
+            breathingLoad = tonumber(runtime and runtime.breathingLoad) or 0,
+            rigidityLoad = tonumber(runtime and runtime.rigidityLoad) or 0,
+            armorCount = tonumber(runtime and runtime.armorCount) or (physicalLoad > 1 and 1 or 0),
+        }
+    end
+
+    local function buildBreathingDescription(breathingLoad)
+        local bLoad = tonumber(breathingLoad) or 0
+        if bLoad >= 3.45 then
+            return tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
+        elseif bLoad >= 2.00 then
+            return tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
+        end
+        return tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
+    end
+
+    local function buildSleepWord(rigidityLoad)
+        local rigidity = tonumber(rigidityLoad) or 0
+        if isMultiplayerSession() or rigidity < 10 then
+            return nil
+        end
+
+        local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
+        local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
+        if sleepPct < 1 then
+            return nil
+        end
+
+        return string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
+    end
+
+    local function buildBurdenWords(profile)
+        local burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile and profile.physicalLoad) or 0)
+        local breathingWord = breathingTierFromLoad(profile and profile.breathingLoad)
+        local breathingDesc = nil
+        if breathingWord then
+            breathingDesc = buildBreathingDescription(profile and profile.breathingLoad)
+        end
+        local sleepWord = buildSleepWord(profile and profile.rigidityLoad)
+        return burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord
+    end
+
     local function hasRenderableContent(data)
         return (type(data.summaryLines) == "table" and #data.summaryLines > 0)
             or data.showBurden
@@ -759,46 +813,10 @@ local function ensurePanelClasses()
         end
 
         local profile = nil
-        local burdenTier, burdenTierKey = nil, nil
-        local breathingWord = nil
-        local breathingDesc = nil
-        local sleepWord = nil
+        local burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = nil, nil, nil, nil, nil
         local costDrivers = {}
         if isMp then
-            local loadNorm = tonumber(runtime and runtime.loadNorm) or 0
-            local physicalLoad = tonumber(runtime and runtime.physicalLoad)
-            if physicalLoad == nil then
-                physicalLoad = ctx("clamp")(loadNorm / 2.8 * 100.0, 0, 100)
-            end
-            local breathingLoad = tonumber(runtime and runtime.breathingLoad) or 0
-            local rigidityLoad = tonumber(runtime and runtime.rigidityLoad) or 0
-            local armorCount = tonumber(runtime and runtime.armorCount) or (physicalLoad > 1 and 1 or 0)
-            profile = {
-                physicalLoad = physicalLoad,
-                breathingLoad = breathingLoad,
-                rigidityLoad = rigidityLoad,
-                armorCount = armorCount,
-            }
-            burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
-            breathingWord = breathingTierFromLoad(profile.breathingLoad)
-            if breathingWord then
-                local bLoad = tonumber(profile.breathingLoad) or 0
-                if bLoad >= 3.45 then
-                    breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-                elseif bLoad >= 2.00 then
-                    breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
-                else
-                    breathingDesc = tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
-                end
-            end
-            local rigidity = tonumber(profile.rigidityLoad) or 0
-            if rigidity >= 10 then
-                local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
-                local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
-                if sleepPct >= 1 then
-                    sleepWord = string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
-                end
-            end
+            profile = buildProfileFromRuntime(runtime)
             costDrivers = type(runtime and runtime.drivers) == "table" and runtime.drivers or {}
             for i = 1, #costDrivers do
                 local row = costDrivers[i]
@@ -808,29 +826,9 @@ local function ensurePanelClasses()
             end
         else
             profile = ctx("computeArmorProfile")(player) or {}
-            burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile.physicalLoad) or 0)
-            breathingWord = breathingTierFromLoad(profile.breathingLoad)
-            if breathingWord then
-                local bLoad = tonumber(profile.breathingLoad) or 0
-                if bLoad >= 3.45 then
-                    breathingDesc = tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-                elseif bLoad >= 2.00 then
-                    breathingDesc = tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
-                else
-                    breathingDesc = tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
-                end
-            end
-
-            local rigidity = tonumber(profile.rigidityLoad) or 0
-            if rigidity >= 10 then
-                local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
-                local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
-                if sleepPct >= 1 then
-                    sleepWord = string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
-                end
-            end
             costDrivers = collectCostDrivers(player)
         end
+        burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = buildBurdenWords(profile)
 
         local thermalWord, thermalColor, thermalBurdensome, thermalAnnotation, thermalAnnotationColor = resolveThermalEffect(runtime)
         local physical = tonumber(profile.physicalLoad) or 0

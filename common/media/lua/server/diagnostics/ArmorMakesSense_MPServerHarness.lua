@@ -20,14 +20,6 @@ if type(MP) ~= "table" then
     return
 end
 
-local function diagnosticsEnabled()
-    return true
-end
-
-if not diagnosticsEnabled() then
-    return
-end
-
 local function boolGlobal(name)
     local fn = _G[name]
     if type(fn) ~= "function" then

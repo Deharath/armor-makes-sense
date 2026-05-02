@@ -23,6 +23,8 @@ local SNAPSHOT_STALE_SECONDS = math.max(10, SNAPSHOT_INTERVAL_SECONDS * 4)
 local firstSnapshotLogged = false
 local uiHooksEnsured = false
 local markUiDirty
+local sendSnapshotRequest
+local SLEEP_FATIGUE_CORRECTION_EPSILON = 0.002
 
 local function log(message)
     print("[ArmorMakesSense][MP][CLIENT] " .. tostring(message))
@@ -46,7 +48,12 @@ local function safeCall(target, methodName, ...)
     if not target then
         return nil
     end
-    local fn = target[methodName]
+    local okResolve, fn = pcall(function()
+        return target[methodName]
+    end)
+    if not okResolve then
+        return nil
+    end
     if type(fn) ~= "function" then
         return nil
     end
@@ -224,6 +231,95 @@ local function ensureMpUiHooks(playerObj)
     return false
 end
 
+local function getFatigue(playerObj)
+    local stats = safeCall(playerObj, "getStats")
+    if not stats then
+        return nil
+    end
+    local fatigue = tonumber(safeCall(stats, "getFatigue"))
+    if fatigue ~= nil then
+        return fatigue
+    end
+    if CharacterStat and CharacterStat.FATIGUE then
+        return tonumber(safeCall(stats, "get", CharacterStat.FATIGUE))
+    end
+    return nil
+end
+
+local function setFatigue(playerObj, value)
+    local stats = safeCall(playerObj, "getStats")
+    if not stats then
+        return false
+    end
+    local clamped = math.max(0, math.min(1, tonumber(value) or 0))
+    if type(stats.setFatigue) == "function" then
+        safeCall(stats, "setFatigue", clamped)
+        return true
+    end
+    if CharacterStat and CharacterStat.FATIGUE then
+        safeCall(stats, "set", CharacterStat.FATIGUE, clamped)
+        return true
+    end
+    return false
+end
+
+local function reconcileAuthoritativeWakeState(playerObj, snapshot)
+    if not playerObj or type(snapshot) ~= "table" then
+        return false
+    end
+    if snapshot.serverSleeping ~= false then
+        return false
+    end
+    if not toBoolean(safeCall(playerObj, "isAsleep")) then
+        return false
+    end
+
+    safeCall(playerObj, "setAsleep", false)
+    safeCall(playerObj, "setAsleepTime", 0.0)
+    safeCall(playerObj, "setForceWakeUpTime", -1.0)
+    log("reconciled local wake state from authoritative server snapshot")
+    return true
+end
+
+local function applyAuthoritativeFatigue(playerObj, snapshot)
+    if not playerObj or type(snapshot) ~= "table" then
+        return false
+    end
+    local serverSleeping = snapshot.serverSleeping == true
+    local reason = tostring(snapshot.reason or "")
+    if (not serverSleeping) and reason ~= "WakeTransition" then
+        return false
+    end
+    local authoritative = tonumber(snapshot.authoritativeFatigue)
+    if authoritative == nil then
+        return false
+    end
+    local current = getFatigue(playerObj)
+    if current ~= nil and math.abs(current - authoritative) <= SLEEP_FATIGUE_CORRECTION_EPSILON then
+        return false
+    end
+    if not serverSleeping and current ~= nil and current > authoritative then
+        return false
+    end
+    local applied = setFatigue(playerObj, authoritative)
+    if applied then
+        if serverSleeping then
+            log(string.format(
+                "applied authoritative sleep fatigue current=%.3f server=%.3f",
+                tonumber(current) or -1,
+                tonumber(authoritative) or -1
+            ))
+        else
+            log(string.format(
+                "applied authoritative wake fatigue current=%.3f server=%.3f",
+                tonumber(current) or -1,
+                tonumber(authoritative) or -1
+            ))
+        end
+    end
+    return applied
+end
+
 local function getClientActivityLabel(playerObj)
     if not playerObj then
         return "idle"
@@ -244,7 +340,7 @@ local function getClientActivityLabel(playerObj)
     return "idle"
 end
 
-local function sendSnapshotRequest(playerObj, reason, force)
+function sendSnapshotRequest(playerObj, reason, force)
     if not canSendRequest(playerObj) then
         return false
     end
@@ -318,6 +414,9 @@ local function parseServerSnapshot(args)
         lastAppliedDtMinutes = tonumber(args.last_applied_dt_minutes) or 0,
         catchupPendingMinutes = tonumber(args.catchup_pending_minutes) or 0,
         updatedMinute = tonumber(args.updated_minute) or 0,
+        authoritativeFatigue = tonumber(args.fatigue),
+        serverSleeping = toBoolean(args.server_sleeping),
+        reason = tostring(args.reason or ""),
         source = "server_snapshot",
     }
 end
@@ -339,6 +438,8 @@ local function onServerCommand(module, command, args)
             return
         end
 
+        reconcileAuthoritativeWakeState(playerObj, snapshot)
+        applyAuthoritativeFatigue(playerObj, snapshot)
         state.mpServerSnapshot = snapshot
         mpClient.lastSnapshotWallSecond = getWallClockSeconds()
         if IncidentTrace and type(IncidentTrace.applyServerIncident) == "function" and type(args.incident_trace) == "table" then
@@ -363,12 +464,13 @@ local function onServerCommand(module, command, args)
 end
 
 local function onConnected()
-    clearSnapshotState(getLocalPlayer(), true)
+    local player = getLocalPlayer()
+    clearSnapshotState(player, true)
     if IncidentTrace and type(IncidentTrace.clear) == "function" then
         IncidentTrace.clear()
     end
-    ensureMpUiHooks(getLocalPlayer())
-    sendSnapshotRequest(getLocalPlayer(), "OnConnected", true)
+    ensureMpUiHooks(player)
+    sendSnapshotRequest(player, "OnConnected", true)
 end
 
 function ams_mp_snapshot_status()
@@ -420,16 +522,6 @@ local function onEveryOneMinute()
     sendSnapshotRequest(player, "EveryOneMinute", false)
 end
 
-local function onPlayerUpdate(playerObj)
-    local player = playerObj or getLocalPlayer()
-    if not player then
-        return
-    end
-    expireStaleSnapshot(player)
-    ensureMpUiHooks(player)
-    sendSnapshotRequest(player, "OnPlayerUpdate", false)
-end
-
 local function logBootBanner(contextTag)
     log(string.format(
         "[BOOT_MP] context=%s side=client isClient=%s isServer=%s ingame=%s scriptVersion=%s build=%s",
@@ -462,9 +554,6 @@ local function registerEvents()
     end
     if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
         Events.EveryOneMinute.Add(onEveryOneMinute)
-    end
-    if Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
-        Events.OnPlayerUpdate.Add(onPlayerUpdate)
     end
 end
 

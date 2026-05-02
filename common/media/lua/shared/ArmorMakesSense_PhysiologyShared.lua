@@ -33,6 +33,25 @@ local function isCmsFatigueCompatActive()
         and compat:hasCapability("CaffeineMakesSense", "fatigue_coordinator")
 end
 
+local function isMultiplayerClientSession()
+    return ((type(isClient) == "function" and isClient() == true)
+        or (GameClient and GameClient.bClient == true))
+        and not ((type(isServer) == "function" and isServer() == true)
+            or (GameServer and GameServer.bServer == true))
+end
+
+local function isMultiplayerServerSession()
+    return ((type(isServer) == "function" and isServer() == true)
+        or (GameServer and GameServer.bServer == true))
+end
+
+local function isCmsWakeAdjustmentCompatActive()
+    local compat = getCompat()
+    return type(compat) == "table"
+        and type(compat.hasCapability) == "function"
+        and compat:hasCapability("CaffeineMakesSense", "sleep_wake_adjustment_coordinator")
+end
+
 local function clampValue(value, minimum, maximum)
     local clamp = ctx("clamp")
     if type(clamp) == "function" then
@@ -656,6 +675,27 @@ local function getVanillaSleepRecoveryRatePerHour(player, fatigue)
     return (0.7 / (5.0 * traitMul)) * sleepMul * bedQualityMultiplier
 end
 
+local function getPendingSleepBedType(state)
+    local pending = type(state) == "table" and state.pendingSleepSession or nil
+    if type(pending) ~= "table" then
+        return nil
+    end
+    local bedType = tostring(pending.bedType or pending.bed_type or "")
+    if bedType == "" then
+        return nil
+    end
+    return bedType
+end
+
+local function resolveSleepBedType(player, state)
+    local safeMethod = ctx("safeMethod")
+    local bedType = type(safeMethod) == "function" and tostring(safeMethod(player, "getBedType") or "") or ""
+    if bedType == "" then
+        bedType = getPendingSleepBedType(state) or ""
+    end
+    return bedType
+end
+
 local function getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
     local rigidityNorm = ctx("softNorm")(tonumber(snapshot and snapshot.rigidityLoad) or 0, 80.0, 2.0)
     if rigidityNorm <= 0 then
@@ -681,34 +721,91 @@ local function getSleepRigidityPenaltyFraction(player, options, snapshot, curren
     return clampValue(counteractRatePerHour / vanillaRecoveryRatePerHour, 0, 0.95)
 end
 
-function Physiology.applySleepTransition(player, state, options, dtMinutes, profile, heatFactor, wetFactor)
-    if (type(isClient) == "function" and isClient() == true)
-        or (type(isServer) == "function" and isServer() == true) then
-        state.sleepSnapshot = nil
-        state.wasSleeping = false
-        state.lastSleepPenaltyFraction = 0
-        return
-    end
-    if not options.EnableSleepPenaltyModel then
-        state.sleepSnapshot = nil
-        state.wasSleeping = false
-        return
-    end
-    if isCmsFatigueCompatActive() then
-        local sleeping = ctx("toBoolean")(ctx("safeMethod")(player, "isAsleep"))
-        local wasSleeping = ctx("toBoolean")(state.wasSleeping)
-        if sleeping and not state.sleepSnapshot then
-            state.sleepSnapshot = {
-                rigidityLoad = tonumber(profile.rigidityLoad) or 0,
-            }
+local function applySleepWakeFatigueAdjustment(player, state, currentFatigue)
+    if isCmsWakeAdjustmentCompatActive() then
+        if type(state) == "table" then
+            state.lastSleepWakeAdjustment = 0
         end
-        if (not sleeping) and wasSleeping and state.sleepSnapshot then
-            state.sleepSnapshot = nil
-        end
-        state.wasSleeping = sleeping
         return 0
     end
 
+    local compat = getCompat()
+    if type(compat) ~= "table" or type(compat.computeSleepWakeFatigueDelta) ~= "function" then
+        if type(state) == "table" then
+            state.lastSleepWakeAdjustment = 0
+        end
+        return 0
+    end
+
+    local snapshot = type(state) == "table" and state.sleepSnapshot or nil
+    if type(snapshot) ~= "table" then
+        if type(state) == "table" then
+            state.lastSleepWakeAdjustment = 0
+        end
+        return 0
+    end
+
+    local getWorldAgeMinutes = ctx("getWorldAgeMinutes")
+    local nowMinutes = type(getWorldAgeMinutes) == "function" and tonumber(getWorldAgeMinutes()) or nil
+    local startMinute = tonumber(snapshot.startMinute)
+    if nowMinutes == nil or startMinute == nil then
+        if type(state) == "table" then
+            state.lastSleepWakeAdjustment = 0
+        end
+        return 0
+    end
+
+    local fatigue = tonumber(currentFatigue)
+    if fatigue == nil then
+        fatigue = ctx("getFatigue")(player)
+    end
+    local referenceFatigue = tonumber(snapshot.lastFatigue)
+    if referenceFatigue == nil then
+        referenceFatigue = fatigue
+    end
+    local sleptHours = math.max(0, nowMinutes - startMinute) / 60.0
+    local expectedWakeAdjustment = tonumber(compat.computeSleepWakeFatigueDelta(snapshot.bedType, sleptHours)) or 0
+
+    if fatigue ~= nil and referenceFatigue ~= nil then
+        local observedAdjustment = clampValue(fatigue, 0, 1) - referenceFatigue
+        if math.abs(observedAdjustment) > 0.002 then
+            local trustObserved = true
+            if isMultiplayerServerSession() and expectedWakeAdjustment ~= 0 then
+                trustObserved = (observedAdjustment < 0 and expectedWakeAdjustment < 0)
+                    or (observedAdjustment > 0 and expectedWakeAdjustment > 0)
+            end
+            if trustObserved then
+                state.lastSleepWakeAdjustment = observedAdjustment
+                return observedAdjustment
+            end
+        end
+    end
+
+    if not isMultiplayerServerSession() then
+        state.lastSleepWakeAdjustment = 0
+        return 0
+    end
+
+    local wakeAdjustment = expectedWakeAdjustment
+    state.lastSleepWakeAdjustment = wakeAdjustment
+
+    if wakeAdjustment == 0 then
+        return 0
+    end
+
+    if referenceFatigue == nil then
+        return wakeAdjustment
+    end
+
+    local setFatigue = ctx("setFatigue")
+    if type(setFatigue) == "function" then
+        setFatigue(player, clampValue(referenceFatigue + wakeAdjustment, 0, 1))
+    end
+
+    return wakeAdjustment
+end
+
+function Physiology.applySleepTransition(player, state, options, dtMinutes, profile, heatFactor, wetFactor)
     local result = Physiology.computeSleepPenaltyContribution(
         player,
         state,
@@ -719,6 +816,10 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
         wetFactor,
         nil
     )
+
+    if isCmsFatigueCompatActive() or isMultiplayerClientSession() then
+        return tonumber(result and result.penaltyFraction) or 0
+    end
 
     local fatigue = ctx("getFatigue")(player)
     local penaltyFraction = clampValue(tonumber(result and result.penaltyFraction) or 0, 0, 0.95)
@@ -736,31 +837,37 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
     end
 end
 
-function Physiology.computeSleepPenaltyContribution(player, state, options, dtMinutes, profile, heatFactor, wetFactor, currentFatigue)
-    if (type(isClient) == "function" and isClient() == true)
-        or (type(isServer) == "function" and isServer() == true) then
-        state.sleepSnapshot = nil
-        state.wasSleeping = false
-        state.lastSleepPenaltyFraction = 0
-        return {
-            penaltyFraction = 0,
-            sleeping = false,
-        }
-    end
+function Physiology.computeSleepPlannerPenalty(player, state, options, profile, currentFatigue)
     if not options.EnableSleepPenaltyModel then
-        state.sleepSnapshot = nil
-        state.wasSleeping = false
         return {
             penaltyFraction = 0,
             sleeping = false,
         }
     end
 
+    local resolvedProfile = type(profile) == "table" and profile or {}
+    local resolvedState = type(state) == "table" and state or {}
+    local snapshot = {
+        rigidityLoad = tonumber(resolvedProfile.rigidityLoad) or 0,
+    }
+    local penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
+    resolvedState.lastSleepPenaltyFraction = penaltyFraction
+
+    return {
+        penaltyFraction = penaltyFraction,
+        sleeping = false,
+    }
+end
+
+function Physiology.computeSleepPenaltyContribution(player, state, options, dtMinutes, profile, heatFactor, wetFactor, currentFatigue)
     local sleeping = ctx("toBoolean")(ctx("safeMethod")(player, "isAsleep"))
     local wasSleeping = ctx("toBoolean")(state.wasSleeping)
     if sleeping and not wasSleeping then
         state.sleepSnapshot = {
             rigidityLoad = tonumber(profile.rigidityLoad) or 0,
+            bedType = resolveSleepBedType(player, state),
+            startMinute = type(ctx("getWorldAgeMinutes")) == "function" and tonumber(ctx("getWorldAgeMinutes")()) or nil,
+            lastFatigue = tonumber(currentFatigue) or ctx("getFatigue")(player),
         }
     end
 
@@ -768,14 +875,28 @@ function Physiology.computeSleepPenaltyContribution(player, state, options, dtMi
         if not state.sleepSnapshot then
             state.sleepSnapshot = {
                 rigidityLoad = tonumber(profile.rigidityLoad) or 0,
+                bedType = resolveSleepBedType(player, state),
+                startMinute = type(ctx("getWorldAgeMinutes")) == "function" and tonumber(ctx("getWorldAgeMinutes")()) or nil,
+                lastFatigue = tonumber(currentFatigue) or ctx("getFatigue")(player),
             }
         end
         local snapshot = state.sleepSnapshot
         if snapshot.rigidityLoad == nil then
             snapshot.rigidityLoad = tonumber(profile.rigidityLoad) or 0
         end
-        local penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
+        if snapshot.bedType == nil or tostring(snapshot.bedType or "") == "" then
+            snapshot.bedType = resolveSleepBedType(player, state)
+        end
+        if snapshot.startMinute == nil and type(ctx("getWorldAgeMinutes")) == "function" then
+            snapshot.startMinute = tonumber(ctx("getWorldAgeMinutes")())
+        end
+        snapshot.lastFatigue = tonumber(currentFatigue) or ctx("getFatigue")(player)
+        local penaltyFraction = 0
+        if options.EnableSleepPenaltyModel then
+            penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
+        end
         state.lastSleepPenaltyFraction = penaltyFraction
+        state.lastSleepWakeAdjustment = 0
         state.wasSleeping = sleeping
         return {
             penaltyFraction = penaltyFraction,
@@ -784,7 +905,9 @@ function Physiology.computeSleepPenaltyContribution(player, state, options, dtMi
     end
 
     if (not sleeping) and wasSleeping and state.sleepSnapshot then
+        applySleepWakeFatigueAdjustment(player, state, currentFatigue)
         state.sleepSnapshot = nil
+        state.pendingSleepSession = nil
     end
     state.wasSleeping = sleeping
     state.lastSleepPenaltyFraction = 0
@@ -1118,6 +1241,8 @@ function Physiology.buildCompatTraceSnapshot(state)
         ams_drain_applied = tonumber(snapshot.amsEnduranceDrainApplied) or 0,
         nms_drain_applied = tonumber(snapshot.nmsEnduranceDrainApplied) or 0,
         sleep_penalty_fraction = tonumber(state and state.lastSleepPenaltyFraction) or 0,
+        sleep_wake_adjustment = tonumber(state and state.lastSleepWakeAdjustment) or 0,
+        sleep_bed_type = tostring(state and state.sleepSnapshot and state.sleepSnapshot.bedType or ""),
     }
 end
 

@@ -39,7 +39,6 @@ require "core/ArmorMakesSense_SupportReport"
 require "core/ArmorMakesSense_Runtime"
 require "core/ArmorMakesSense_Stats"
 require "models/ArmorMakesSense_Physiology"
-require "ArmorMakesSense_SleepHooks"
 require "testing/ArmorMakesSense_Gear"
 require "testing/ArmorMakesSense_Commands"
 require "testing/ArmorMakesSense_API"
@@ -59,8 +58,8 @@ require "testing/ArmorMakesSense_BenchRunner"
 local Mod = ArmorMakesSense
 local MOD_KEY = "ArmorMakesSenseState"
 local mpCompat = (okMpCompat and mpCompatOrErr) or (ArmorMakesSense and ArmorMakesSense.MP) or {}
-local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.1.3")
-local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-03-05-v112")
+local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.2.7")
+local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-05-02-v127")
 local warned = {}
 local cachedEnableSystem = true
 
@@ -69,6 +68,7 @@ local runtimeDisabled = false
 local suppressCountThisMinute = 0
 local suppressMaxThisMinute = 0
 local swingStateByPlayer = {}
+local sleepHooksInstallResolved = false
 local configureTestingContext
 local getWetness
 local onWeaponSwing
@@ -310,6 +310,12 @@ local function isMultiplayer()
         return true
     end
     if safeGlobalBool("isServer") then
+        return true
+    end
+    if GameClient and GameClient.bClient == true then
+        return true
+    end
+    if GameServer and GameServer.bServer == true then
         return true
     end
     return false
@@ -788,24 +794,19 @@ local function registerCompatProvider()
             end,
             estimateSleepPlannerPenalty = function(playerObj, args)
                 local player = playerObj or getLocalPlayer()
-                if not player or not modules.Physiology or type(modules.Physiology.computeSleepPenaltyContribution) ~= "function" then
+                if not player or not modules.Physiology or type(modules.Physiology.computeSleepPlannerPenalty) ~= "function" then
                     return { penaltyFraction = 0 }
                 end
 
                 local state = ensureState(player)
                 local options = getOptions()
                 local profile = computeArmorProfile(player)
-                local heatFactor = getHeatFactor(player, options)
-                local wetFactor = getWetFactor(player, options)
 
-                return modules.Physiology.computeSleepPenaltyContribution(
+                return modules.Physiology.computeSleepPlannerPenalty(
                     player,
                     state,
                     options,
-                    tonumber(args and args.dtMinutes) or 0,
                     profile,
-                    heatFactor,
-                    wetFactor,
                     tonumber(args and args.currentFatigue)
                 )
             end,
@@ -823,9 +824,6 @@ end
 
 configureTestingContext()
 registerCompatProvider()
-if modules.SleepHooks and type(modules.SleepHooks.wrapSleepPlanning) == "function" then
-    modules.SleepHooks.wrapSleepPlanning()
-end
 if modules.Bootstrap and type(modules.Bootstrap.bindApi) == "function" then
     modules.Bootstrap.bindApi(modules.API, {
         logError = logging.logError,
@@ -838,4 +836,58 @@ end
 
 if modules.Bootstrap and type(modules.Bootstrap.registerRuntimeEvents) == "function" then
     modules.Bootstrap.registerRuntimeEvents(Mod, modules.Runtime)
+end
+
+local function isEligibleLocalPlayer(playerObj)
+    if not playerObj then
+        return false
+    end
+    if type(playerObj.isLocalPlayer) == "function" then
+        local ok, isLocal = pcall(playerObj.isLocalPlayer, playerObj)
+        if ok and not isLocal then
+            return false
+        end
+    end
+    return true
+end
+
+local function tryInstallSleepHooks(playerObj)
+    if sleepHooksInstallResolved then
+        return
+    end
+    if not isEligibleLocalPlayer(playerObj) then
+        return
+    end
+    local okSleepHooks = pcall(require, "ArmorMakesSense_SleepHooks")
+    local SleepHooks = okSleepHooks and (ArmorMakesSense and ArmorMakesSense.SleepHooks) or nil
+    if type(SleepHooks) == "table" then
+        modules.SleepHooks = SleepHooks
+    end
+    if type(SleepHooks) == "table" and type(SleepHooks.wrapSleepPlanning) == "function" then
+        local installed = SleepHooks.wrapSleepPlanning()
+        if installed == false then
+            logging.log("sleep planner hooks delegated to CMS coordinator after confirmed local player creation")
+        else
+            logging.log("sleep planner hooks installed after confirmed local player creation")
+        end
+    end
+    sleepHooksInstallResolved = true
+end
+
+local function onCreatePlayer(playerIndex, playerObj)
+    local player = playerObj or getLocalPlayer()
+    if not player then
+        return
+    end
+    if type(player.isLocalPlayer) == "function" then
+        local ok, isLocal = pcall(player.isLocalPlayer, player)
+        if ok and not isLocal then
+            return
+        end
+    end
+    tryInstallSleepHooks(player)
+end
+
+if Events and Events.OnCreatePlayer and type(Events.OnCreatePlayer.Add) == "function" then
+    Events.OnCreatePlayer.Add(onCreatePlayer)
 end

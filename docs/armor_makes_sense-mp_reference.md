@@ -30,11 +30,23 @@ Multiplayer server:
 - client session-start requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline world time is not replayed on reconnect
 - a release-path incident recorder keeps a short rolling server trace per player and freezes suspicious endurance events for later support-report export
 - `OnWeaponSwing` applies armor-based strain overlay
-- `OnPlayerUpdate` enforces discomfort invariant between snapshot sends
+- `OnPlayerUpdate` enforces discomfort invariant between snapshot sends and handles wake-edge authority:
+  - it keeps a dedicated wake-sync asleep marker instead of reusing general
+    runtime sleep state, so normal snapshot refreshes cannot consume the wake edge
+  - on asleep→awake transition it sends a `WakeTransition` snapshot
+  - it also sends native `syncPlayerStats` for FATIGUE (`CharacterStat` mask bit 4) on the same wake edge
+- while sleeping it periodically sends the same native FATIGUE stat sync to keep
+  long fast-forward windows authoritative
+- while sleeping it also pushes realtime (`SleepRealtimeSync`) snapshots from
+  `OnPlayerUpdate` at ~1s wall-clock cadence
 
 Multiplayer client:
 - `MPClientRuntime` registers `OnServerCommand`, `OnConnected`, `OnCreatePlayer`, `OnClothingUpdated`, `EveryOneMinute`, and `OnPlayerUpdate`
 - it ensures UI hooks exist, requests fresh snapshots, expires stale cache entries, and marks the Burden UI dirty when new data arrives
+- on `WakeTransition` snapshots it reconciles local sleep flags to server authority (`asleep=false`, `asleepTime=0`, `forceWakeUpTime=-1`)
+- it applies authoritative fatigue for `WakeTransition` and sleeping snapshots
+- it does not apply awake non-wake fatigue snapshots downward (to avoid fighting
+  post-wake client-side recovery paths while still allowing wake correction)
 - UI data comes from the cached server snapshot
 
 ## Snapshot Protocol
@@ -68,6 +80,9 @@ Server flow:
   - `thermalPressureScale`
   - `enduranceEnvFactor`
   - `updatedMinute`
+  - `fatigue`
+  - `server_sleeping`
+  - `reason`
   - `incidentSeq`
   - thermal hot/cold flags
   - physical cost drivers
@@ -104,6 +119,7 @@ Server-side MP state:
 - `mpServer.runtimeSnapshot`
 - `mpServer.lastSnapshotSentSecond`
 - `mpServer.recentCombatUntilMinute`
+- `mpServer.lastWakeSyncAsleepFlag`
 - `mpServer.thermalModelState`
 - `mpServer.incidentRecorder`
 

@@ -694,10 +694,6 @@ local function ensurePanelClasses()
         return thermalBurdensome or thermalAnnotation ~= nil or showBurden or showBreathing or showSleep
     end
 
-    local function isMultiplayerSession()
-        return type(isClient) == "function" and isClient() == true
-    end
-
     local function buildProfileFromRuntime(runtime)
         local loadNorm = tonumber(runtime and runtime.loadNorm) or 0
         local physicalLoad = tonumber(runtime and runtime.physicalLoad)
@@ -724,7 +720,7 @@ local function ensurePanelClasses()
 
     local function buildSleepWord(rigidityLoad)
         local rigidity = tonumber(rigidityLoad) or 0
-        if isMultiplayerSession() or rigidity < 10 then
+        if rigidity < 10 then
             return nil
         end
 

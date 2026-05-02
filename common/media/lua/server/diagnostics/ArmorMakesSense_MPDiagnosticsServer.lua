@@ -20,16 +20,12 @@ end
 local okLoadModel, loadModelOrErr = pcall(require, "ArmorMakesSense_LoadModelShared")
 local LoadModel = okLoadModel and type(loadModelOrErr) == "table" and loadModelOrErr or nil
 
-local function diagnosticsEnabled()
-    return true
-end
-
 local function minuteSummaryEnabled()
-    return true
+    return false
 end
 
-if not diagnosticsEnabled() then
-    return
+local function sleepDiagnosticsEnabled()
+    return true
 end
 
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
@@ -81,6 +77,11 @@ local function getWorldAgeMinutes()
     return worldAgeHours * 60.0
 end
 
+local function getTimeOfDay()
+    local gameTime = type(getGameTime) == "function" and getGameTime() or nil
+    return tonumber(gameTime and safeCall(gameTime, "getTimeOfDay") or nil) or 0
+end
+
 local function readStat(playerObj, directMethod, charStat)
     local stats = safeCall(playerObj, "getStats")
     if not stats then
@@ -119,6 +120,174 @@ local function getPlayerState(playerObj)
     end
     local mpState = type(state.mpServer) == "table" and state.mpServer or nil
     return state, mpState
+end
+
+local function getForceWakeUpTime(playerObj)
+    return tonumber(safeCall(playerObj, "getForceWakeUpTime"))
+end
+
+local function getAsleepTime(playerObj)
+    return tonumber(safeCall(playerObj, "getAsleepTime"))
+end
+
+local function isAsleep(playerObj)
+    return safeCall(playerObj, "isAsleep") == true
+end
+
+local function computeHoursUntilWake(timeOfDay, wakeHour)
+    local now = tonumber(timeOfDay)
+    local wake = tonumber(wakeHour)
+    if now == nil or wake == nil then
+        return nil
+    end
+    local delta = wake - now
+    if delta < 0 then
+        delta = delta + 24.0
+    end
+    return delta
+end
+
+local function getMovementFlags(playerObj)
+    return {
+        moving = safeCall(playerObj, "isMoving") == true,
+        playerMoving = safeCall(playerObj, "isPlayerMoving") == true,
+        running = safeCall(playerObj, "isRunning") == true,
+        sprinting = safeCall(playerObj, "isSprinting") == true,
+        aiming = safeCall(playerObj, "isAiming") == true,
+        attackStarted = safeCall(playerObj, "isAttackStarted") == true,
+    }
+end
+
+local sleepDiagByPlayer = {}
+
+local function getSleepDiagState(playerObj)
+    local key = tostring(playerOnlineID(playerObj))
+    local entry = sleepDiagByPlayer[key]
+    if type(entry) ~= "table" then
+        entry = {}
+        sleepDiagByPlayer[key] = entry
+    end
+    return entry
+end
+
+local function emitSleepDiagnostics(playerObj)
+    if not sleepDiagnosticsEnabled() then
+        return
+    end
+
+    local _, mpState = getPlayerState(playerObj)
+    local snapshot = (mpState and type(mpState.runtimeSnapshot) == "table") and mpState.runtimeSnapshot or {}
+    local trace = getSleepDiagState(playerObj)
+    local worldMinute = tonumber(getWorldAgeMinutes()) or 0
+    local minuteKey = math.floor(worldMinute)
+    local timeOfDay = tonumber(getTimeOfDay()) or 0
+    local sleeping = isAsleep(playerObj)
+    local forceWake = getForceWakeUpTime(playerObj)
+    local hoursUntilWake = computeHoursUntilWake(timeOfDay, forceWake)
+    local asleepTime = getAsleepTime(playerObj)
+    local fatigue = tonumber(getFatigue(playerObj)) or -1
+    local penalty = tonumber(mpState and mpState.lastSleepPenaltyFraction) or 0
+    local rigidity = tonumber(snapshot.rigidityLoad) or 0
+    local pending = tonumber(mpState and mpState.pendingCatchupMinutes) or 0
+    local flags = getMovementFlags(playerObj)
+
+    if trace.lastSleeping == nil or trace.lastSleeping ~= sleeping then
+        log(string.format(
+            "[SLEEP] side=server transition=%s user=%s id=%d tod=%.2f world=%.2f fat=%.3f wake=%s until=%s asleepTime=%s rigidity=%.2f penalty=%.4f pending=%.3f moving=%s playerMoving=%s running=%s sprinting=%s aiming=%s attack=%s",
+            sleeping and "start" or "end",
+            tostring(playerName(playerObj)),
+            playerOnlineID(playerObj),
+            timeOfDay,
+            worldMinute,
+            fatigue,
+            forceWake ~= nil and string.format("%.2f", forceWake) or "nil",
+            hoursUntilWake ~= nil and string.format("%.2f", hoursUntilWake) or "nil",
+            asleepTime ~= nil and string.format("%.2f", asleepTime) or "nil",
+            rigidity,
+            penalty,
+            pending,
+            tostring(flags.moving),
+            tostring(flags.playerMoving),
+            tostring(flags.running),
+            tostring(flags.sprinting),
+            tostring(flags.aiming),
+            tostring(flags.attackStarted)
+        ))
+    end
+
+    local movingWhileAsleep = sleeping and (
+        flags.moving or flags.playerMoving or flags.running or flags.sprinting or flags.aiming or flags.attackStarted
+    )
+    if movingWhileAsleep and trace.lastMovementAnomalyMinute ~= minuteKey then
+        trace.lastMovementAnomalyMinute = minuteKey
+        log(string.format(
+            "[SLEEP_ANOM] side=server kind=asleep_with_activity user=%s id=%d tod=%.2f world=%.2f fat=%.3f wake=%s until=%s asleepTime=%s rigidity=%.2f penalty=%.4f moving=%s playerMoving=%s running=%s sprinting=%s aiming=%s attack=%s",
+            tostring(playerName(playerObj)),
+            playerOnlineID(playerObj),
+            timeOfDay,
+            worldMinute,
+            fatigue,
+            forceWake ~= nil and string.format("%.2f", forceWake) or "nil",
+            hoursUntilWake ~= nil and string.format("%.2f", hoursUntilWake) or "nil",
+            asleepTime ~= nil and string.format("%.2f", asleepTime) or "nil",
+            rigidity,
+            penalty,
+            tostring(flags.moving),
+            tostring(flags.playerMoving),
+            tostring(flags.running),
+            tostring(flags.sprinting),
+            tostring(flags.aiming),
+            tostring(flags.attackStarted)
+        ))
+    end
+
+    trace.lastSleeping = sleeping
+    trace.lastForceWake = forceWake
+    trace.lastWorldMinute = worldMinute
+end
+
+local function handleSleepWakeDiag(playerObj, args)
+    local timeOfDay = tonumber(getTimeOfDay()) or 0
+    local worldMinute = tonumber(getWorldAgeMinutes()) or 0
+    local forceWake = getForceWakeUpTime(playerObj)
+    local hoursUntilWake = computeHoursUntilWake(timeOfDay, forceWake)
+    local asleepTime = getAsleepTime(playerObj)
+    local fatigue = tonumber(getFatigue(playerObj)) or -1
+    local sleeping = isAsleep(playerObj)
+    local flags = getMovementFlags(playerObj)
+    local _, mpState = getPlayerState(playerObj)
+    local snapshot = (mpState and type(mpState.runtimeSnapshot) == "table") and mpState.runtimeSnapshot or {}
+
+    log(string.format(
+        "[SLEEP_WAKE_DIAG] side=server recv user=%s id=%d client_tod=%s client_world=%s client_fat=%s client_wake=%s client_until=%s client_asleepTime=%s client_mult=%s server_sleeping=%s server_tod=%.2f server_world=%.2f server_fat=%.3f server_wake=%s server_until=%s server_asleepTime=%s rigidity=%.2f penalty=%.4f pending=%.3f moving=%s playerMoving=%s running=%s sprinting=%s aiming=%s attack=%s version=%s build=%s",
+        tostring(playerName(playerObj)),
+        playerOnlineID(playerObj),
+        args and args.tod ~= nil and string.format("%.2f", tonumber(args.tod) or -1) or "nil",
+        args and args.world ~= nil and string.format("%.2f", tonumber(args.world) or -1) or "nil",
+        args and args.fat ~= nil and string.format("%.3f", tonumber(args.fat) or -1) or "nil",
+        args and args.wake ~= nil and string.format("%.2f", tonumber(args.wake) or -1) or "nil",
+        args and args.wakeUntil ~= nil and string.format("%.2f", tonumber(args.wakeUntil) or -1) or "nil",
+        args and args.asleepTime ~= nil and string.format("%.2f", tonumber(args.asleepTime) or -1) or "nil",
+        args and args.mult ~= nil and string.format("%.2f", tonumber(args.mult) or -1) or "nil",
+        tostring(sleeping),
+        timeOfDay,
+        worldMinute,
+        fatigue,
+        forceWake ~= nil and string.format("%.2f", forceWake) or "nil",
+        hoursUntilWake ~= nil and string.format("%.2f", hoursUntilWake) or "nil",
+        asleepTime ~= nil and string.format("%.2f", asleepTime) or "nil",
+        tonumber(snapshot.rigidityLoad) or 0,
+        tonumber(mpState and mpState.lastSleepPenaltyFraction) or 0,
+        tonumber(mpState and mpState.pendingCatchupMinutes) or 0,
+        tostring(flags.moving),
+        tostring(flags.playerMoving),
+        tostring(flags.running),
+        tostring(flags.sprinting),
+        tostring(flags.aiming),
+        tostring(flags.attackStarted),
+        tostring(args and args.script_version or "unknown"),
+        tostring(args and args.script_build or "unknown")
+    ))
 end
 
 local function getItemFullType(item)
@@ -359,10 +528,14 @@ local function onClientCommand(module, command, playerObj, args)
     if tostring(module) ~= tostring(MP.NET_MODULE) then
         return
     end
-    if tostring(command) ~= tostring(MP.DIAG_DUMP_REQUEST_COMMAND) then
+    if tostring(command) == tostring(MP.DIAG_DUMP_REQUEST_COMMAND) then
+        sendDiagDump(playerObj, args and args.reason or "client_request")
         return
     end
-    sendDiagDump(playerObj, args and args.reason or "client_request")
+    if tostring(command) == tostring(MP.SLEEP_WAKE_DIAG_COMMAND) then
+        handleSleepWakeDiag(playerObj, args)
+        return
+    end
 end
 
 local function onEveryOneMinute()
@@ -371,7 +544,10 @@ local function onEveryOneMinute()
     for i = 0, count - 1 do
         local playerObj = safeCall(onlinePlayers, "get", i)
         if playerObj then
-            emitMinuteSummary(playerObj)
+            if minuteSummaryEnabled() then
+                emitMinuteSummary(playerObj)
+            end
+            emitSleepDiagnostics(playerObj)
         end
     end
 end
@@ -388,10 +564,10 @@ local function registerEvents()
         log("OnClientCommand.Add unavailable; diag dump request handler inactive")
     end
 
-    if minuteSummaryEnabled() and Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
+    if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
         Events.EveryOneMinute.Add(onEveryOneMinute)
-    elseif minuteSummaryEnabled() then
-        log("EveryOneMinute.Add unavailable; minute diagnostics inactive")
+    else
+        log("EveryOneMinute.Add unavailable; sleep diagnostics inactive")
     end
 end
 

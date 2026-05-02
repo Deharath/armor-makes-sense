@@ -1,8 +1,8 @@
-# Armor Makes Sense — Technical Appendix (v1.2.5)
+# Armor Makes Sense — Technical Appendix (v1.2.7)
 
 _As of April 2, 2026_  
-`SCRIPT_VERSION=1.2.5`  
-`SCRIPT_BUILD=ams-b42-2026-04-02-v125`
+`SCRIPT_VERSION=1.2.7`  
+`SCRIPT_BUILD=ams-b42-2026-05-02-v127`
 
 ## Scope
 
@@ -108,6 +108,8 @@ Runtime split:
 - `client/core/ArmorMakesSense_LoadModel.lua` — client load-model wrapper
 - `client/core/ArmorMakesSense_UI.lua` — local inventory-tooltip patch and burden UI
 - `client/core/ArmorMakesSense_ContextFactory.lua` — client context builder
+- `client/ArmorMakesSense_Main.lua` — client boot facade and runtime registration; sleep planner hooks are now installed only after a confirmed local player exists
+- `client/ArmorMakesSense_SleepHooks.lua` — planner hooks for manual and auto-sleep; installed on the same delayed local-player seam as CMS so MP bed sleep uses the corrected wrapper path instead of the old eager boot seam
 - `client/core/ArmorMakesSense_ContextBinder.lua` — context injector
 - `client/core/ArmorMakesSense_ContextRefs.lua` — stable context references
 - `client/core/ArmorMakesSense_Bootstrap.lua` — thin binding/runtime helpers
@@ -156,12 +158,44 @@ AMS now participates in the shared `MakesSenseCompat` protocol when the other
 - AMS now expresses sleep-in-armor as a penalty fraction against vanilla sleep
   recovery, which lets standalone AMS stay vanilla-shaped while also giving the
   planner a coherent signal.
-- in multiplayer, AMS now leaves sleep fully vanilla. Sleep planner wrapping and
-  sleep-recovery penalties are singleplayer-only because the dedicated-server
-  sleep/fast-forward seam does not provide a trustworthy hook for custom sleep
-  scheduling.
-- the burden panel follows that rule and hides the `Sleep` row in multiplayer so
-  the UI does not advertise a sleep penalty that AMS no longer applies there.
+- AMS now mirrors CMS’s split between planner and runtime sleep logic:
+  planner penalty is estimated from current rigidity and fatigue before sleep,
+  while active sleep penalty is applied continuously during the sleep window.
+- in multiplayer, AMS now uses the same delayed local-player install seam as CMS
+  and only installs its own sleep planner hooks when CMS is not already the
+  compat coordinator. When AMS is the fallback coordinator, it uses the shared
+  compat penalty aggregation path instead of a mod-specific planner shortcut.
+- the active fatigue write stays authoritative on the server. The MP client
+  still resolves the penalty fraction for planning and diagnostics, but does not
+  apply the fatigue write locally.
+- on wake, AMS now prefers the actually observed wake fatigue result when the
+  wake transition has already changed fatigue. When CMS is absent, the
+  authoritative MP server ignores observed deltas that point opposite the
+  expected bed-quality direction and synthesizes the missing bed-based delta
+  once; when CMS is present, AMS backs off and lets CMS coordinate that wake
+  adjustment.
+- MP wake fatigue now uses a hard server-authoritative cutover:
+  - MP clients no longer synthesize wake fatigue or call local `wakeUp` paths
+  - MP server tracks asleep→awake transitions on `OnPlayerUpdate` with a
+    dedicated wake-sync asleep marker, instead of reusing generic runtime sleep
+    bookkeeping that other snapshot updates can consume
+  - MP server pushes an immediate `WakeTransition` snapshot from the same
+    authoritative runtime
+  - while sleeping, `OnPlayerUpdate` pushes realtime (`~1s`) sleep sync snapshots
+    so client fatigue cannot drift far during fast-forward tails
+  - MP server also sends native `syncPlayerStats` for FATIGUE on wake edge so the
+    waking client receives vanilla stat authority immediately
+  - while sleeping, MP server periodically sends native FATIGUE stat sync so long
+    fast-forward windows stay authoritative on the waking client too
+  - snapshots now include authoritative fatigue, and MP clients apply that
+    value for `WakeTransition` and sleeping snapshots
+  - awake non-wake snapshots never lower local fatigue; they only serve wake-edge
+    correction to prevent post-wake false dips
+  - wake-transition snapshots also reconcile local sleep flags
+    (`asleep=false`, `asleepTime=0`, `forceWakeUpTime=-1`) when the server
+    declares the player awake
+  - this keeps SP behavior unchanged while removing MP client prediction drift
+    and random-range mismatch against vanilla wake fatigue
 - when CMS is present, AMS no longer writes sleep fatigue directly.
 - instead, AMS exposes sleep penalty fractions and CMS composes them into its
   canonical fatigue path during the actual sleep window.

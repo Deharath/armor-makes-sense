@@ -42,7 +42,7 @@ function Runtime.runStaticStartupChecks(options)
         ctx("logOnce")("startup_no_swing", "startup check: Events.OnWeaponSwing.Add missing (swing telemetry disabled)")
     end
     if not (Events and Events.OnPlayerUpdate and hasFunction(Events.OnPlayerUpdate, "Add")) then
-        ctx("logOnce")("startup_no_player_update", "startup check: Events.OnPlayerUpdate.Add missing (discomfort clamp falls back to minute-tick)")
+        ctx("logOnce")("startup_no_player_update", "startup check: Events.OnPlayerUpdate.Add missing (sleep realtime tick disabled)")
     end
 
     if #issues > 0 then
@@ -114,36 +114,6 @@ function Runtime.enforceTestLockRealtime(player)
     end
 end
 
--- Single source of truth for vanilla discomfort suppression.
--- AMS supersedes vanilla discomfort completely, so keep this stat pinned at zero.
-function Runtime.enforceDiscomfortInvariant(player, state, force)
-    if not player then
-        return
-    end
-    state = state or ctx("ensureState")(player)
-    if type(state) ~= "table" then
-        return
-    end
-    if type(ctx("getDiscomfort")) ~= "function" or type(ctx("setDiscomfort")) ~= "function" then
-        return
-    end
-
-    local isMp = type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")()
-    if not isMp then
-        local nowMinutes = tonumber(ctx("getWorldAgeMinutes")()) or 0
-        local minuteNow = math.floor(nowMinutes)
-        local lastMinute = tonumber(state.lastDiscomfortSuppressMinute)
-        if (not force) and lastMinute ~= nil and minuteNow <= lastMinute then
-            return
-        end
-        state.lastDiscomfortSuppressMinute = minuteNow
-    end
-    local discomfort = tonumber(ctx("getDiscomfort")(player)) or 0
-    if discomfort > 0.0001 then
-        ctx("setDiscomfort")(player, 0.0)
-    end
-end
-
 function Runtime.onEveryOneMinute()
     if ctx("isRuntimeDisabled")() then
         return
@@ -161,7 +131,6 @@ function Runtime.onEveryOneMinute()
 
     ctx("runGuarded")("EveryOneMinute", ctx("tickPlayer"), player)
     local state = ctx("ensureState")(player)
-    Runtime.enforceDiscomfortInvariant(player, state, true)
     ctx("runGuarded")("BenchRunner", ctx("tickBenchRunner"), player, state)
 end
 
@@ -177,11 +146,9 @@ function Runtime.onPlayerUpdate(playerObj)
 
     local state = ctx("ensureState")(player)
     if ctx("isMultiplayer")() then
-        Runtime.enforceDiscomfortInvariant(player, state, false)
         return
     end
 
-    Runtime.enforceDiscomfortInvariant(player, state, false)
     ctx("runGuarded")("BenchRunner", ctx("tickBenchRunner"), player, state)
 
     if not ctx("isSystemEnabledCached")() then
@@ -266,9 +233,9 @@ function Runtime.registerEvents(mod)
     end
     if Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
         Events.OnPlayerUpdate.Add(ctx("onPlayerUpdate"))
-        ctx("logOnce")("per_frame_hooks_on", "OnPlayerUpdate hook enabled for realtime test-lock + minute-throttled discomfort clamp.")
+        ctx("logOnce")("per_frame_hooks_on", "OnPlayerUpdate hook enabled for realtime test-lock + sleep ticks.")
     else
-        ctx("logErrorOnce")("no_player_update_hook", "OnPlayerUpdate unavailable; discomfort clamp running on minute-tick fallback.")
+        ctx("logErrorOnce")("no_player_update_hook", "OnPlayerUpdate unavailable; realtime test-lock and sleep ticks disabled.")
     end
 
     if mod then

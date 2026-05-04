@@ -30,11 +30,9 @@ Missing runtime prerequisites leave the client runtime disabled for that session
 
 `EveryOneMinute` path:
 - `tickPlayer(player)`
-- discomfort invariant (`setDiscomfort(0.0)`)
 - benchmark runner tick
 
 `OnPlayerUpdate` path:
-- minute-throttled discomfort invariant
 - benchmark runner tick
 - sleep-time per-frame `tickPlayer`
 - active test-lock overrides
@@ -85,7 +83,6 @@ State lives in `player:getModData()["ArmorMakesSenseState"]` and includes:
 - `version` (`2`)
 - `lastUpdateGameMinutes`
 - `pendingCatchupMinutes`
-- `lastDiscomfortSuppressMinute`
 - `lastEnduranceObserved`
 - `lastArmorLoad`
 - `uiRuntimeSnapshot`
@@ -407,7 +404,7 @@ Compatibility work:
 - hideModel parity rules
 - render index placement near matching vanilla locations
 
-## Speed Rebalance and Discomfort Suppression
+## Speed Rebalance and Wearable Discomfort
 
 `SpeedRebalance`:
 - caches original non-zero discomfort in `ArmorMakesSense._originalDiscomfort`
@@ -415,8 +412,10 @@ Compatibility work:
 - normalizes run/combat speed modifiers for curated gear
 - applies slot reslots to AMS custom locations
 
-Runtime invariant:
-- `Runtime.enforceDiscomfortInvariant` clamps discomfort to zero at runtime
+Runtime behavior:
+- AMS does not clamp the live `DISCOMFORT` stat; vanilla non-clothing discomfort
+  sources such as bad sleep surfaces, wetness, temperature moodles, dragging
+  corpses, and vehicle over-encumbrance remain active.
 
 ## Configuration Defaults (`ArmorMakesSense.DEFAULTS`)
 

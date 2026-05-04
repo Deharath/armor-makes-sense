@@ -30,7 +30,7 @@ Multiplayer server:
 - client session-start requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline world time is not replayed on reconnect
 - a release-path incident recorder keeps a short rolling server trace per player and freezes suspicious endurance events for later support-report export
 - `OnWeaponSwing` applies armor-based strain overlay
-- `OnPlayerUpdate` enforces discomfort invariant between snapshot sends and handles wake-edge authority:
+- `OnPlayerUpdate` handles wake-edge authority between snapshot sends:
   - it keeps a dedicated wake-sync asleep marker instead of reusing general
     runtime sleep state, so normal snapshot refreshes cannot consume the wake edge
   - on asleep→awake transition it sends a `WakeTransition` snapshot
@@ -130,6 +130,7 @@ The diagnostics modules expose runtime state and per-item attribution for MP ins
 ### Harness Layer
 
 `client/diagnostics/ArmorMakesSense_MPClientHarness.lua`:
+- loads only on MP clients
 - registers on load, connect, player-create, and minute events
 - sends one-shot `harness_ping` requests
 - exposes `ams_mp_ping(reason)`
@@ -194,7 +195,7 @@ MP server context path:
 - `shared/ArmorMakesSense_PhysiologyShared.lua` — shared physiology formulas
 - `shared/ArmorMakesSense_StrainShared.lua` — shared strain logic
 - `client/core/ArmorMakesSense_IncidentTrace.lua` — client cache/formatting for mirrored MP incident traces
-- `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua` — client diagnostics receive/logging
-- `client/diagnostics/ArmorMakesSense_MPClientHarness.lua` — client harness ping path
+- `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua` — MP-client-only diagnostics receive/logging
+- `client/diagnostics/ArmorMakesSense_MPClientHarness.lua` — MP-client-only harness ping path
 - `server/diagnostics/ArmorMakesSense_MPDiagnosticsServer.lua` — server diagnostics dump/minute summaries
 - `server/diagnostics/ArmorMakesSense_MPServerHarness.lua` — server harness pong path

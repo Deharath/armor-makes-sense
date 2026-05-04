@@ -1,8 +1,8 @@
-# Armor Makes Sense — Technical Appendix (v1.2.7)
+# Armor Makes Sense — Technical Appendix (v1.2.8)
 
 _As of April 2, 2026_  
-`SCRIPT_VERSION=1.2.7`  
-`SCRIPT_BUILD=ams-b42-2026-05-02-v127`
+`SCRIPT_VERSION=1.2.8`
+`SCRIPT_BUILD=ams-b42-2026-05-04-v128`
 
 ## Scope
 
@@ -19,14 +19,14 @@ The codebase is organized around five technical references:
 
 Core design intent:
 - replace vanilla discomfort gameplay pressure with physical costs
-- keep discomfort pinned to zero
+- remove worn item discomfort as an armor cost while preserving non-clothing vanilla discomfort
 - model endurance pressure, thermal pressure, breathing restriction, melee muscle strain, and sleep recovery slowdown
 - keep mild thermal drift near neutral so ordinary walking does not constantly flip armor between helpful and burdensome
 - prefer sustained core/body-heat evidence over short-lived movement warmth when classifying hot-side thermal burden
 
 Runtime split:
 - singleplayer uses the full client runtime (`Runtime`, `Tick`, `Combat`, client `Physiology`)
-- multiplayer uses a server runtime (`MPServerRuntime`) for endurance, fatigue, discomfort suppression, and melee strain
+- multiplayer uses a server runtime (`MPServerRuntime`) for endurance, fatigue, wake-edge sync, and melee strain
 - multiplayer clients request and cache server snapshots through `MPClientRuntime` for UI display
 - multiplayer session-start snapshot requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline time is not replayed as live endurance drain
 - MP snapshot refresh runs the shared physiology path at `dt=0` so runtime snapshot fields stay current without applying gameplay drain
@@ -100,7 +100,7 @@ Runtime split:
 - `shared/ArmorMakesSense_PhysiologyShared.lua` — shared endurance/thermal/breathing/sleep formulas
 - `shared/ArmorMakesSense_StrainShared.lua` — shared melee strain logic
 - `shared/ArmorMakesSense_SlotCompat.lua` — custom body locations and compatibility rules
-- `shared/ArmorMakesSense_SpeedRebalance.lua` — discomfort suppression, speed overrides, and reslots
+- `shared/ArmorMakesSense_SpeedRebalance.lua` — worn item discomfort zeroing, speed overrides, and reslots
 
 ### Client core and models
 - `client/core/ArmorMakesSense_Utils.lua` — utility helpers
@@ -124,8 +124,8 @@ Runtime split:
 - `client/models/ArmorMakesSense_Physiology.lua` — SP physiology model and UI runtime snapshot production
 
 ### Diagnostics
-- `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua` — client diagnostics receive/logging path
-- `client/diagnostics/ArmorMakesSense_MPClientHarness.lua` — client harness ping path
+- `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua` — MP-client-only diagnostics receive/logging path
+- `client/diagnostics/ArmorMakesSense_MPClientHarness.lua` — MP-client-only harness ping path
 - `server/diagnostics/ArmorMakesSense_MPDiagnosticsServer.lua` — server diagnostics dump and minute summaries
 - `server/diagnostics/ArmorMakesSense_MPServerHarness.lua` — server harness pong path
 

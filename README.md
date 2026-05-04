@@ -2,13 +2,13 @@
 
 **Build 42 mod for Project Zomboid.**
 
-Armor is a physical tradeoff, not a psychological penalty. This mod replaces vanilla's discomfort system with physical costs: endurance drain, muscle strain, breathing restriction, thermal pressure, and sleep recovery penalties -- all through vanilla's existing systems.
+Armor is a physical tradeoff, not a psychological penalty. This mod removes armor as a vanilla discomfort source and adds physical costs: endurance drain, muscle strain, breathing restriction, thermal pressure, and sleep recovery penalties -- all through vanilla's existing systems.
 
-No stress penalties. Just physics.
+No armor stress penalties. Just physics.
 
 ## What It Does
 
-**Discomfort zeroed.** Vanilla's discomfort modifier is set to zero on all wearable items at boot. Armor no longer causes stress or unhappiness.
+**Wearable discomfort zeroed.** Vanilla's discomfort modifier is set to zero on wearable items at boot. Armor no longer causes stress or unhappiness, while non-clothing discomfort sources remain vanilla.
 
 **Speed rebalance.** Run speed and combat speed modifiers are normalised by body region for known protective gear. Leg armor affects running. Arm and shoulder armor affect combat speed. Light pads stay neutral.
 

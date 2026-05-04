@@ -179,8 +179,9 @@ function Stats.getWetness(player)
 end
 
 function Stats.setDiscomfort(player, value)
-    -- Discomfort suppression is an immediate client UX fix (fidget/moodle noise),
-    -- so allow this write in MP while other gameplay-affecting stats remain blocked.
+    if shouldBlockMpWrite() then
+        return
+    end
     local stats = ctx("safeMethod")(player, "getStats")
     if not stats then
         return

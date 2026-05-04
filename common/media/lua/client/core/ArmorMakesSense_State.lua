@@ -61,12 +61,7 @@ function State.ensureState(player)
     state.version = 2
     state.lastUpdateGameMinutes = tonumber(state.lastUpdateGameMinutes) or ctx("getWorldAgeMinutes")()
     state.pendingCatchupMinutes = math.max(0, tonumber(state.pendingCatchupMinutes) or 0)
-    local suppressMinute = tonumber(state.lastDiscomfortSuppressMinute)
-    if suppressMinute ~= nil then
-        state.lastDiscomfortSuppressMinute = math.floor(suppressMinute)
-    else
-        state.lastDiscomfortSuppressMinute = nil
-    end
+    state.lastDiscomfortSuppressMinute = nil
     state.lastEnduranceObserved = tonumber(state.lastEnduranceObserved)
     state.lastArmorLoad = tonumber(state.lastArmorLoad) or 0
     state.uiRuntimeSnapshot = type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or nil

@@ -1,5 +1,10 @@
 ArmorMakesSense = ArmorMakesSense or {}
 
+local runningOnClient = (type(isClient) == "function") and (isClient() == true)
+if not runningOnClient then
+    return
+end
+
 local MP = nil
 do
     local ok, mod = pcall(require, "ArmorMakesSense_MPCompat")

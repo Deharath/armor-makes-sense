@@ -1,5 +1,10 @@
 ArmorMakesSense = ArmorMakesSense or {}
 
+local runningOnClient = (type(isClient) == "function") and (isClient() == true)
+if not runningOnClient then
+    return
+end
+
 local okMpCompat, mpCompatOrErr = pcall(require, "ArmorMakesSense_MPCompat")
 if not okMpCompat then
     print("[ArmorMakesSense][MP][DIAG][CLIENT][ERROR] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))

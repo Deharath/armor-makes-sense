@@ -58,8 +58,8 @@ require "testing/ArmorMakesSense_BenchRunner"
 local Mod = ArmorMakesSense
 local MOD_KEY = "ArmorMakesSenseState"
 local mpCompat = (okMpCompat and mpCompatOrErr) or (ArmorMakesSense and ArmorMakesSense.MP) or {}
-local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.2.7")
-local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-05-02-v127")
+local SCRIPT_VERSION = tostring(mpCompat.SCRIPT_VERSION or "1.2.8")
+local SCRIPT_BUILD = tostring(mpCompat.SCRIPT_BUILD or "ams-b42-2026-05-04-v128")
 local warned = {}
 local cachedEnableSystem = true
 

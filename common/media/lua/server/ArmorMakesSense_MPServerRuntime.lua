@@ -477,48 +477,6 @@ local function getBodyTemperature(playerObj)
     return nil
 end
 
-local function getDiscomfort(playerObj)
-    local stats = safeCall(playerObj, "getStats")
-    if not stats then
-        return nil
-    end
-
-    local discomfort = tonumber(safeCall(stats, "getDiscomfort"))
-    if discomfort ~= nil then
-        return discomfort
-    end
-
-    if CharacterStat and CharacterStat.DISCOMFORT then
-        return tonumber(safeCall(stats, "get", CharacterStat.DISCOMFORT))
-    end
-
-    return nil
-end
-
-local function setDiscomfort(playerObj, value)
-    local stats = safeCall(playerObj, "getStats")
-    if not stats then
-        return
-    end
-
-    value = clamp(value, 0, 100)
-    if type(stats.setDiscomfort) == "function" then
-        safeCall(stats, "setDiscomfort", value)
-        return
-    end
-
-    if CharacterStat and CharacterStat.DISCOMFORT then
-        safeCall(stats, "set", CharacterStat.DISCOMFORT, value)
-    end
-end
-
-local function enforceDiscomfortInvariant(playerObj)
-    local discomfort = tonumber(getDiscomfort(playerObj)) or 0
-    if discomfort > 0.0001 then
-        setDiscomfort(playerObj, 0.0)
-    end
-end
-
 local function getItemDisplayLabel(item)
     local displayName = tostring(safeCall(item, "getDisplayName") or safeCall(item, "getName") or "")
     if displayName ~= "" then
@@ -996,7 +954,6 @@ local function updatePlayer(playerObj, reason, requestArgs)
     if not mpState then
         return
     end
-    enforceDiscomfortInvariant(playerObj)
 
     local normalizedReason = lower(reason)
     local nowMinute = tonumber(getWorldAgeMinutes()) or 0
@@ -1181,7 +1138,6 @@ local function onPlayerUpdate(playerObj)
         mpState.lastSleepRealtimeSnapshotWallSecond = 0
     end
 
-    enforceDiscomfortInvariant(playerObj)
 end
 
 local function onClientCommand(module, command, playerObj, args)
@@ -1303,7 +1259,7 @@ local function registerEvents()
     if Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
         Events.OnPlayerUpdate.Add(onPlayerUpdate)
     else
-        log("Events.OnPlayerUpdate.Add unavailable; discomfort invariant runs on snapshot cadence")
+        log("Events.OnPlayerUpdate.Add unavailable; wake-edge authority disabled")
     end
 
     if Events and Events.OnGameBoot and type(Events.OnGameBoot.Add) == "function" then

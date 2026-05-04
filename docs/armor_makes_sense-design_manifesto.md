@@ -101,7 +101,7 @@ Armor should not:
 * Apply arbitrary combat accuracy or damage penalties
 * Interact with panic or mood systems
 
-Vanilla PZ uses DiscomfortModifier on armor to induce stress (B42.14+; earlier builds used unhappiness). AMS zeroes DiscomfortModifier on all wearable items at boot — vanilla's psychological discomfort system is completely replaced by AMS's physical cost model. No stress, no unhappiness, no moodle penalties from wearing armor.
+Vanilla PZ uses DiscomfortModifier on armor to induce stress (B42.14+; earlier builds used unhappiness). AMS zeroes DiscomfortModifier on wearable items at boot, so armor no longer feeds vanilla psychological discomfort. Non-clothing discomfort sources such as poor sleep surfaces, wetness, temperature, dragging corpses, and vehicle over-encumbrance remain vanilla behavior.
 
 ---
 

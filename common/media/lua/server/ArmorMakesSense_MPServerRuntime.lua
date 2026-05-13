@@ -64,7 +64,9 @@ local IncidentRecorder = incidentRecorderOrErr
 local DEFAULTS = ArmorMakesSense.DEFAULTS or {}
 local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local COST_DRIVER_THRESHOLD = 1.5
-local COMBAT_LATCH_ATTACK_SECONDS = 1.25
+local COMBAT_LATCH_ATTACK_SECONDS = 3.0
+local ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES = 1.0
+local ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES = 1.10
 local FATIGUE_STAT_MASK = 16
 local SLEEP_FATIGUE_SYNC_INTERVAL_MINUTES = 1.0
 local SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS = 1
@@ -969,6 +971,15 @@ local function updatePlayer(playerObj, reason, requestArgs)
     local sleepingNow = isPlayerAsleep(playerObj)
     if sleepingNow then
         mpState.lastWakeSyncAsleepFlag = true
+    elseif mpState.pendingCatchupMinutes > ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES then
+        log(string.format(
+            "discarding stale active endurance catchup player=%s pending=%.3f cap=%.3f",
+            tostring(playerName(playerObj)),
+            tonumber(mpState.pendingCatchupMinutes) or 0,
+            ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES
+        ))
+        mpState.pendingCatchupMinutes = ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES
+        mpState.lastEnduranceObserved = tonumber(getEndurance(playerObj))
     end
 
     if mpState.pendingCatchupMinutes <= 0 then

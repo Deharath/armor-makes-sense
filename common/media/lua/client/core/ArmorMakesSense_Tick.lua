@@ -15,6 +15,9 @@ local function ctx(name)
     return C[name]
 end
 
+local ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES = 1.0
+local ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES = 1.10
+
 function Tick.setContext(context)
     C = context or {}
 end
@@ -92,6 +95,18 @@ function Tick.tickPlayer(player)
     local activityFactor = ctx("getActivityFactor")(player, options)
     local activityLabel = ctx("getActivityLabel")(player)
     local postureLabel = ctx("getPostureLabel")(player)
+    if postureLabel ~= "sleep" and pendingCatchupMinutes > ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES then
+        local log = ctx("log")
+        if type(log) == "function" then
+            log(string.format(
+                "discarding stale active endurance catchup pending=%.3f cap=%.3f",
+                tonumber(pendingCatchupMinutes) or 0,
+                ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES
+            ))
+        end
+        pendingCatchupMinutes = ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES
+        state.lastEnduranceObserved = tonumber(ctx("getEndurance")(player))
+    end
     if autoPhase then
         local forcedAct = ctx("lower")(autoPhase.activity or "")
         if forcedAct == "walk" then

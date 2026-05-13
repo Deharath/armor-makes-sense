@@ -69,6 +69,12 @@ Profile and environment are sampled once outside the catch-up slice loop.
 
 `OnWeaponSwing` is registered as a pass-through event hook.
 
+Recent combat is contextual rather than a continuous AMS endurance-drain band.
+`isAttackStarted` opens a short combat pulse. Stationary aiming does not start
+or refresh that pulse and does not raise the activity factor. This keeps UI and
+strain context aligned with actual attacks while leaving 42.18+ melee stamina
+loss to vanilla's per-swing/per-hit combat path.
+
 ## Option Resolution and Precedence
 
 Client/SP (`State.getOptions()`) precedence:
@@ -298,9 +304,13 @@ drainApplied   = drainPerMinute * dtMinutes
 
 Activity drain scale:
 - walk: `0.06`, `0.02`, or `0` depending on endurance/env/load conditions
-- combat: `0.20`
+- combat: `0`
 - run: `0.335`
 - sprint: `0.58`
+
+`dtMinutes <= 0` samples only telemetry/snapshot fields. It does not throttle
+regen, apply drain, call compat endurance drain, or write the live endurance
+stat.
 
 ### Idle Recovery Bounds
 
@@ -356,11 +366,11 @@ Termination:
 
 `Environment.getActivityLabel(player)`:
 - priority: sprint > run > walk > combat (latched) > idle
-- combat latch: attack 15 seconds, aiming 6 seconds
+- combat latch: attack 3 seconds
 
 `Environment.getActivityFactor(player, options)`:
 - maps to `ActivityIdle`, `ActivityWalk`, `ActivityJog`, `ActivitySprint`
-- stationary attack-started or aiming uses `ActivityJog`
+- stationary attack-started uses `ActivityJog`
 
 `Environment.getPostureLabel(player)`:
 - returns `"sleep"`, `"sit_ground"`, `"sit_vehicle"`, or `"stand"`

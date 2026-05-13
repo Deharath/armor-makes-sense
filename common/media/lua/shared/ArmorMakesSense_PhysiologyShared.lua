@@ -1014,7 +1014,9 @@ local function computeEnduranceDrain(controlled, loadNorm, isIdle, activityLabel
                 activityDrainScale = 0
             end
         elseif activityLabel == "combat" then
-            activityDrainScale = 0.20
+            -- 42.18 vanilla owns melee stamina per swing/hit; AMS keeps combat as
+            -- context for regen, breathing, UI, and strain without adding a timed drain.
+            activityDrainScale = 0
         elseif activityLabel == "run" then
             activityDrainScale = 0.335
         elseif activityLabel == "sprint" then
@@ -1086,6 +1088,8 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     if endurance == nil then
         return nil
     end
+    local sampleMinutes = math.max(0, tonumber(dtMinutes) or 0)
+    local canApplyEndurance = sampleMinutes > 0
 
     local massLoad = tonumber(profile.massLoad) or tonumber(profile.physicalLoad) or 0
     local wearabilityLoad = tonumber(profile.wearabilityLoad) or tonumber(profile.thermalLoad) or 0
@@ -1112,25 +1116,32 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     local isIdle = activityLabel == "idle"
     local isSitting = postureLabel and (string.find(postureLabel, "sit", 1, true) ~= nil)
     local isWalk = activityLabel == "walk"
-    local nmsContribution = resolveNmsEnduranceContribution(player, dtMinutes, naturalDelta, endurance, previous)
+    local nmsContribution = nil
+    if canApplyEndurance then
+        nmsContribution = resolveNmsEnduranceContribution(player, sampleMinutes, naturalDelta, endurance, previous)
+    end
     local nmsRegenScale = tonumber(nmsContribution and nmsContribution.regenScale) or 1.0
     local nmsDrain = math.max(0, tonumber(nmsContribution and nmsContribution.extraDrain) or 0)
 
-    local _, amsRegenScale = computeRegenControlledEndurance(
-        previous,
-        loadNorm,
-        naturalDelta,
-        endurance,
-        isIdle,
-        isSitting,
-        isWalk,
-        envFactor,
-        options,
-        activityLoadScale
-    )
+    local amsRegenScale = 1.0
+    if canApplyEndurance then
+        local _
+        _, amsRegenScale = computeRegenControlledEndurance(
+            previous,
+            loadNorm,
+            naturalDelta,
+            endurance,
+            isIdle,
+            isSitting,
+            isWalk,
+            envFactor,
+            options,
+            activityLoadScale
+        )
+    end
     local regenScale = amsRegenScale * nmsRegenScale
     local controlled = endurance
-    if previous ~= nil and naturalDelta > 0 and (loadNorm > 0 or nmsRegenScale < 0.9999) then
+    if canApplyEndurance and previous ~= nil and naturalDelta > 0 and (loadNorm > 0 or nmsRegenScale < 0.9999) then
         controlled = previous + (naturalDelta * regenScale)
     end
 
@@ -1141,24 +1152,26 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     end
 
     local amsDrainApplied = 0
-    controlled, amsDrainApplied = computeEnduranceDrain(
-        controlled,
-        loadNorm,
-        isIdle,
-        activityLabel,
-        envFactor,
-        endurance,
-        endMoodle,
-        options,
-        activityLoadScale,
-        dtMinutes
-    )
+    if canApplyEndurance then
+        controlled, amsDrainApplied = computeEnduranceDrain(
+            controlled,
+            loadNorm,
+            isIdle,
+            activityLabel,
+            envFactor,
+            endurance,
+            endMoodle,
+            options,
+            activityLoadScale,
+            sampleMinutes
+        )
+    end
     if nmsDrain > 0 then
         controlled = controlled - nmsDrain
     end
     local drainApplied = amsDrainApplied + nmsDrain
 
-    if previous ~= nil and isIdle and naturalDelta > 0 then
+    if canApplyEndurance and previous ~= nil and isIdle and naturalDelta > 0 then
         if controlled < previous then
             controlled = previous
         end
@@ -1167,8 +1180,10 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
         end
     end
 
-    controlled = applyEnduranceCorrection(player, controlled, endurance)
-    recordNmsEnduranceResult(player, controlled, nmsRegenScale, nmsDrain)
+    if canApplyEndurance then
+        controlled = applyEnduranceCorrection(player, controlled, endurance)
+        recordNmsEnduranceResult(player, controlled, nmsRegenScale, nmsDrain)
+    end
 
     local enduranceDelta = controlled - endurance
     state.lastEnduranceObserved = controlled

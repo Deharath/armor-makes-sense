@@ -30,6 +30,7 @@ Multiplayer server:
 - client session-start requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline world time is not replayed on reconnect
 - a release-path incident recorder keeps a short rolling server trace per player and freezes suspicious endurance events for later support-report export
 - `OnWeaponSwing` applies armor-based strain overlay
+- `OnWeaponSwing` also opens a short recent-combat context pulse; the pulse is not a continuous AMS endurance-drain source
 - `OnPlayerUpdate` handles wake-edge authority between snapshot sends:
   - it keeps a dedicated wake-sync asleep marker instead of reusing general
     runtime sleep state, so normal snapshot refreshes cannot consume the wake edge
@@ -68,6 +69,7 @@ Server flow:
 - `MPServerRuntime` recomputes or reuses the latest runtime snapshot for the requesting player
 - fresh request snapshots run the shared physiology path at `dt=0` so UI/runtime fields refresh without applying gameplay drain
 - if shared input preparation fails, pending catch-up is discarded instead of being allowed to accumulate into a large replay backlog
+- awake active endurance replay is capped to one game minute; if a server/client request arrives with a larger pending active backlog, the server anchors `lastEnduranceObserved` to the current endurance stat and discards the stale excess before applying endurance costs
 - if AMS applies an abnormal burst of endurance loss during one server update invocation, the runtime freezes an incident trace, aborts further replay in that invocation, clears pending replay, and rebuilds a fresh `dt=0` snapshot
 - the snapshot payload includes:
   - `loadNorm`

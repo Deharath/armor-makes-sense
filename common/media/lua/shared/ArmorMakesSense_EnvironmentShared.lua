@@ -15,8 +15,7 @@ local function ctx(name)
     return C[name]
 end
 
-local COMBAT_LATCH_ATTACK_SECONDS = 15.0
-local COMBAT_LATCH_AIM_SECONDS = 6.0
+local COMBAT_LATCH_ATTACK_SECONDS = 3.0
 
 function Environment.setContext(context)
     C = context or {}
@@ -151,14 +150,13 @@ function Environment.getActivityFactor(player, options)
     local moving = ctx("toBoolean")(ctx("safeMethod")(player, "isPlayerMoving"))
         or ctx("toBoolean")(ctx("safeMethod")(player, "isMoving"))
     local attackStarted = ctx("toBoolean")(ctx("safeMethod")(player, "isAttackStarted"))
-    local isAiming = ctx("toBoolean")(ctx("safeMethod")(player, "isAiming"))
     if ctx("toBoolean")(ctx("safeMethod")(player, "isSprinting")) then
         factor = options.ActivitySprint
     elseif ctx("toBoolean")(ctx("safeMethod")(player, "isRunning")) then
         factor = options.ActivityJog
     elseif moving then
         factor = options.ActivityWalk
-    elseif attackStarted or isAiming then
+    elseif attackStarted then
         factor = options.ActivityJog
     end
     return ctx("clamp")(tonumber(factor) or 1.0, 0.2, 1.8)
@@ -167,22 +165,14 @@ end
 function Environment.getActivityLabel(player)
     local moving = ctx("toBoolean")(ctx("safeMethod")(player, "isPlayerMoving"))
         or ctx("toBoolean")(ctx("safeMethod")(player, "isMoving"))
-    local isAiming = ctx("toBoolean")(ctx("safeMethod")(player, "isAiming"))
     local attackStarted = ctx("toBoolean")(ctx("safeMethod")(player, "isAttackStarted"))
     local nowMinutes = tonumber(type(ctx("getWorldAgeMinutes")) == "function" and ctx("getWorldAgeMinutes")() or 0) or 0
     local ensureState = ctx("ensureState")
     local state = type(ensureState) == "function" and ensureState(player) or nil
     local attackHoldMinutes = COMBAT_LATCH_ATTACK_SECONDS / 60.0
-    local aimHoldMinutes = COMBAT_LATCH_AIM_SECONDS / 60.0
 
     if state and attackStarted then
         state.recentCombatUntilMinute = nowMinutes + attackHoldMinutes
-    elseif state and isAiming then
-        local current = tonumber(state.recentCombatUntilMinute) or 0
-        local refreshed = nowMinutes + aimHoldMinutes
-        if refreshed > current then
-            state.recentCombatUntilMinute = refreshed
-        end
     end
 
     if ctx("toBoolean")(ctx("safeMethod")(player, "isSprinting")) then

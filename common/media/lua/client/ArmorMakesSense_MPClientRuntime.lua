@@ -334,7 +334,7 @@ local function getClientActivityLabel(playerObj)
     if moving then
         return "walk"
     end
-    if toBoolean(safeCall(playerObj, "isAttackStarted")) or toBoolean(safeCall(playerObj, "isAiming")) then
+    if toBoolean(safeCall(playerObj, "isAttackStarted")) then
         return "combat"
     end
     return "idle"

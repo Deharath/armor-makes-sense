@@ -33,7 +33,10 @@ Runtime split:
 - if MP shared-input preparation fails, the server drops pending catch-up instead of retrying an unbounded stale backlog
 - release builds keep a hidden server-first MP incident recorder that freezes suspicious endurance events and mirrors them into support reports without exposing separate debug UI
 - mirrored incident traces stay on one `seq` while the server is still filling the post-trigger window, so clients must accept fuller same-seq payloads and the recorder must keep repeated suspicious rows instead of treating them as duplicates
+- active, non-sleep endurance replay is capped to one game minute; stale active catch-up is discarded after anchoring the endurance baseline to the current stat so one current activity label cannot replay a long backlog
 - the MP runtime also applies one conservative burst-drain guard: if AMS-only endurance loss becomes abnormal inside a single server update invocation, replay stops and the remaining pending replay is discarded
+- combat is contextual state, not a locomotion drain band: vanilla 42.18 owns melee stamina per swing/hit, while AMS uses recent combat for regen, breathing context, UI/snapshot attribution, and armor strain
+- stationary aiming does not start or refresh AMS combat context and does not raise the activity factor
 - shared load/model code lives in `shared/` so SP and MP use the same armor profile math
 - custom sandbox options must use dotted ids such as `ArmorMakesSense.EnableThermalModel`; `page = ArmorMakesSense` only affects sandbox UI grouping and does not create `SandboxVars.ArmorMakesSense`
 

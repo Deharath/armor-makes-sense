@@ -72,7 +72,7 @@ Runtime split:
 - tooltip rows and thresholds
 - burden panel tiers and composition
 - cost-driver display
-- tab injection and fallback window behavior
+- tab injection, controller tab switching, and fallback window behavior
 
 ### Testing Reference
 

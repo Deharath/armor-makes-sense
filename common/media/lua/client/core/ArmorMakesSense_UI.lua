@@ -661,6 +661,34 @@ local function ensurePanelClasses()
         end
     end
 
+    function AMSBurdenPanel:onJoypadDown(button, joypadData)
+        if not Joypad then
+            return
+        end
+
+        local playerInfo = type(getPlayerInfoPanel) == "function" and getPlayerInfoPanel(self.playerNum) or nil
+        if button == Joypad.LBumper or button == Joypad.RBumper then
+            if playerInfo and type(playerInfo.onJoypadDown) == "function" then
+                playerInfo:onJoypadDown(button, joypadData)
+            end
+            return
+        end
+
+        if button == Joypad.BButton then
+            if playerInfo and type(playerInfo.toggleView) == "function" then
+                playerInfo:toggleView(tr("UI_AMS_Tab_Burden", "Burden"))
+            elseif self.isStandalone then
+                local parent = self:getParent()
+                if parent and type(parent.setVisible) == "function" then
+                    parent:setVisible(false)
+                end
+            end
+            if type(setJoypadFocus) == "function" then
+                setJoypadFocus(self.playerNum, nil)
+            end
+        end
+    end
+
     function AMSBurdenPanel:prerender()
         self:collectSnapshot(false)
         if self.helpBtn then

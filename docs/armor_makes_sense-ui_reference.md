@@ -70,6 +70,7 @@ Tab behavior:
 - attempts Burden tab injection into character info tabs by patching `ISCharacterInfoWindow.createChildren`
 - clamps the character window to the full tab-strip width so all buttons remain visible
 - retroactively attaches to any already-created instance
+- forwards controller LB/RB from the Burden tab to vanilla character-info tab switching; B closes the active Burden view/focus
 - uses standalone `AMSBurdenWindow` if tab injection fails
 
 ## UI-Related Modules

@@ -1,8 +1,10 @@
-# Armor Makes Sense — Multiplayer Reference (v1.2.2)
+# Armor Makes Sense — Multiplayer Reference (v1.2.11)
 
-_As of March 11, 2026_  
-`SCRIPT_VERSION=1.2.2`  
-`SCRIPT_BUILD=ams-b42-2026-03-11-v122`
+_As of July 10, 2026_
+
+`SCRIPT_VERSION=1.2.11`
+
+`SCRIPT_BUILD=ams-b42-2026-07-10-v1211`
 
 ## Boot Structure
 
@@ -36,14 +38,18 @@ Multiplayer server:
     runtime sleep state, so normal snapshot refreshes cannot consume the wake edge
   - on asleep→awake transition it sends a `WakeTransition` snapshot
   - it also sends native `syncPlayerStats` for FATIGUE (`CharacterStat` mask bit 4) on the same wake edge
-- while sleeping it periodically sends the same native FATIGUE stat sync to keep
-  long fast-forward windows authoritative
-- while sleeping it also pushes realtime (`SleepRealtimeSync`) snapshots from
-  `OnPlayerUpdate` at ~1s wall-clock cadence
+- while sleeping it sends the same native FATIGUE stat sync at a wall-clock
+  cadence capped to one send per five seconds; accelerated game time cannot
+  multiply this traffic
+- while sleeping it pushes realtime (`SleepRealtimeSync`) snapshots from
+  `OnPlayerUpdate`, with all sleep snapshot sources sharing a one-per-second
+  wall-clock cap
 
 Multiplayer client:
-- `MPClientRuntime` registers `OnServerCommand`, `OnConnected`, `OnCreatePlayer`, `OnClothingUpdated`, `EveryOneMinute`, and `OnPlayerUpdate`
-- it ensures UI hooks exist, requests fresh snapshots, expires stale cache entries, and marks the Burden UI dirty when new data arrives
+- `MPClientRuntime` registers `OnServerCommand`, `OnConnected`, `OnCreatePlayer`, `OnClothingUpdated`, and `EveryOneMinute`
+- it ensures UI hooks exist, requests snapshots for session/local-clothing/recovery
+  events, expires stale cache entries, and marks the Burden UI dirty when new
+  data arrives
 - on `WakeTransition` snapshots it reconciles local sleep flags to server authority (`asleep=false`, `asleepTime=0`, `forceWakeUpTime=-1`)
 - it applies authoritative fatigue for `WakeTransition` and sleeping snapshots
 - it does not apply awake non-wake fatigue snapshots downward (to avoid fighting
@@ -60,13 +66,21 @@ Constants in `ArmorMakesSense_MPCompat.lua`:
 - state key: `ArmorMakesSenseState`
 
 Client flow:
-- load/connect/player-create/clothing changes request a snapshot immediately
-- repeated requests are throttled to the cadence defined by `SNAPSHOT_FALLBACK_SECONDS`
+- load/connect/player-create requests are coalesced by the cadence defined by
+  `SNAPSHOT_FALLBACK_SECONDS`
+- local clothing changes request a rate-limited refresh; clothing packets for
+  remote players are ignored
+- healthy clients consume the server's minute pushes without polling the server
+  back on the same minute event
+- `EveryOneMinute` requests a recovery snapshot only when the local cache is
+  missing or stale
 - cache expiry is `max(10, fallback * 4)` seconds
 - snapshot requests include the latest known incident sequence so the server only mirrors new frozen incidents
 
 Server flow:
 - `MPServerRuntime` recomputes or reuses the latest runtime snapshot for the requesting player
+- `EveryOneMinute` is the normal awake snapshot push; it is not paired with a
+  healthy-client request/reply round trip
 - fresh request snapshots run the shared physiology path at `dt=0` so UI/runtime fields refresh without applying gameplay drain
 - if shared input preparation fails, pending catch-up is discarded instead of being allowed to accumulate into a large replay backlog
 - awake active endurance replay is capped to one game minute; if a server/client request arrives with a larger pending active backlog, the server anchors `lastEnduranceObserved` to the current endurance stat and discards the stale excess before applying endurance costs
@@ -122,6 +136,9 @@ Server-side MP state:
 - `mpServer.lastSnapshotSentSecond`
 - `mpServer.recentCombatUntilMinute`
 - `mpServer.lastWakeSyncAsleepFlag`
+- `mpServer.lastSleepSnapshotSentWallSecond`
+- `mpServer.lastSleepFatigueSyncWallSecond`
+- `mpServer.lastSleepRealtimeUpdateWallSecond`
 - `mpServer.thermalModelState`
 - `mpServer.incidentRecorder`
 

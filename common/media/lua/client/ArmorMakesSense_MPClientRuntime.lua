@@ -340,7 +340,7 @@ local function getClientActivityLabel(playerObj)
     return "idle"
 end
 
-function sendSnapshotRequest(playerObj, reason, force)
+local function sendSnapshotRequest(playerObj, reason)
     if not canSendRequest(playerObj) then
         return false
     end
@@ -351,7 +351,10 @@ function sendSnapshotRequest(playerObj, reason, force)
     end
 
     local nowSecond = getWallClockSeconds()
-    if (not force) and (nowSecond - mpClient.lastRequestWallSecond) < SNAPSHOT_INTERVAL_SECONDS then
+    local lastRequest = tonumber(mpClient.lastRequestWallSecond) or 0
+    if lastRequest > 0
+        and nowSecond >= lastRequest
+        and (nowSecond - lastRequest) < SNAPSHOT_INTERVAL_SECONDS then
         return false
     end
 
@@ -370,7 +373,7 @@ function sendSnapshotRequest(playerObj, reason, force)
         return false
     end
 
-    mpClient.lastRequestWallSecond = nowSecond
+    mpClient.lastRequestWallSecond = math.max(1, nowSecond)
     return true
 end
 
@@ -470,7 +473,7 @@ local function onConnected()
         IncidentTrace.clear()
     end
     ensureMpUiHooks(player)
-    sendSnapshotRequest(player, "OnConnected", true)
+    sendSnapshotRequest(player, "OnConnected")
 end
 
 function ams_mp_snapshot_status()
@@ -506,20 +509,26 @@ local function onCreatePlayer(playerIndex, playerObj)
         IncidentTrace.clear()
     end
     ensureMpUiHooks(player)
-    sendSnapshotRequest(player, "OnCreatePlayer", true)
+    sendSnapshotRequest(player, "OnCreatePlayer")
 end
 
-local function onClothingUpdated()
+local function onClothingUpdated(changedPlayer)
     local player = getLocalPlayer()
+    if changedPlayer and changedPlayer ~= player then
+        return
+    end
     expireStaleSnapshot(player)
-    sendSnapshotRequest(player, "OnClothingUpdated", true)
+    sendSnapshotRequest(player, "OnClothingUpdated")
 end
 
 local function onEveryOneMinute()
     local player = getLocalPlayer()
-    expireStaleSnapshot(player)
+    local expired = expireStaleSnapshot(player)
     ensureMpUiHooks(player)
-    sendSnapshotRequest(player, "EveryOneMinute", false)
+    local state = player and ensureState(player) or nil
+    if expired or not (state and type(state.mpServerSnapshot) == "table") then
+        sendSnapshotRequest(player, "SnapshotRecovery")
+    end
 end
 
 local function logBootBanner(contextTag)
@@ -560,4 +569,4 @@ end
 registerEvents()
 logBootBanner("load")
 clearSnapshotState(getLocalPlayer(), true)
-sendSnapshotRequest(getLocalPlayer(), "load", true)
+sendSnapshotRequest(getLocalPlayer(), "load")

@@ -68,7 +68,7 @@ local COMBAT_LATCH_ATTACK_SECONDS = 3.0
 local ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES = 1.0
 local ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES = 1.10
 local FATIGUE_STAT_MASK = 16
-local SLEEP_FATIGUE_SYNC_INTERVAL_MINUTES = 1.0
+local SLEEP_FATIGUE_SYNC_INTERVAL_WALL_SECONDS = 5
 local SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS = 1
 
 local activeFormulaState = nil
@@ -239,9 +239,9 @@ local function ensurePlayerState(playerObj)
     mpState.wasSleeping = toBoolean(mpState.wasSleeping)
     mpState.recentCombatUntilMinute = tonumber(mpState.recentCombatUntilMinute)
     mpState.lastSnapshotSentSecond = tonumber(mpState.lastSnapshotSentSecond) or 0
-    mpState.lastSleepSnapshotMinute = tonumber(mpState.lastSleepSnapshotMinute) or 0
-    mpState.lastSleepFatigueSyncMinute = tonumber(mpState.lastSleepFatigueSyncMinute) or 0
-    mpState.lastSleepRealtimeSnapshotWallSecond = tonumber(mpState.lastSleepRealtimeSnapshotWallSecond) or 0
+    mpState.lastSleepSnapshotSentWallSecond = tonumber(mpState.lastSleepSnapshotSentWallSecond) or 0
+    mpState.lastSleepFatigueSyncWallSecond = tonumber(mpState.lastSleepFatigueSyncWallSecond) or 0
+    mpState.lastSleepRealtimeUpdateWallSecond = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
     mpState.pendingCatchupMinutes = math.max(0, tonumber(mpState.pendingCatchupMinutes) or 0)
     mpState.pendingSleepSession = type(mpState.pendingSleepSession) == "table" and mpState.pendingSleepSession or nil
     mpState.runtimeSnapshot = type(mpState.runtimeSnapshot) == "table" and mpState.runtimeSnapshot or nil
@@ -384,18 +384,18 @@ local function syncWakeFatigueToClient(playerObj)
     return syncFatigueToClient(playerObj, "wake")
 end
 
-local function syncSleepingFatigueToClient(playerObj, mpState, nowMinute)
+local function syncSleepingFatigueToClient(playerObj, mpState)
     if type(mpState) ~= "table" then
         return false
     end
-    local now = tonumber(nowMinute) or 0
-    local lastSync = tonumber(mpState.lastSleepFatigueSyncMinute) or 0
-    if lastSync > 0 and (now - lastSync) < SLEEP_FATIGUE_SYNC_INTERVAL_MINUTES then
+    local nowSecond = getWallClockSeconds()
+    local lastSync = tonumber(mpState.lastSleepFatigueSyncWallSecond) or 0
+    if lastSync > 0 and (nowSecond - lastSync) < SLEEP_FATIGUE_SYNC_INTERVAL_WALL_SECONDS then
         return false
     end
     local sent = syncFatigueToClient(playerObj, "sleep")
     if sent then
-        mpState.lastSleepFatigueSyncMinute = now
+        mpState.lastSleepFatigueSyncWallSecond = nowSecond
     end
     return sent
 end
@@ -885,14 +885,11 @@ local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncident
     end
 end
 
-local function shouldSendSleepingSnapshot(mpState, nowMinute, reason)
-    local normalizedReason = lower(reason)
-    if normalizedReason ~= "minute" then
-        return true
-    end
-    local lastMinute = tonumber(mpState.lastSleepSnapshotMinute) or 0
-    if lastMinute <= 0 or (nowMinute - lastMinute) >= 10 then
-        mpState.lastSleepSnapshotMinute = nowMinute
+local function shouldSendSleepingSnapshot(mpState)
+    local nowSecond = getWallClockSeconds()
+    local lastSent = tonumber(mpState.lastSleepSnapshotSentWallSecond) or 0
+    if lastSent <= 0 or (nowSecond - lastSent) >= SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS then
+        mpState.lastSleepSnapshotSentWallSecond = nowSecond
         return true
     end
     return false
@@ -945,8 +942,9 @@ local function resetCatchupState(playerObj, mpState, nowMinute)
     mpState.lastUpdateGameMinutes = tonumber(nowMinute) or 0
     mpState.pendingCatchupMinutes = 0
     mpState.lastAppliedDtMinutes = 0
-    mpState.lastSleepFatigueSyncMinute = 0
-    mpState.lastSleepRealtimeSnapshotWallSecond = 0
+    mpState.lastSleepSnapshotSentWallSecond = 0
+    mpState.lastSleepFatigueSyncWallSecond = 0
+    mpState.lastSleepRealtimeUpdateWallSecond = 0
     mpState.lastWakeSyncAsleepFlag = nil
     mpState.lastEnduranceObserved = tonumber(getEndurance(playerObj))
 end
@@ -1033,10 +1031,10 @@ local function updatePlayer(playerObj, reason, requestArgs)
         activeFormulaState = nil
 
         snapshot = buildRuntimeSnapshot(mpState, profile, {}, "sleep")
-        syncSleepingFatigueToClient(playerObj, mpState, nowMinute)
+        syncSleepingFatigueToClient(playerObj, mpState)
         if snapshot then
             mpState.runtimeSnapshot = snapshot
-            if shouldSendSleepingSnapshot(mpState, nowMinute, reason) then
+            if shouldSendSleepingSnapshot(mpState) then
                 sendSnapshot(playerObj, mpState, snapshot, reason, requestArgs and requestArgs.incident_seq, true)
             end
         end
@@ -1139,14 +1137,14 @@ local function onPlayerUpdate(playerObj)
 
     if sleepingNow then
         local nowWallSecond = getWallClockSeconds()
-        local lastSleepRealtime = tonumber(mpState.lastSleepRealtimeSnapshotWallSecond) or 0
+        local lastSleepRealtime = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
         if lastSleepRealtime <= 0 or (nowWallSecond - lastSleepRealtime) >= SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS then
-            mpState.lastSleepRealtimeSnapshotWallSecond = nowWallSecond
+            mpState.lastSleepRealtimeUpdateWallSecond = nowWallSecond
             updatePlayer(playerObj, "SleepRealtimeSync")
             return
         end
     else
-        mpState.lastSleepRealtimeSnapshotWallSecond = 0
+        mpState.lastSleepRealtimeUpdateWallSecond = 0
     end
 
 end

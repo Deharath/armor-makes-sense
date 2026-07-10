@@ -27,7 +27,10 @@ Core design intent:
 Runtime split:
 - singleplayer uses the full client runtime (`Runtime`, `Tick`, `Combat`, client `Physiology`)
 - multiplayer uses a server runtime (`MPServerRuntime`) for endurance, fatigue, wake-edge sync, and melee strain
-- multiplayer clients request and cache server snapshots through `MPClientRuntime` for UI display
+- multiplayer clients cache server-pushed snapshots through `MPClientRuntime`
+  for UI display; minute polling is recovery-only when the cache is missing or
+  stale, while local clothing refresh requests are coalesced and remote-player
+  clothing events are ignored
 - multiplayer session-start snapshot requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline time is not replayed as live endurance drain
 - MP snapshot refresh runs the shared physiology path at `dt=0` so runtime snapshot fields stay current without applying gameplay drain
 - if MP shared-input preparation fails, the server drops pending catch-up instead of retrying an unbounded stale backlog
@@ -185,11 +188,13 @@ AMS now participates in the shared `MakesSenseCompat` protocol when the other
   - MP server pushes an immediate `WakeTransition` snapshot from the same
     authoritative runtime
   - while sleeping, `OnPlayerUpdate` pushes realtime (`~1s`) sleep sync snapshots
-    so client fatigue cannot drift far during fast-forward tails
+    so client fatigue cannot drift far during fast-forward tails; all sleeping
+    snapshot sources share the same wall-clock send cap
   - MP server also sends native `syncPlayerStats` for FATIGUE on wake edge so the
     waking client receives vanilla stat authority immediately
-  - while sleeping, MP server periodically sends native FATIGUE stat sync so long
-    fast-forward windows stay authoritative on the waking client too
+  - while sleeping, MP server sends native FATIGUE stat sync at most once per
+    five wall-clock seconds, so accelerated game minutes cannot multiply packet
+    traffic while the snapshot path keeps the client current
   - snapshots now include authoritative fatigue, and MP clients apply that
     value for `WakeTransition` and sleeping snapshots
   - awake non-wake snapshots never lower local fatigue; they only serve wake-edge

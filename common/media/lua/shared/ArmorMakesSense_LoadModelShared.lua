@@ -3,35 +3,32 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
 local Core = ArmorMakesSense.Core
 Core.LoadModel = Core.LoadModel or {}
-local Classifier = ArmorMakesSense and ArmorMakesSense.Classifier
-pcall(require, "ArmorMakesSense_BreathingClassifier")
-local BreathingClassifier = ArmorMakesSense and ArmorMakesSense.BreathingClassifier
+local Utils = require "ArmorMakesSense_UtilsShared"
+local Classifier = require "ArmorMakesSense_ArmorClassifier"
+local BreathingClassifier = require "ArmorMakesSense_BreathingClassifier"
 
 local LoadModel = Core.LoadModel
-local C = {}
+
+LoadModel.COST_DRIVER_THRESHOLD = 1.5
 
 -- -----------------------------------------------------------------------------
 -- Item-to-load transformation
 -- -----------------------------------------------------------------------------
 
-local function ctx(name)
-    return C[name]
-end
-
-function LoadModel.setContext(context)
-    C = context or {}
-end
-
-local function getItemOrScriptNumber(item, scriptItem, methodName)
-    local value = tonumber(ctx("safeMethod")(item, methodName))
+local function getItemOrScriptNumber(item, scriptItem, methodName, defaultValue)
+    local value = tonumber(Utils.safeMethod(item, methodName))
     if value ~= nil then
         return value
     end
-    return tonumber(ctx("safeMethod")(scriptItem, methodName)) or 0
+    value = tonumber(Utils.safeMethod(scriptItem, methodName))
+    if value ~= nil then
+        return value
+    end
+    return tonumber(defaultValue) or 0
 end
 
 local function getOriginalDiscomfort(item, scriptItem)
-    local fullType = tostring(ctx("safeMethod")(item, "getFullType") or ctx("safeMethod")(scriptItem, "getFullType") or "")
+    local fullType = tostring(Utils.safeMethod(item, "getFullType") or Utils.safeMethod(scriptItem, "getFullType") or "")
     local discomfortCache = ArmorMakesSense and ArmorMakesSense._originalDiscomfort or nil
     local cached = discomfortCache and discomfortCache[fullType]
     if cached ~= nil then
@@ -40,23 +37,30 @@ local function getOriginalDiscomfort(item, scriptItem)
     return getItemOrScriptNumber(item, scriptItem, "getDiscomfortModifier")
 end
 
--- Minimal fallback for when Classifier module is unavailable.
--- Classifier.hasAnyProtectiveTag is the canonical source; this covers only the
--- DisplayCategory check so items aren't silently misclassified on load failure.
-local function hasAnyProtectiveTagFallback(item, scriptItem)
-    local displayCategory = ctx("lower")(ctx("safeMethod")(item, "getDisplayCategory") or ctx("safeMethod")(scriptItem, "getDisplayCategory"))
-    return displayCategory == "protectivegear"
+local function getOriginalMovementModifier(item, scriptItem, cacheName, methodName)
+    local fullType = tostring(Utils.safeMethod(item, "getFullType") or Utils.safeMethod(scriptItem, "getFullType") or "")
+    local cache = ArmorMakesSense and ArmorMakesSense[cacheName] or nil
+    local cached = cache and cache[fullType]
+    if cached ~= nil then
+        return tonumber(cached) or 1
+    end
+    return getItemOrScriptNumber(item, scriptItem, methodName, 1)
 end
 
-local UPPER_BODY_LOCATION_PATTERNS = {
-    "torso", "chest", "back", "shoulder",
-    "arm", "hand", "forearm", "elbow",
-    "head", "neck", "face", "mask", "eye",
-}
-
-local LOWER_BODY_LOCATION_PATTERNS = {
-    "leg", "knee", "shin", "foot", "shoe", "groin",
-}
+local function hasExactTag(item, scriptItem, expectedTag)
+    local expected = Utils.lower(expectedTag)
+    local function scan(target)
+        local tags = Utils.safeMethod(target, "getTags")
+        local count = tonumber(Utils.safeMethod(tags, "size")) or 0
+        for i = 0, count - 1 do
+            if Utils.lower(Utils.safeMethod(tags, "get", i)) == expected then
+                return true
+            end
+        end
+        return false
+    end
+    return scan(item) or scan(scriptItem)
+end
 
 local SWING_CHAIN_LOCATION_PATTERNS = {
     "shoulder", "forearm", "elbow", "hand", "arm",
@@ -96,18 +100,6 @@ local function locationHasAnyPattern(locationName, patterns)
     return false
 end
 
-local function shouldCountAsUpperBodyLocation(locationName)
-    local location = tostring(locationName or "")
-    if locationHasAnyPattern(location, LOWER_BODY_LOCATION_PATTERNS) then
-        return false
-    end
-    if locationHasAnyPattern(location, UPPER_BODY_LOCATION_PATTERNS) then
-        return true
-    end
-    -- Conservative default: unknown body locations contribute.
-    return true
-end
-
 local function isSwingChainLocation(locationName)
     local loc = tostring(locationName or "")
     if locationHasAnyPattern(loc, SWING_CHAIN_EXCLUSIONS) then
@@ -136,41 +128,39 @@ local function getSleepContactWeight(locationName)
     return 0.7
 end
 
-function LoadModel.itemToArmorSignal(item, wornLocation)
-    local scriptItem = ctx("safeMethod")(item, "getScriptItem")
-    local isCosmetic = ctx("toBoolean")(ctx("safeMethod")(item, "isCosmetic") or ctx("safeMethod")(scriptItem, "isCosmetic"))
-    if isCosmetic then
+function LoadModel.itemToBurdenSignal(item, wornLocation)
+    local scriptItem = Utils.safeMethod(item, "getScriptItem")
+    local forceInclude = hasExactTag(item, scriptItem, "AMSIncludeBurden")
+    local forceExclude = hasExactTag(item, scriptItem, "AMSExcludeBurden")
+    if forceExclude then
         return nil
     end
-    local isContainer = ctx("toBoolean")(ctx("safeMethod")(item, "IsInventoryContainer"))
-    if isContainer then
+    local isCosmetic = Utils.toBoolean(Utils.safeMethod(item, "isCosmetic") or Utils.safeMethod(scriptItem, "isCosmetic"))
+    if isCosmetic and not forceInclude then
         return nil
     end
-    local locationName = ctx("lower")(wornLocation or ctx("safeMethod")(item, "getBodyLocation") or ctx("safeMethod")(scriptItem, "getBodyLocation"))
-    -- Use stable script identifiers for keyword-based classification so results are locale-independent.
-    local itemName = ctx("lower")(
-        ctx("safeMethod")(item, "getFullType")
-        or ctx("safeMethod")(item, "getType")
-        or ctx("safeMethod")(item, "getName")
-        or ctx("safeMethod")(scriptItem, "getFullType")
-        or ctx("safeMethod")(scriptItem, "getType")
-        or ctx("safeMethod")(scriptItem, "getName")
+    local isContainer = Utils.toBoolean(Utils.safeMethod(item, "IsInventoryContainer"))
+    if isContainer and not forceInclude then
+        return nil
+    end
+    local locationName = Utils.lower(wornLocation or Utils.safeMethod(item, "getBodyLocation") or Utils.safeMethod(scriptItem, "getBodyLocation"))
+    local discomfort = getOriginalDiscomfort(item, scriptItem)
+    local runSpeedMod = getOriginalMovementModifier(
+        item,
+        scriptItem,
+        "_originalRunSpeedModifier",
+        "getRunSpeedModifier"
+    )
+    local combatSpeedMod = getOriginalMovementModifier(
+        item,
+        scriptItem,
+        "_originalCombatSpeedModifier",
+        "getCombatSpeedModifier"
     )
 
-    local scratch = getItemOrScriptNumber(item, scriptItem, "getScratchDefense")
-    local bite = getItemOrScriptNumber(item, scriptItem, "getBiteDefense")
-    local bullet = getItemOrScriptNumber(item, scriptItem, "getBulletDefense")
-    local neck = getItemOrScriptNumber(item, scriptItem, "getNeckProtectionModifier")
-    local discomfort = getOriginalDiscomfort(item, scriptItem)
-    local insulation = getItemOrScriptNumber(item, scriptItem, "getInsulation")
-    local wind = getItemOrScriptNumber(item, scriptItem, "getWindResistance")
-    local water = getItemOrScriptNumber(item, scriptItem, "getWaterResistance")
-    local runSpeedMod = getItemOrScriptNumber(item, scriptItem, "getRunSpeedModifier")
-    local combatSpeedMod = getItemOrScriptNumber(item, scriptItem, "getCombatSpeedModifier")
-
-    local equippedWeight = tonumber(ctx("safeMethod")(item, "getEquippedWeight"))
-    local actualWeight = tonumber(ctx("safeMethod")(item, "getActualWeight"))
-    local legacyWeight = tonumber(ctx("safeMethod")(item, "getWeight"))
+    local equippedWeight = tonumber(Utils.safeMethod(item, "getEquippedWeight"))
+    local actualWeight = tonumber(Utils.safeMethod(item, "getActualWeight"))
+    local legacyWeight = tonumber(Utils.safeMethod(item, "getWeight"))
     local weight = equippedWeight or actualWeight or legacyWeight or 0
     local weightSource = "none"
     if equippedWeight ~= nil then
@@ -181,56 +171,21 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
         weightSource = "legacy"
     end
 
-    local classifierEval = nil
-    local classifierSignals = nil
-    local classifier = ctx("Classifier") or Classifier
-    if classifier and type(classifier.computeArmorLikeSignals) == "function" then
-        classifierSignals = classifier.computeArmorLikeSignals(item, scriptItem, wornLocation)
-    end
-    if classifier and type(classifier.evaluateArmorLike) == "function" then
-        classifierEval = classifier.evaluateArmorLike(item, scriptItem, wornLocation)
-    end
-
-    local hasProtectiveTag = (classifierSignals and classifierSignals.hasProtectiveTag)
-        or (classifierEval and classifierEval.hasProtectiveTag)
-        or ((classifier and type(classifier.hasAnyProtectiveTag) == "function") and classifier.hasAnyProtectiveTag(item, scriptItem))
-        or hasAnyProtectiveTagFallback(item, scriptItem)
-    local keywordMatch = (classifierSignals and classifierSignals.keywordMatch) or ctx("containsAny")(itemName, ctx("armorKeywords"))
-    local locationMatch = (classifierSignals and classifierSignals.locationMatch) or ctx("containsAny")(locationName, ctx("armorLocationHints"))
-
-    local defenseScore = (classifierSignals and tonumber(classifierSignals.classifierDefenseScore))
-        or ((scratch * 0.30) + (bite * 0.75) + (bullet * 0.35) + (neck * 0.45))
-    local thermalScore = (classifierSignals and tonumber(classifierSignals.thermalScore))
-        or ((insulation * 10.0) + (wind * 8.0))
-    local isArmor = false
-    local strongDefense = (classifierSignals and classifierSignals.strongDefense)
-        or defenseScore >= 8.0 or bullet >= 1.0 or bite >= 4.0 or scratch >= 8.0
-    local mediumDefense = (classifierSignals and classifierSignals.mediumDefense)
-        or defenseScore >= 3.0 or bite >= 1.5 or scratch >= 3.0
-
-    if classifierEval and classifierEval.isArmorLike ~= nil then
-        isArmor = ctx("toBoolean")(classifierEval.isArmorLike)
-    else
-        local hasSomeIndicator = hasProtectiveTag or keywordMatch or locationMatch
-        if not hasSomeIndicator and weight < 1.5 and discomfort <= 0.05 then
-            isArmor = false
-        elseif strongDefense then
-            isArmor = true
-        elseif hasProtectiveTag then
-            isArmor = true
-        elseif keywordMatch and (weight >= 1.2 or mediumDefense or discomfort > 0.15) then
-            isArmor = true
-        elseif locationMatch and strongDefense and weight >= 1.0 then
-            isArmor = true
-        end
-    end
+    local classifierSignals = Classifier.computeArmorLikeSignals(item, scriptItem, wornLocation)
+    local classifierEval = Classifier.evaluateArmorLikeSignals(classifierSignals)
+    local hasProtectiveTag = classifierSignals.hasProtectiveTag == true
+    local defenseScore = tonumber(classifierSignals.classifierDefenseScore) or 0
+    local forceArmor = hasExactTag(item, scriptItem, "AMSArmor")
+    local isArmor = forceArmor or classifierEval.isArmorLike == true
+    local inclusionReason = forceInclude and "forced_include" or "wearable"
+    local classificationReason = forceArmor and "forced_armor" or tostring(classifierEval.reason or "no_match")
 
     local runPenalty = math.max(0, 1 - runSpeedMod)
     local combatPenalty = math.max(0, 1 - combatSpeedMod)
     local isMaskSlot = string.find(locationName, "mask", 1, true) ~= nil
     local isShoesSlot = string.find(locationName, "shoe", 1, true) ~= nil
     local runPenaltyForLoad = isShoesSlot and 0 or runPenalty
-    local weightScale = ctx("clamp")(weight / 0.8, 0.15, 1.0)
+    local weightScale = Utils.clamp(weight / 0.8, 0.15, 1.0)
     local weightContrib = math.max(0, weight - 0.30) * 8.0
     local physicalLoad = weightContrib
         + (math.max(discomfort, 0) * 12.0)
@@ -238,43 +193,29 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
         + (combatPenalty * 24.0)
         + (defenseScore * 0.06 * weightScale)
 
-    local wearabilityBase = (thermalScore * 0.72) + (math.max(discomfort, 0) * 1.10) + (defenseScore * 0.16)
-    wearabilityBase = wearabilityBase + ((runPenaltyForLoad * 10.0) + (combatPenalty * 7.0))
-    wearabilityBase = wearabilityBase + (math.max(water, 0) * 0.25)
-    local thermalLoad = wearabilityBase
-    local breathingLoad = 0
-    local breathingClass = "none"
-    local breathingHasFilter = nil
-    local breathingReasons = nil
-    local breathingSignals = (BreathingClassifier and type(BreathingClassifier.computeSignals) == "function")
-        and BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
-        or nil
-    if type(breathingSignals) == "table" then
-        breathingLoad = tonumber(breathingSignals.breathingLoad) or 0
-        thermalLoad = thermalLoad + (tonumber(breathingSignals.thermalLoad) or 0)
-        breathingClass = tostring(breathingSignals.class or "none")
-        if breathingSignals.hasFilter ~= nil then
-            breathingHasFilter = breathingSignals.hasFilter == true
-        end
-        if type(breathingSignals.reasons) == "table" then
-            breathingReasons = breathingSignals.reasons
-        end
-    end
+    local respiratorySignals = BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
+    local airflowResistance = tonumber(respiratorySignals.airflowResistance) or 0
+    local sealedRestriction = tonumber(respiratorySignals.sealedRestriction) or 0
+    local respiratoryClass = tostring(respiratorySignals.class or "none")
+    local respiratoryHasFilter = respiratorySignals.hasFilter == true
+    local respiratoryReasons = respiratorySignals.reasons
 
     if not isArmor then
         local civilianRigidity = (weight * 5.0) + (math.max(discomfort, 0) * 12.0)
         if isMaskSlot then
             physicalLoad = 0
-            thermalLoad = 0
         end
         return {
-            physicalLoad = ctx("clamp")(physicalLoad, 0, 28),
-            thermalLoad = ctx("clamp")(thermalLoad, 0, 20),
-            breathingLoad = ctx("clamp")(breathingLoad, 0, 12),
-            rigidityLoad = ctx("clamp")(civilianRigidity, 0, 64),
-            breathingClass = breathingClass,
-            breathingHasFilter = breathingHasFilter,
-            breathingReasons = breathingReasons,
+            physicalLoad = Utils.clamp(physicalLoad, 0, 28),
+            airflowResistance = Utils.clamp(airflowResistance, 0, 12),
+            sealedRestriction = Utils.clamp(sealedRestriction, 0, 1),
+            rigidityLoad = Utils.clamp(civilianRigidity, 0, 64),
+            respiratoryClass = respiratoryClass,
+            respiratoryHasFilter = respiratoryHasFilter,
+            respiratoryReasons = respiratoryReasons,
+            inclusionReason = inclusionReason,
+            armorLike = isArmor,
+            classificationReason = classificationReason,
             discomfort = discomfort,
             weightUsed = tonumber(weight) or 0,
             weightSource = tostring(weightSource),
@@ -286,25 +227,26 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
 
     if hasProtectiveTag then
         physicalLoad = physicalLoad + 0.90
-        thermalLoad = thermalLoad + 0.60
     end
 
     if isMaskSlot then
         physicalLoad = 0
-        thermalLoad = 0
     end
     local rigidityLoad = (math.max(discomfort, 0) * 16.0)
         + (defenseScore * 0.60)
         + (weight * 3.5)
 
     return {
-        physicalLoad = ctx("clamp")(physicalLoad, 0, 28),
-        thermalLoad = ctx("clamp")(thermalLoad, 0, 20),
-        breathingLoad = ctx("clamp")(breathingLoad, 0, 8),
-        rigidityLoad = ctx("clamp")(rigidityLoad, 0, 64),
-        breathingClass = breathingClass,
-        breathingHasFilter = breathingHasFilter,
-        breathingReasons = breathingReasons,
+        physicalLoad = Utils.clamp(physicalLoad, 0, 28),
+        airflowResistance = Utils.clamp(airflowResistance, 0, 8),
+        sealedRestriction = Utils.clamp(sealedRestriction, 0, 1),
+        rigidityLoad = Utils.clamp(rigidityLoad, 0, 64),
+        respiratoryClass = respiratoryClass,
+        respiratoryHasFilter = respiratoryHasFilter,
+        respiratoryReasons = respiratoryReasons,
+        inclusionReason = inclusionReason,
+        armorLike = isArmor,
+        classificationReason = classificationReason,
         discomfort = discomfort,
         weightUsed = tonumber(weight) or 0,
         weightSource = tostring(weightSource),
@@ -314,29 +256,123 @@ function LoadModel.itemToArmorSignal(item, wornLocation)
     }
 end
 
-function LoadModel.computeArmorProfile(player)
-    local wornItems = ctx("safeMethod")(player, "getWornItems")
+local function emptyProfile()
+    return {
+        physicalLoad = 0,
+        swingChainLoad = 0,
+        airflowResistance = 0,
+        sealedRestriction = 0,
+        rigidityLoad = 0,
+        driverCount = 0,
+        weightUsedTotal = 0,
+        equippedWeightTotal = 0,
+        actualWeightTotal = 0,
+        fallbackWeightTotal = 0,
+        fallbackWeightCount = 0,
+        sourceActualCount = 0,
+        sourceFallbackCount = 0,
+    }
+end
+
+local function getItemFullType(item)
+    local fullType = tostring(Utils.safeMethod(item, "getFullType") or "")
+    if fullType ~= "" then
+        return fullType
+    end
+
+    local scriptItem = Utils.safeMethod(item, "getScriptItem")
+    fullType = tostring(Utils.safeMethod(scriptItem, "getFullName") or "")
+    if fullType ~= "" then
+        return fullType
+    end
+
+    local moduleName = tostring(Utils.safeMethod(scriptItem, "getModuleName") or "")
+    local typeName = tostring(Utils.safeMethod(scriptItem, "getName") or "")
+    if moduleName ~= "" and typeName ~= "" then
+        return moduleName .. "." .. typeName
+    end
+
+    return tostring(Utils.safeMethod(item, "getType") or "unknown")
+end
+
+local function getItemDisplayName(item, fullType)
+    local displayName = tostring(Utils.safeMethod(item, "getDisplayName") or Utils.safeMethod(item, "getName") or "")
+    if displayName ~= "" then
+        return displayName
+    end
+    return tostring(fullType or "Unknown Item")
+end
+
+local function getItemSourceMod(item)
+    local modId = tostring(Utils.safeMethod(item, "getModID") or "")
+    if modId == "" then
+        local scriptItem = Utils.safeMethod(item, "getScriptItem")
+        modId = tostring(Utils.safeMethod(scriptItem, "getModID") or "")
+    end
+    if modId == "" then
+        return nil
+    end
+    return modId
+end
+
+local function buildWornRow(item, locationName, signal)
+    local fullType = getItemFullType(item)
+    local respiratoryClass = tostring(signal and signal.respiratoryClass or "none")
+    local respiratoryHasFilter = nil
+    if signal and respiratoryClass ~= "none" then
+        respiratoryHasFilter = signal.respiratoryHasFilter == true
+    end
+    return {
+        bodyLocation = tostring(locationName or "unknown"),
+        fullType = fullType,
+        displayName = getItemDisplayName(item, fullType),
+        sourceMod = getItemSourceMod(item),
+        included = signal ~= nil,
+        physical = tonumber(signal and signal.physicalLoad) or 0,
+        airflow = tonumber(signal and signal.airflowResistance) or 0,
+        sealedRestriction = tonumber(signal and signal.sealedRestriction) or 0,
+        rigidity = tonumber(signal and signal.rigidityLoad) or 0,
+        weightUsed = tonumber(signal and signal.weightUsed) or 0,
+        weightSource = tostring(signal and signal.weightSource or "na"),
+        discomfort = tonumber(signal and signal.discomfort) or 0,
+        respiratoryClass = respiratoryClass,
+        respiratoryHasFilter = respiratoryHasFilter,
+        inclusionReason = tostring(signal and signal.inclusionReason or "excluded"),
+        armorLike = signal and signal.armorLike == true or false,
+        classificationReason = tostring(signal and signal.classificationReason or "excluded"),
+    }
+end
+
+local function sortRowsByPhysical(rows)
+    table.sort(rows, function(a, b)
+        local left = tonumber(a and a.physical) or 0
+        local right = tonumber(b and b.physical) or 0
+        if left == right then
+            return tostring(a and a.fullType or "") < tostring(b and b.fullType or "")
+        end
+        return left > right
+    end)
+end
+
+function LoadModel.analyzeWornGear(player)
+    local wornItems = Utils.safeMethod(player, "getWornItems")
     if not wornItems then
         return {
-            physicalLoad = 0,
-            upperBodyLoad = 0,
-            swingChainLoad = 0,
-            thermalLoad = 0,
-            breathingLoad = 0,
-            rigidityLoad = 0,
-            armorCount = 0,
-            combinedLoad = 0,
+            profile = emptyProfile(),
+            rows = {},
+            costDrivers = {},
+            equipmentSignature = "",
+            wornCount = 0,
         }
     end
 
-    local itemCount = ctx("safeMethod")(wornItems, "size") or 0
+    local itemCount = Utils.safeMethod(wornItems, "size") or 0
     local physical = 0
-    local upperBody = 0
     local swingChain = 0
-    local thermal = 0
-    local breathing = 0
+    local airflow = 0
+    local sealedRestriction = 0
     local rigidity = 0
-    local armorCount = 0
+    local driverCount = 0
     local weightUsedTotal = 0
     local equippedWeightTotal = 0
     local actualWeightTotal = 0
@@ -344,26 +380,35 @@ function LoadModel.computeArmorProfile(player)
     local fallbackWeightCount = 0
     local sourceActualCount = 0
     local sourceFallbackCount = 0
+    local rows = {}
+    local costDrivers = {}
+    local signatureParts = {}
+    local wornCount = 0
 
     for i = 0, itemCount - 1 do
-        local worn = ctx("safeMethod")(wornItems, "get", i)
-        local item = worn and ctx("safeMethod")(worn, "getItem")
+        local worn = Utils.safeMethod(wornItems, "get", i)
+        local item = worn and Utils.safeMethod(worn, "getItem")
         if item then
-            local locationName = ctx("safeMethod")(worn, "getLocation")
-            local signal = LoadModel.itemToArmorSignal(item, locationName)
+            local locationName = tostring(
+                Utils.safeMethod(worn, "getLocation")
+                    or Utils.safeMethod(item, "getBodyLocation")
+                    or "unknown"
+            )
+            local signal = LoadModel.itemToBurdenSignal(item, locationName)
+            local row = buildWornRow(item, locationName, signal)
+            rows[#rows + 1] = row
+            wornCount = wornCount + 1
+            signatureParts[#signatureParts + 1] = locationName .. "=" .. row.fullType
             if signal then
                 physical = physical + signal.physicalLoad
-                local lowerLoc = ctx("lower")(locationName)
-                if shouldCountAsUpperBodyLocation(lowerLoc) then
-                    upperBody = upperBody + (tonumber(signal.physicalLoad) or 0)
-                end
+                local lowerLoc = Utils.lower(locationName)
                 if isSwingChainLocation(lowerLoc) then
                     local disc = tonumber(signal.discomfort) or 0
-                    local discFactor = ctx("clamp")(0.5 + disc * 5.0, 0.25, 3.0)
+                    local discFactor = Utils.clamp(0.5 + disc * 5.0, 0.25, 3.0)
                     swingChain = swingChain + (tonumber(signal.physicalLoad) or 0) * discFactor
                 end
-                thermal = thermal + signal.thermalLoad
-                breathing = breathing + signal.breathingLoad
+                airflow = airflow + signal.airflowResistance
+                sealedRestriction = math.max(sealedRestriction, tonumber(signal.sealedRestriction) or 0)
                 local contactWeight = getSleepContactWeight(lowerLoc)
                 rigidity = rigidity + (tonumber(signal.rigidityLoad) or 0) * contactWeight
                 weightUsedTotal = weightUsedTotal + (tonumber(signal.weightUsed) or 0)
@@ -379,30 +424,31 @@ function LoadModel.computeArmorProfile(player)
                         sourceFallbackCount = sourceFallbackCount + 1
                     end
                 end
-                if (tonumber(signal.physicalLoad) or 0) >= 1.5 then
-                    armorCount = armorCount + 1
+                if (tonumber(signal.physicalLoad) or 0) >= LoadModel.COST_DRIVER_THRESHOLD then
+                    driverCount = driverCount + 1
+                    costDrivers[#costDrivers + 1] = {
+                        label = row.displayName,
+                        fullType = row.fullType,
+                        physical = row.physical,
+                    }
                 end
             end
         end
     end
 
-    physical = ctx("clamp")(physical, 0, 600)
-    upperBody = ctx("clamp")(upperBody, 0, 600)
-    swingChain = ctx("clamp")(swingChain, 0, 600)
-    thermal = ctx("clamp")(thermal, 0, 600)
-    breathing = ctx("clamp")(breathing, 0, 30)
-    rigidity = ctx("clamp")(rigidity, 0, 600)
+    physical = Utils.clamp(physical, 0, 600)
+    swingChain = Utils.clamp(swingChain, 0, 600)
+    airflow = Utils.clamp(airflow, 0, 30)
+    sealedRestriction = Utils.clamp(sealedRestriction, 0, 1)
+    rigidity = Utils.clamp(rigidity, 0, 600)
 
-    return {
+    local profile = {
         physicalLoad = physical,
-        upperBodyLoad = upperBody,
         swingChainLoad = swingChain,
-        massLoad = physical,
-        thermalLoad = thermal,
-        wearabilityLoad = thermal,
-        breathingLoad = breathing,
+        airflowResistance = airflow,
+        sealedRestriction = sealedRestriction,
         rigidityLoad = rigidity,
-        armorCount = armorCount,
+        driverCount = driverCount,
         weightUsedTotal = weightUsedTotal,
         equippedWeightTotal = equippedWeightTotal,
         actualWeightTotal = actualWeightTotal,
@@ -410,8 +456,23 @@ function LoadModel.computeArmorProfile(player)
         fallbackWeightCount = fallbackWeightCount,
         sourceActualCount = sourceActualCount,
         sourceFallbackCount = sourceFallbackCount,
-        combinedLoad = ctx("clamp")(physical + (thermal * 0.45) + (breathing * 0.90), 0, 320),
     }
+
+    sortRowsByPhysical(rows)
+    sortRowsByPhysical(costDrivers)
+    table.sort(signatureParts)
+
+    return {
+        profile = profile,
+        rows = rows,
+        costDrivers = costDrivers,
+        equipmentSignature = table.concat(signatureParts, ";"),
+        wornCount = wornCount,
+    }
+end
+
+function LoadModel.computeWornProfile(player)
+    return LoadModel.analyzeWornGear(player).profile
 end
 
 return LoadModel

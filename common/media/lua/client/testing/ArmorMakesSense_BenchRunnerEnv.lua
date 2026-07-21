@@ -43,39 +43,36 @@ function BenchRunnerEnv.readPlayerCoords(player)
         tonumber(safeMethod(player, "getZ")) or 0
 end
 
+local function cancelNativePath(player, driverBehavior)
+    local liveBehavior = safeMethod(player, "getPathFindBehavior2")
+    if liveBehavior then
+        safeMethod(liveBehavior, "cancel")
+    end
+    if driverBehavior and driverBehavior ~= liveBehavior then
+        safeMethod(driverBehavior, "cancel")
+    end
+    safeMethod(player, "setPath2", nil)
+end
+
 function BenchRunnerEnv.snapPlayerToCoords(player, x, y, z)
     if not player then
         return false
     end
-    local tx = tonumber(x) or 0
-    local ty = tonumber(y) or 0
-    local tz = tonumber(z) or 0
+    local tx = math.floor(tonumber(x) or 0)
+    local ty = math.floor(tonumber(y) or 0)
+    local tz = math.floor(tonumber(z) or 0)
+    local hasFunction = ctx("hasFunction")
+    local canTeleport = type(hasFunction) == "function" and hasFunction(player, "teleportTo")
+    if not canTeleport and type(player.teleportTo) ~= "function" then
+        return false
+    end
 
-    safeMethod(player, "setPath2", nil)
+    cancelNativePath(player)
     safeMethod(player, "setMoving", false)
     safeMethod(player, "setJustMoved", false)
     safeMethod(player, "setRunning", false)
     safeMethod(player, "setSprinting", false)
-    local behavior = safeMethod(player, "getPathFindBehavior2")
-    if behavior then
-        safeMethod(behavior, "reset")
-    end
-
-    safeMethod(player, "setX", tx)
-    safeMethod(player, "setY", ty)
-    safeMethod(player, "setZ", tz)
-    safeMethod(player, "setLx", tx)
-    safeMethod(player, "setLy", ty)
-    safeMethod(player, "setLz", tz)
-    safeMethod(player, "setNx", tx)
-    safeMethod(player, "setNy", ty)
-
-    local cell = type(getCell) == "function" and getCell() or nil
-    local square = cell and safeMethod(cell, "getGridSquare", math.floor(tx), math.floor(ty), math.floor(tz))
-    if square then
-        safeMethod(player, "setCurrentSquare", square)
-        safeMethod(player, "setCurrent", square)
-    end
+    safeMethod(player, "teleportTo", tx, ty, tz)
 
     local rx, ry, rz = BenchRunnerEnv.readPlayerCoords(player)
     if BenchRunnerEnv.distance2D(rx, ry, tx, ty) <= 0.25 and math.abs((tonumber(rz) or 0) - tz) <= 0.55 then
@@ -271,7 +268,7 @@ function BenchRunnerEnv.stabilizeNativeCombatStance(player, clearPath)
     safeMethod(player, "setJustMoved", false)
     safeMethod(player, "setMoving", false)
     if clearPath ~= false then
-        safeMethod(player, "setPath2", nil)
+        cancelNativePath(player)
     end
 end
 
@@ -288,12 +285,9 @@ function BenchRunnerEnv.clearNativeMovementState(player, driver)
     if clearWeapon then
         safeMethod(clearWeapon, "setAttackTargetSquare", nil)
     end
-    BenchRunnerEnv.stabilizeNativeCombatStance(player, true)
+    cancelNativePath(player, driver and driver.behavior)
+    BenchRunnerEnv.stabilizeNativeCombatStance(player, false)
     safeMethod(player, "setDefaultState")
-
-    if driver and driver.behavior then
-        safeMethod(driver.behavior, "reset")
-    end
 end
 
 function BenchRunnerEnv.setNativeTimeOfDay(timeOfDay)
@@ -368,28 +362,17 @@ local function setClimateFloatOverride(channel, value)
         return
     end
     local numeric = tonumber(value) or 0
-    safeMethod(channel, "setEnableOverride", true)
-    safeMethod(channel, "setOverride", numeric, 0.0)
-    safeMethod(channel, "setEnableAdmin", true)
     safeMethod(channel, "setAdminValue", numeric)
-    safeMethod(channel, "setEnableModded", true)
-    safeMethod(channel, "setModdedValue", numeric)
+    safeMethod(channel, "setEnableAdmin", true)
 end
 
-local function setClimateBoolOverride(climate, channel, value)
+local function setClimateBoolOverride(channel, value)
     if not channel then
         return
     end
     local boolValue = toBoolArg(value)
-    safeMethod(channel, "setEnableOverride", true)
-    safeMethod(channel, "setOverride", boolValue)
-    safeMethod(channel, "setEnableAdmin", true)
     safeMethod(channel, "setAdminValue", boolValue)
-    safeMethod(channel, "setEnableModded", true)
-    safeMethod(channel, "setModdedValue", boolValue)
-    if climate then
-        safeMethod(climate, "setPrecipitationIsSnow", boolValue)
-    end
+    safeMethod(channel, "setEnableAdmin", true)
 end
 
 -- -----------------------------------------------------------------------------
@@ -489,7 +472,14 @@ function BenchRunnerEnv.applyWeatherOverrides(spec)
         boolIds = {},
         floatValues = {},
         boolValues = {},
+        floatPrevious = {},
+        boolPrevious = {},
     }
+
+    local function rollback(errorCode)
+        BenchRunnerEnv.clearWeatherOverrides(token)
+        return nil, errorCode
+    end
 
     local function applyFloat(specKey, constName)
         local value = spec[specKey]
@@ -504,6 +494,10 @@ function BenchRunnerEnv.applyWeatherOverrides(spec)
         if not channel then
             return false, "native_hard_missing_climate_float_" .. tostring(specKey)
         end
+        token.floatPrevious[constId] = {
+            enabled = safeMethod(channel, "isEnableAdmin") == true,
+            value = tonumber(safeMethod(channel, "getAdminValue")) or 0,
+        }
         setClimateFloatOverride(channel, value)
         token.floatIds[#token.floatIds + 1] = constId
         token.floatValues[constId] = tonumber(value) or 0
@@ -511,30 +505,34 @@ function BenchRunnerEnv.applyWeatherOverrides(spec)
     end
 
     local ok, err = applyFloat("temperature", "FLOAT_TEMPERATURE")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
     ok, err = applyFloat("wind_intensity", "FLOAT_WIND_INTENSITY")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
     ok, err = applyFloat("cloud_intensity", "FLOAT_CLOUD_INTENSITY")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
     ok, err = applyFloat("precipitation_intensity", "FLOAT_PRECIPITATION_INTENSITY")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
     ok, err = applyFloat("fog_intensity", "FLOAT_FOG_INTENSITY")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
     ok, err = applyFloat("humidity", "FLOAT_HUMIDITY")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
     ok, err = applyFloat("ambient", "FLOAT_AMBIENT")
-    if not ok then return nil, err end
+    if not ok then return rollback(err) end
 
     if spec.is_snow ~= nil then
         local boolId = climateClass.BOOL_IS_SNOW
         if boolId == nil then
-            return nil, "native_hard_missing_bool_is_snow"
+            return rollback("native_hard_missing_bool_is_snow")
         end
         local boolChannel = safeMethod(climate, "getClimateBool", boolId)
         if not boolChannel then
-            return nil, "native_hard_missing_climate_bool_is_snow"
+            return rollback("native_hard_missing_climate_bool_is_snow")
         end
-        setClimateBoolOverride(climate, boolChannel, spec.is_snow)
+        token.boolPrevious[boolId] = {
+            enabled = safeMethod(boolChannel, "isEnableAdmin") == true,
+            value = safeMethod(boolChannel, "getAdminValue") == true,
+        }
+        setClimateBoolOverride(boolChannel, spec.is_snow)
         token.boolIds[#token.boolIds + 1] = boolId
         token.boolValues[boolId] = toBoolArg(spec.is_snow)
     end
@@ -571,7 +569,7 @@ function BenchRunnerEnv.refreshWeatherOverrides(token)
             local value = token.boolValues and token.boolValues[boolId] or nil
             if value ~= nil then
                 local boolValue = toBoolArg(value)
-                setClimateBoolOverride(climate, channel, boolValue)
+                setClimateBoolOverride(channel, boolValue)
             end
         end
     end
@@ -593,17 +591,25 @@ function BenchRunnerEnv.clearWeatherOverrides(token)
     for _, floatId in ipairs(token.floatIds or {}) do
         local channel = safeMethod(climate, "getClimateFloat", floatId)
         if channel then
-            safeMethod(channel, "setEnableOverride", false)
-            safeMethod(channel, "setEnableAdmin", false)
-            safeMethod(channel, "setEnableModded", false)
+            local previous = token.floatPrevious and token.floatPrevious[floatId] or nil
+            if previous then
+                safeMethod(channel, "setAdminValue", tonumber(previous.value) or 0)
+                safeMethod(channel, "setEnableAdmin", previous.enabled == true)
+            else
+                safeMethod(channel, "setEnableAdmin", false)
+            end
         end
     end
     for _, boolId in ipairs(token.boolIds or {}) do
         local channel = safeMethod(climate, "getClimateBool", boolId)
         if channel then
-            safeMethod(channel, "setEnableOverride", false)
-            safeMethod(channel, "setEnableAdmin", false)
-            safeMethod(channel, "setEnableModded", false)
+            local previous = token.boolPrevious and token.boolPrevious[boolId] or nil
+            if previous then
+                safeMethod(channel, "setAdminValue", previous.value == true)
+                safeMethod(channel, "setEnableAdmin", previous.enabled == true)
+            else
+                safeMethod(channel, "setEnableAdmin", false)
+            end
         end
     end
     safeMethod(climate, "forceDayInfoUpdate")
@@ -673,15 +679,42 @@ function BenchRunnerEnv.setEnv(player, tempC, wetness)
 end
 
 function BenchRunnerEnv.restoreOutfit(player, entries)
-    local wearProfile = ctx("wearProfile")
-    if type(wearProfile) ~= "function" then
+    if not player or type(entries) ~= "table" then
         return false
     end
-    safeMethod(player, "clearWornItems")
-    if type(entries) ~= "table" or #entries == 0 then
-        return true
+
+    for _, entry in ipairs(entries) do
+        if not entry.item or entry.locationObject == nil then
+            return false
+        end
     end
-    wearProfile(player, entries, "virtual")
+
+    safeMethod(player, "clearWornItems")
+    for _, entry in ipairs(entries) do
+        safeMethod(player, "setWornItem", entry.locationObject, entry.item)
+    end
+    if type(triggerEvent) == "function" then
+        pcall(triggerEvent, "OnClothingUpdated", player)
+    end
+
+    local wornItems = safeMethod(player, "getWornItems")
+    local count = tonumber(wornItems and safeMethod(wornItems, "size")) or 0
+    if count ~= #entries then
+        return false
+    end
+    local restored = {}
+    for i = 0, count - 1 do
+        local worn = safeMethod(wornItems, "get", i)
+        local item = worn and safeMethod(worn, "getItem") or nil
+        if item then
+            restored[item] = tostring(safeMethod(worn, "getLocation") or "")
+        end
+    end
+    for _, entry in ipairs(entries) do
+        if restored[entry.item] ~= tostring(entry.locationObject) then
+            return false
+        end
+    end
     return true
 end
 
@@ -689,8 +722,11 @@ function BenchRunnerEnv.equipSet(player, setDef)
     if setDef and setDef.current then
         return 0, 0
     end
-    safeMethod(player, "clearWornItems")
     if setDef and setDef.naked then
+        safeMethod(player, "clearWornItems")
+        if type(triggerEvent) == "function" then
+            pcall(triggerEvent, "OnClothingUpdated", player)
+        end
         return 0, 0
     end
     local entries = BenchCatalog and BenchCatalog.buildWearEntries(setDef) or {}
@@ -709,11 +745,9 @@ end
 function BenchRunnerEnv.normalizeLoad(profile)
     profile = profile or {}
     local phy = tonumber(profile.physicalLoad) or 0
-    local upperBodyLoad = tonumber(profile.upperBodyLoad) or 0
     local swingChainLoad = tonumber(profile.swingChainLoad) or 0
-    local thm = tonumber(profile.thermalLoad) or 0
-    local br = tonumber(profile.breathingLoad) or 0
-    local pieces = tonumber(profile.armorCount) or 0
+    local br = tonumber(profile.airflowResistance) or 0
+    local driverCount = tonumber(profile.driverCount) or 0
     local weightUsedTotal = tonumber(profile.weightUsedTotal) or 0
     local equippedWeightTotal = tonumber(profile.equippedWeightTotal) or 0
     local actualWeightTotal = tonumber(profile.actualWeightTotal) or 0
@@ -722,17 +756,10 @@ function BenchRunnerEnv.normalizeLoad(profile)
     local sourceActualCount = tonumber(profile.sourceActualCount) or 0
     local sourceFallbackCount = tonumber(profile.sourceFallbackCount) or 0
 
-    local options = type(ctx("getOptions")) == "function" and ctx("getOptions")() or {}
-    local loadMin = math.max(0, tonumber(options and options.ArmorLoadMin) or 7)
-    local comp = phy + (thm * 0.45) + (br * 0.90)
-    local compAdj = math.max(0, comp - loadMin)
-
     return {
-        pieces = pieces,
+        driverCount = driverCount,
         phy = phy,
-        upperBodyLoad = upperBodyLoad,
         swingChainLoad = swingChainLoad,
-        thm = thm,
         br = br,
         weightUsedTotal = weightUsedTotal,
         equippedWeightTotal = equippedWeightTotal,
@@ -741,9 +768,6 @@ function BenchRunnerEnv.normalizeLoad(profile)
         fallbackWeightCount = fallbackWeightCount,
         sourceActualCount = sourceActualCount,
         sourceFallbackCount = sourceFallbackCount,
-        compAdj = compAdj,
-        norm = nil,
-        tier = 0,
     }
 end
 
@@ -800,11 +824,11 @@ function BenchRunnerEnv.collectMetrics(player)
     local getFatigue = ctx("getFatigue")
     local getBodyTemperature = ctx("getBodyTemperature")
     local getWetness = ctx("getWetness")
-    local computeArmorProfile = ctx("computeArmorProfile")
+    local computeWornProfile = ctx("computeWornProfile")
     local getOptions = ctx("getOptions")
     local options = type(getOptions) == "function" and getOptions() or {}
 
-    local profile = type(computeArmorProfile) == "function" and computeArmorProfile(player) or {}
+    local profile = type(computeWornProfile) == "function" and computeWornProfile(player) or {}
     local load = BenchRunnerEnv.normalizeLoad(profile)
     local climate = BenchRunnerEnv.readClimateSnapshot(player)
     local thermoreg = BenchRunnerEnv.readThermoregulatorMetrics(player)
@@ -812,27 +836,25 @@ function BenchRunnerEnv.collectMetrics(player)
     local strain = BenchRunnerEnv.readMuscleStrainMetrics(player)
     local clothingCondAvg, clothingCondMin, clothingCondItems = BenchRunnerEnv.readClothingCondition(player)
     local ambientAirTemp = tonumber(climate.airTemp) or tonumber(climate.ambient)
-    local modData = safeMethod(player, "getModData")
-    local state = modData and modData["ArmorMakesSenseState"] or nil
+    local ensureState = ctx("ensureState")
+    local state = type(ensureState) == "function" and ensureState(player) or nil
     local runtime = type(state) == "table" and type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or nil
     local runtimeLoadNorm = tonumber(runtime and runtime.loadNorm)
     if runtimeLoadNorm == nil then
         local getUiRuntimeSnapshot = ctx("getUiRuntimeSnapshot")
         if type(getUiRuntimeSnapshot) == "function" then
             local runtimeSnapshot = getUiRuntimeSnapshot(player, state, options)
+            if type(runtimeSnapshot) == "table" then
+                runtime = runtimeSnapshot
+            end
             runtimeLoadNorm = tonumber(runtimeSnapshot and runtimeSnapshot.loadNorm)
         end
     end
-    local runtimeTier = 0
-    if runtimeLoadNorm and runtimeLoadNorm >= 0.80 then
-        runtimeTier = 4
-    elseif runtimeLoadNorm and runtimeLoadNorm >= 0.60 then
-        runtimeTier = 3
-    elseif runtimeLoadNorm and runtimeLoadNorm >= 0.40 then
-        runtimeTier = 2
-    elseif runtimeLoadNorm and runtimeLoadNorm >= 0.25 then
-        runtimeTier = 1
-    end
+    local runtimeEffectiveLoad = tonumber(runtime and runtime.effectiveLoad)
+    local loadMin = math.max(0, tonumber(options and options.ArmorLoadMin) or 7)
+    local runtimeCompAdj = runtimeEffectiveLoad and math.max(0, runtimeEffectiveLoad - loadMin) or nil
+    local runtimeUpdatedMinute = tonumber(runtime and runtime.updatedMinute)
+    local runtimeSnapshotAgeMinutes = runtimeUpdatedMinute and math.max(0, nowMinutes() - runtimeUpdatedMinute) or nil
     local enduranceBeforeAms = tonumber(runtime and runtime.enduranceBeforeAms)
     local enduranceAfterAms = tonumber(runtime and runtime.enduranceAfterAms)
     local enduranceNaturalDelta = tonumber(runtime and runtime.enduranceNaturalDelta)
@@ -856,18 +878,28 @@ function BenchRunnerEnv.collectMetrics(player)
         strainTorsoUpper = tonumber(strain.torsoUpper) or 0, strainTorsoLower = tonumber(strain.torsoLower) or 0,
         strainUpperLegR = tonumber(strain.upperLegR) or 0, strainLowerLegR = tonumber(strain.lowerLegR) or 0,
         strainFootR = tonumber(strain.footR) or 0, strainNeck = tonumber(strain.neck) or 0,
-        pieces = load.pieces, phy = load.phy, upperBodyLoad = load.upperBodyLoad, swingChainLoad = load.swingChainLoad, thm = load.thm, br = load.br,
-        compAdj = load.compAdj, norm = runtimeLoadNorm or 0, tier = runtimeTier,
-        effectiveLoad = tonumber(runtime and runtime.effectiveLoad),
+        driverCount = load.driverCount, phy = load.phy, swingChainLoad = load.swingChainLoad, br = load.br,
+        compAdj = runtimeCompAdj, norm = runtimeLoadNorm,
+        effectiveLoad = runtimeEffectiveLoad,
         loadNormRuntime = runtimeLoadNorm,
-        massLoadRuntime = tonumber(runtime and runtime.massLoad),
-        thermalLoadRuntime = tonumber(runtime and runtime.thermalLoad),
-        breathingLoadRuntime = tonumber(runtime and runtime.breathingLoad),
-        thermalPressureScale = tonumber(runtime and runtime.thermalPressureScale),
-        hotStrain = tonumber(runtime and runtime.hotStrain),
+        runtimeUpdatedMinute = runtimeUpdatedMinute,
+        runtimeSnapshotAgeMinutes = runtimeSnapshotAgeMinutes,
+        physicalLoadRuntime = tonumber(runtime and runtime.physicalLoad),
+        thermalResistance = tonumber(runtime and runtime.thermalResistance),
+        airflowResistanceRuntime = tonumber(runtime and runtime.airflowResistance),
+        sealedRestrictionRuntime = tonumber(runtime and runtime.sealedRestriction),
+        thermalStrainScale = tonumber(runtime and runtime.thermalStrainScale),
+        hotPressure = tonumber(runtime and runtime.hotPressure),
+        coldSuitability = tonumber(runtime and runtime.coldSuitability),
         bodyTempRuntime = tonumber(runtime and runtime.bodyTemp),
         thermalContribution = tonumber(runtime and runtime.thermalContribution),
         breathingContribution = tonumber(runtime and runtime.breathingContribution),
+        metabolicRate = tonumber(runtime and runtime.metabolicRate),
+        metabolicDemand = tonumber(runtime and runtime.metabolicDemand),
+        metabolicNorm = tonumber(runtime and runtime.metabolicNorm),
+        breathingEffortRamp = tonumber(runtime and runtime.breathingEffortRamp),
+        breathingDynamicLoad = tonumber(runtime and runtime.breathingDynamicLoad),
+        breathingSealedLoad = tonumber(runtime and runtime.breathingSealedLoad),
         muscleContribution = tonumber(runtime and runtime.muscleContribution),
         recoveryContribution = tonumber(runtime and runtime.recoveryContribution),
         enduranceBeforeAms = enduranceBeforeAms,

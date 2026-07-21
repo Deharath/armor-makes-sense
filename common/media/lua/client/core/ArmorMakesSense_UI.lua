@@ -4,29 +4,22 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 local Core = ArmorMakesSense.Core
 Core.UI = Core.UI or {}
 
-local UI = Core.UI
-local C = {}
+local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local LoadModel = require "ArmorMakesSense_LoadModelShared"
+local Options = require "ArmorMakesSense_Options"
+local Physiology = require "ArmorMakesSense_PhysiologyShared"
+local SupportReport = require "core/ArmorMakesSense_SupportReport"
+local UITooltip = require "core/ArmorMakesSense_UITooltip"
+local Utils = require "ArmorMakesSense_UtilsShared"
 
-local tooltipHookInstalled = false
+local UI = Core.UI
+
 local clothingUpdateHookInstalled = false
 local tabHookInstalled = false
 local tabHookFailed = false
 local fallbackWindow = nil
 local helpWindow = nil
 local pendingUiRefresh = true
-local TOOLTIP_DISPLAY_THRESHOLD = 1.5
-
--- -----------------------------------------------------------------------------
--- Context / setup
--- -----------------------------------------------------------------------------
-
-local function ctx(name)
-    return C[name]
-end
-
-function UI.setContext(context)
-    C = context or {}
-end
 
 local function tr(key, fallback)
     if not getText then
@@ -48,7 +41,7 @@ local function wrapTextLines(text, wrapW, font, tm)
     local line = ""
     for wi = 1, #words do
         local testLine = (line == "") and words[wi] or (line .. " " .. words[wi])
-        local testW = (tm and font) and (tonumber(ctx("safeMethod")(tm, "MeasureStringX", font, testLine)) or (#testLine * 8)) or (#testLine * 8)
+        local testW = (tm and font) and (tonumber(ClientRuntime.safeMethod(tm, "MeasureStringX", font, testLine)) or (#testLine * 8)) or (#testLine * 8)
         if testW > wrapW and line ~= "" then
             lines[#lines + 1] = line
             line = words[wi]
@@ -63,7 +56,7 @@ local function wrapTextLines(text, wrapW, font, tm)
 end
 
 local function clamp01(value)
-    return (ctx("clamp") and ctx("clamp")(tonumber(value) or 0, 0, 1)) or 0
+    return Utils.clamp(tonumber(value) or 0, 0, 1)
 end
 
 local BURDEN_BAR_MAX = 100
@@ -75,18 +68,18 @@ local function burdenBarFraction(physicalLoad, maxLoad)
     return math.min(1.0, v / (maxLoad or BURDEN_BAR_MAX))
 end
 
-local function breathingTierFromLoad(load)
-    local value = tonumber(load) or 0
+local function breathingTierFromResistance(resistance, sealedRestriction)
+    local value = tonumber(resistance) or 0
     if value < 0.80 then
         return nil
+    end
+    if (tonumber(sealedRestriction) or 0) > 0 then
+        return tr("UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted")
     end
     if value < 2.00 then
         return tr("UI_AMS_Label_BreathingMild", "Mild")
     end
-    if value < 3.45 then
-        return tr("UI_AMS_Label_BreathingRestricted", "Restricted")
-    end
-    return tr("UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted")
+    return tr("UI_AMS_Label_BreathingRestricted", "Restricted")
 end
 
 local function burdenTierFromTotal(physicalLoad)
@@ -119,302 +112,8 @@ local function showExportResultModal(playerNum, ok, detail)
     modal:addToUIManager()
     return true
 end
-
 -- -----------------------------------------------------------------------------
--- Tooltip rendering (ISToolTipInv rows)
--- -----------------------------------------------------------------------------
-
-local TT_LABEL_DEFAULT = { 1.0, 1.0, 0.8, 1.0 }
-local TT_LABEL_ACCENT = { 1.0, 0.85, 0.55, 1.0 }
-local TT_VALUE_DEFAULT = { 1.0, 1.0, 1.0, 1.0 }
-local TT_VALUE_BREATHING = { 1.0, 0.80, 0.40, 1.0 }
-local TT_VALUE_BREATHING_HEAVY = { 1.0, 0.45, 0.35, 1.0 }
-local TT_BAR_BURDEN = { 0.95, 0.70, 0.25, 1.0 }
-local AMSTooltipPatched = false
-local originalISToolTipInvRender = nil
-
-local function addLayoutRow(layout, payload)
-    local row = ctx("safeMethod")(layout, "addItem")
-    if not row then
-        return nil
-    end
-
-    local labelColor = payload.labelColor or TT_LABEL_DEFAULT
-    ctx("safeMethod")(row, "setLabel", payload.label or "", labelColor[1], labelColor[2], labelColor[3], labelColor[4])
-
-    if payload.progress ~= nil then
-        local barColor = payload.barColor or TT_BAR_BURDEN
-        ctx("safeMethod")(row, "setProgress", clamp01(payload.progress), barColor[1], barColor[2], barColor[3], barColor[4])
-    end
-    if payload.value ~= nil then
-        local valueColor = payload.valueColor or TT_VALUE_DEFAULT
-        ctx("safeMethod")(row, "setValue", tostring(payload.value), valueColor[1], valueColor[2], valueColor[3], valueColor[4])
-    end
-
-    return row
-end
-
-local function getBodyLocation(item)
-    return tostring(ctx("safeMethod")(item, "getBodyLocation") or "")
-end
-
-local function isShoulderpadFamilyItem(item, location)
-    local loc = ctx("lower")(location or getBodyLocation(item))
-    if string.find(loc, "shoulderpad", 1, true) then
-        return true
-    end
-    local fullType = tostring(ctx("safeMethod")(item, "getFullType") or "")
-    local loweredFullType = ctx("lower")(fullType)
-    return string.find(loweredFullType, "shoulderpad", 1, true) ~= nil
-end
-
-local function stripAmsPrefix(text)
-    local value = tostring(text or "")
-    value = string.gsub(value, "^%s*AMS%s+", "")
-    return value
-end
-
-local function isTooltipWearable(item)
-    if not item then
-        return false
-    end
-    local location = getBodyLocation(item)
-    local wearableCheck = ctx("isWearableItem")
-    if type(wearableCheck) == "function" then
-        local ok, result = pcall(wearableCheck, item, location)
-        if ok and result then
-            return true
-        end
-    end
-    local scriptItem = ctx("safeMethod")(item, "getScriptItem")
-    local bodyLocation = tostring(ctx("safeMethod")(scriptItem, "getBodyLocation") or "")
-    return location ~= "" or bodyLocation ~= ""
-end
-
-local function getTooltipPadding(tooltip)
-    local padLeft = tonumber(tooltip and tooltip.padLeft)
-    local padRight = tonumber(tooltip and tooltip.padRight)
-    local padTop = tonumber(tooltip and tooltip.padTop)
-    local padBottom = tonumber(tooltip and tooltip.padBottom)
-    if padLeft and padRight and padTop and padBottom then
-        return padLeft, padRight, padTop, padBottom
-    end
-
-    local font = tooltip and ctx("safeMethod")(tooltip, "getFont") or nil
-    local tm = _G.TextManager and _G.TextManager.instance or nil
-    local charWidth = tonumber(tm and font and ctx("safeMethod")(tm, "MeasureStringX", font, "1")) or 5
-    if charWidth < 1 then
-        charWidth = 5
-    end
-    charWidth = charWidth + 2
-    local verticalPad = math.floor(charWidth / 2)
-    if verticalPad < 1 then
-        verticalPad = 2
-    end
-    return charWidth + 1, charWidth, verticalPad, verticalPad
-end
-
-local function injectTooltipRowsWithLayout(layout, item)
-    if not layout or not item then
-        return
-    end
-    if not isTooltipWearable(item) then
-        return
-    end
-    local signal = ctx("itemToArmorSignal")(item, getBodyLocation(item))
-    if not signal then
-        return
-    end
-    local hasPhysical = (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD
-    local hasBreathing = (tonumber(signal.breathingLoad) or 0) >= 0.80
-    if not hasPhysical and not hasBreathing then
-        return
-    end
-
-    local rows = {}
-
-    if hasPhysical then
-        rows[#rows + 1] = {
-            label = stripAmsPrefix(tr("UI_AMS_Label_Burden", "Burden")) .. ":",
-            labelColor = TT_LABEL_ACCENT,
-            progress = burdenBarFraction(signal.physicalLoad, TOOLTIP_BAR_MAX),
-            barColor = TT_BAR_BURDEN,
-        }
-    end
-
-    local breathingTier = breathingTierFromLoad(signal.breathingLoad)
-    if breathingTier then
-        local isHeavy = (tonumber(signal.breathingLoad) or 0) >= 3.45
-        rows[#rows + 1] = {
-            label = stripAmsPrefix(tr("UI_AMS_Label_Breathing", "Breathing")) .. ":",
-            labelColor = TT_LABEL_ACCENT,
-            value = breathingTier,
-            valueColor = isHeavy and TT_VALUE_BREATHING_HEAVY or TT_VALUE_BREATHING,
-        }
-    end
-
-    if #rows <= 0 then
-        return
-    end
-
-    for i = 1, #rows do
-        addLayoutRow(layout, rows[i])
-    end
-end
-
-local function renderTooltipLayoutForItem(item, tooltip)
-    if not item or not tooltip then
-        return false
-    end
-
-    local layout = ctx("safeMethod")(tooltip, "beginLayout")
-    if not layout then
-        return false
-    end
-
-    local ok = pcall(function()
-        ctx("safeMethod")(layout, "setMinLabelWidth", 80)
-        ctx("safeMethod")(layout, "setMinValueWidth", 80)
-        item:DoTooltipEmbedded(tooltip, layout, 0)
-        injectTooltipRowsWithLayout(layout, item)
-
-        local padLeft, padRight, padTop, padBottom = getTooltipPadding(tooltip)
-        local lineSpacing = tonumber(ctx("safeMethod")(tooltip, "getLineSpacing")) or 14
-        local top = padTop + lineSpacing + 5
-        local height = tonumber(ctx("safeMethod")(layout, "render", padLeft, top, tooltip)) or top
-        ctx("safeMethod")(tooltip, "endLayout", layout)
-
-        local width = tonumber(ctx("safeMethod")(tooltip, "getWidth")) or 0
-        if width < 150 then
-            width = 150
-        end
-
-        if instanceof(item, "InventoryContainer") then
-            if width < 160 then
-                width = 160
-            end
-            local container = ctx("safeMethod")(item, "getItemContainer")
-            local items = container and ctx("safeMethod")(container, "getItems")
-            local maxX = width - padRight
-            if items and not ctx("safeMethod")(items, "isEmpty") then
-                local seenItems = {}
-                local xOffset = padLeft
-                height = height + 4
-                local itemCount = tonumber(ctx("safeMethod")(items, "size")) or 0
-                for i = itemCount - 1, 0, -1 do
-                    local containerItem = ctx("safeMethod")(items, "get", i)
-                    local name = containerItem and tostring(ctx("safeMethod")(containerItem, "getName") or "")
-                    if not seenItems[name] then
-                        seenItems[name] = true
-                        local tex = containerItem and ctx("safeMethod")(containerItem, "getTex")
-                        if tex then
-                            ctx("safeMethod")(tooltip, "DrawTextureScaledAspect", tex, xOffset, height, 16, 16, 1, 1, 1, 1)
-                        end
-                        xOffset = xOffset + 17
-                        if xOffset + 16 > maxX then
-                            break
-                        end
-                    end
-                end
-                height = height + 16
-            end
-        end
-
-        ctx("safeMethod")(tooltip, "setHeight", math.floor(height + padBottom))
-        ctx("safeMethod")(tooltip, "setWidth", math.floor(width))
-    end)
-
-    if not ok then
-        pcall(function()
-            ctx("safeMethod")(tooltip, "endLayout", layout)
-        end)
-        return false
-    end
-
-    return true
-end
-
-local function installTooltipRenderPatch()
-    if AMSTooltipPatched then
-        return true
-    end
-
-    if not ISToolTipInv or type(ISToolTipInv.render) ~= "function" then
-        return false
-    end
-
-    originalISToolTipInvRender = originalISToolTipInvRender or ISToolTipInv.render
-    ISToolTipInv.render = function(self)
-        local item = self and self.item
-        if not item or instanceof(item, "FluidContainer") then
-            return originalISToolTipInvRender(self)
-        end
-        if not isTooltipWearable(item) then
-            return originalISToolTipInvRender(self)
-        end
-
-        local itemMt = nil
-        local mtOk, mtValue = pcall(getmetatable, item)
-        if mtOk and type(mtValue) == "table" then
-            itemMt = mtValue
-        end
-        local itemIndex = itemMt and type(itemMt.__index) == "table" and itemMt.__index or nil
-        local originalDoTooltip = itemIndex and itemIndex.DoTooltip or nil
-        if type(originalDoTooltip) ~= "function" then
-            return originalISToolTipInvRender(self)
-        end
-
-        local restoreTooltip = nil
-        if isShoulderpadFamilyItem(item) then
-            local tooltipKey = tostring(ctx("safeMethod")(item, "getTooltip") or "")
-            if tooltipKey ~= "" then
-                restoreTooltip = tooltipKey
-                pcall(function()
-                    item:setTooltip(nil)
-                end)
-            end
-        end
-
-        itemIndex.DoTooltip = function(overriddenItem, tooltip)
-            if not renderTooltipLayoutForItem(overriddenItem, tooltip) then
-                return originalDoTooltip(overriddenItem, tooltip)
-            end
-        end
-
-        local ok, result = pcall(originalISToolTipInvRender, self)
-        itemIndex.DoTooltip = originalDoTooltip
-        if restoreTooltip ~= nil then
-            pcall(function()
-                item:setTooltip(restoreTooltip)
-            end)
-        end
-        if not ok then
-            error(result)
-        end
-        return result
-    end
-
-    AMSTooltipPatched = true
-    ctx("logOnce")("ui_tooltip_patch_installed", "[UI] AMS tooltip rows registered via pre-render ISToolTipInv patch.")
-    return true
-end
-
-local function installTooltipHook()
-    if tooltipHookInstalled then
-        return
-    end
-
-    if installTooltipRenderPatch() then
-        tooltipHookInstalled = true
-        return
-    end
-
-    ctx("logErrorOnce")("ui_tooltip_patch_missing", "[UI] ISToolTipInv patch unavailable: AMS tooltip rows unavailable.")
-    tooltipHookInstalled = true
-end
-
--- -----------------------------------------------------------------------------
--- Hook installation (tooltip + clothing updates)
+-- Burden refresh hook
 -- -----------------------------------------------------------------------------
 
 local function markUiDirty()
@@ -447,86 +146,39 @@ end
 -- Panel / tab data model
 -- -----------------------------------------------------------------------------
 
-local function getItemFullType(item)
-    local fullType = tostring(ctx("safeMethod")(item, "getFullType") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-
-    local script = ctx("safeMethod")(item, "getScriptItem")
-    fullType = tostring(ctx("safeMethod")(script, "getFullName") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-
-    local moduleName = tostring(ctx("safeMethod")(script, "getModuleName") or "")
-    local typeName = tostring(ctx("safeMethod")(script, "getName") or "")
-    if moduleName ~= "" and typeName ~= "" then
-        return moduleName .. "." .. typeName
-    end
-
-    return tostring(item)
-end
-
-local function collectCostDrivers(player)
-    local wornItems = ctx("safeMethod")(player, "getWornItems")
-    if not wornItems then
-        return {}
-    end
-
-    local rows = {}
-    local count = tonumber(ctx("safeMethod")(wornItems, "size")) or 0
-    for i = 0, count - 1 do
-        local worn = ctx("safeMethod")(wornItems, "get", i)
-        local item = worn and ctx("safeMethod")(worn, "getItem")
-        if item then
-            local locationName = tostring(ctx("safeMethod")(worn, "getLocation") or getBodyLocation(item))
-            local signal = ctx("itemToArmorSignal")(item, locationName)
-            if signal and (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD then
-                local displayName = tostring(ctx("safeMethod")(item, "getDisplayName") or ctx("safeMethod")(item, "getName") or getItemFullType(item))
-                rows[#rows + 1] = {
-                    label = displayName,
-                    physical = tonumber(signal.physicalLoad) or 0,
-                }
-            end
+local function resolveDriverLabelsForClient(analysis, drivers)
+    local displayNames = {}
+    for i = 1, #(analysis and analysis.rows or {}) do
+        local row = analysis.rows[i]
+        local fullType = tostring(row and row.fullType or "")
+        local displayName = tostring(row and row.displayName or "")
+        if fullType ~= "" and displayName ~= "" then
+            displayNames[fullType] = displayName
         end
     end
 
-    table.sort(rows, function(a, b)
-        return a.physical > b.physical
-    end)
-
-    return rows
-end
-
-local function resolveDriverLabelForClient(player, row)
-    local fullType = tostring(row and row.fullType or "")
-    if fullType == "" or not player then
-        return tostring(row and row.label or "Unknown Item")
-    end
-
-    local wornItems = ctx("safeMethod")(player, "getWornItems")
-    local count = tonumber(ctx("safeMethod")(wornItems, "size")) or 0
-    for i = 0, count - 1 do
-        local worn = ctx("safeMethod")(wornItems, "get", i)
-        local item = worn and ctx("safeMethod")(worn, "getItem")
-        if item then
-            local itemFullType = tostring(ctx("safeMethod")(item, "getFullType") or ctx("safeMethod")(item, "getType") or "")
-            if itemFullType == fullType then
-                local displayName = tostring(ctx("safeMethod")(item, "getDisplayName") or ctx("safeMethod")(item, "getName") or "")
-                if displayName ~= "" then
-                    return displayName
-                end
+    local resolved = {}
+    for i = 1, #(drivers or {}) do
+        local row = drivers[i]
+        if type(row) == "table" then
+            local fullType = tostring(row.fullType or "")
+            local fallbackLabel = tostring(row.label or "")
+            if fallbackLabel == "" then
+                fallbackLabel = fullType ~= "" and fullType or "Unknown Item"
             end
+            resolved[#resolved + 1] = {
+                label = displayNames[fullType] or fallbackLabel,
+                fullType = fullType,
+                physical = tonumber(row.physical) or 0,
+            }
         end
     end
-
-    return tostring(row and row.label or fullType or "Unknown Item")
+    return resolved
 end
 
 local function resolveThermalEffect(runtimeSnapshot)
-    local thermalScale = tonumber(runtimeSnapshot and runtimeSnapshot.thermalPressureScale) or 0
-    local coldAppropriateness = tonumber(runtimeSnapshot and runtimeSnapshot.coldAppropriateness) or 0
+    local thermalScale = tonumber(runtimeSnapshot and runtimeSnapshot.thermalStrainScale) or 0
+    local coldSuitability = tonumber(runtimeSnapshot and runtimeSnapshot.coldSuitability) or 0
     if thermalScale >= 0.50 then
         return tr("UI_AMS_Label_ThermalOppressive", "Oppressive"), { 1.0, 0.45, 0.25, 1.0 }, true,
             tr("UI_AMS_Annotation_HeatOppressive", "Overheating in heavy gear"),
@@ -542,9 +194,9 @@ local function resolveThermalEffect(runtimeSnapshot)
             tr("UI_AMS_Annotation_HeatWarm", "Armor retaining body heat"),
             { 0.85, 0.78, 0.50, 0.90 }
     end
-    if coldAppropriateness > 0.45 then
+    if coldSuitability > 0.45 then
         return tr("UI_AMS_Label_ThermalHelpful", "Helpful"), { 0.65, 0.95, 0.65, 1.0 }, false,
-            tr("UI_AMS_Annotation_ColdHelping", "Insulation reducing cold strain"),
+            tr("UI_AMS_Annotation_ColdHelping", "Insulation suited to the cold"),
             { 0.55, 0.80, 0.55, 0.90 }
     end
     return tr("UI_AMS_Label_ThermalNeutral", "Neutral"), { 0.82, 0.82, 0.82, 1.0 }, false, nil, nil
@@ -571,8 +223,8 @@ toggleHelpWindow = function()
         return
     end
     local core = type(getCore) == "function" and getCore() or nil
-    local sw = core and ctx("safeMethod")(core, "getScreenWidth") or 800
-    local sh = core and ctx("safeMethod")(core, "getScreenHeight") or 600
+    local sw = core and ClientRuntime.safeMethod(core, "getScreenWidth") or 800
+    local sh = core and ClientRuntime.safeMethod(core, "getScreenHeight") or 600
     local font = UIFont and UIFont.Small or nil
     local tm = type(getTextManager) == "function" and getTextManager() or nil
     local w = math.min(math.floor(sw * 0.40), 540)
@@ -647,7 +299,7 @@ local function ensurePanelClasses()
     end
 
     function AMSBurdenPanel:onExportClick()
-        local exportFn = ctx("exportSupportReport")
+        local exportFn = SupportReport.writeCurrentPlayerReport
         if type(exportFn) ~= "function" then
             return
         end
@@ -726,21 +378,22 @@ local function ensurePanelClasses()
         local loadNorm = tonumber(runtime and runtime.loadNorm) or 0
         local physicalLoad = tonumber(runtime and runtime.physicalLoad)
         if physicalLoad == nil then
-            physicalLoad = ctx("clamp")(loadNorm / 2.8 * 100.0, 0, 100)
+            physicalLoad = Utils.clamp(loadNorm / 2.8 * 100.0, 0, 100)
         end
         return {
             physicalLoad = physicalLoad,
-            breathingLoad = tonumber(runtime and runtime.breathingLoad) or 0,
+            airflowResistance = tonumber(runtime and runtime.airflowResistance) or 0,
+            sealedRestriction = tonumber(runtime and runtime.sealedRestriction) or 0,
             rigidityLoad = tonumber(runtime and runtime.rigidityLoad) or 0,
-            armorCount = tonumber(runtime and runtime.armorCount) or (physicalLoad > 1 and 1 or 0),
+            driverCount = tonumber(runtime and runtime.driverCount) or (physicalLoad > 1 and 1 or 0),
         }
     end
 
-    local function buildBreathingDescription(breathingLoad)
-        local bLoad = tonumber(breathingLoad) or 0
-        if bLoad >= 3.45 then
+    local function buildBreathingDescription(airflowResistance, sealedRestriction)
+        local resistance = tonumber(airflowResistance) or 0
+        if (tonumber(sealedRestriction) or 0) > 0 then
             return tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-        elseif bLoad >= 2.00 then
+        elseif resistance >= 2.00 then
             return tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
         end
         return tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
@@ -763,10 +416,16 @@ local function ensurePanelClasses()
 
     local function buildBurdenWords(profile)
         local burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile and profile.physicalLoad) or 0)
-        local breathingWord = breathingTierFromLoad(profile and profile.breathingLoad)
+        local breathingWord = breathingTierFromResistance(
+            profile and profile.airflowResistance,
+            profile and profile.sealedRestriction
+        )
         local breathingDesc = nil
         if breathingWord then
-            breathingDesc = buildBreathingDescription(profile and profile.breathingLoad)
+            breathingDesc = buildBreathingDescription(
+                profile and profile.airflowResistance,
+                profile and profile.sealedRestriction
+            )
         end
         local sleepWord = buildSleepWord(profile and profile.rigidityLoad)
         return burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord
@@ -788,10 +447,7 @@ local function ensurePanelClasses()
             return
         end
 
-        local nowMinute = 0
-        if type(ctx("getWorldAgeMinutes")) == "function" then
-            nowMinute = tonumber(ctx("getWorldAgeMinutes")()) or 0
-        end
+        local nowMinute = tonumber(Utils.getWorldAgeMinutes()) or 0
 
         local refreshRuntime = force
             or self.needsRefresh
@@ -803,15 +459,21 @@ local function ensurePanelClasses()
             return
         end
 
-        local state = ctx("ensureState") and ctx("ensureState")(player) or nil
-        local options = UI._lastOptions or (ctx("getOptions") and ctx("getOptions")()) or {}
-        local runtime = ctx("getUiRuntimeSnapshot") and ctx("getUiRuntimeSnapshot")(player, state, options) or nil
-        local isMp = type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")()
+        local state = ClientRuntime.ensureState(player)
+        local options = UI._lastOptions or Options.get()
+        local runtime = Physiology.getUiRuntimeSnapshot(player, state, options)
+        local isMp = Utils.isMultiplayer()
 
         if isMp and type(runtime) ~= "table" then
             self.snapshot = {
                 pendingSnapshot = true,
-                profile = { physicalLoad = 0, breathingLoad = 0, rigidityLoad = 0, armorCount = 0 },
+                profile = {
+                    physicalLoad = 0,
+                    airflowResistance = 0,
+                    sealedRestriction = 0,
+                    rigidityLoad = 0,
+                    driverCount = 0,
+                },
                 runtime = nil,
                 burdenTier = tr("UI_AMS_Tier_Negligible", "Negligible"),
                 burdenTierKey = "negligible",
@@ -839,25 +501,20 @@ local function ensurePanelClasses()
         local profile = nil
         local burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = nil, nil, nil, nil, nil
         local costDrivers = {}
+        local analysis = LoadModel.analyzeWornGear(player)
         if isMp then
             profile = buildProfileFromRuntime(runtime)
-            costDrivers = type(runtime and runtime.drivers) == "table" and runtime.drivers or {}
-            for i = 1, #costDrivers do
-                local row = costDrivers[i]
-                if type(row) == "table" then
-                    row.label = resolveDriverLabelForClient(player, row)
-                end
-            end
+            costDrivers = resolveDriverLabelsForClient(analysis, runtime and runtime.drivers)
         else
-            profile = ctx("computeArmorProfile")(player) or {}
-            costDrivers = collectCostDrivers(player)
+            profile = analysis.profile
+            costDrivers = analysis.costDrivers
         end
         burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = buildBurdenWords(profile)
 
         local thermalWord, thermalColor, thermalBurdensome, thermalAnnotation, thermalAnnotationColor = resolveThermalEffect(runtime)
         local physical = tonumber(profile.physicalLoad) or 0
-        local armorCount = tonumber(profile.armorCount) or 0
-        local noBurden = armorCount <= 0
+        local driverCount = tonumber(profile.driverCount) or 0
+        local noBurden = driverCount <= 0
         local compact = (not noBurden)
             and physical < 15
             and (not thermalBurdensome)
@@ -970,7 +627,7 @@ local function ensurePanelClasses()
 
         local font = UIFont and UIFont.Small or nil
         local tm = type(getTextManager) == "function" and getTextManager() or nil
-        local fontH = (tm and font) and (tonumber(ctx("safeMethod")(tm, "getFontHeight", font)) or 18) or 18
+        local fontH = (tm and font) and (tonumber(ClientRuntime.safeMethod(tm, "getFontHeight", font)) or 18) or 18
         local lineH = fontH + 6
         local sectionGap = math.max(12, math.floor(lineH * 0.65))
         local x = 14
@@ -981,7 +638,7 @@ local function ensurePanelClasses()
         if measure then
             local labels = { "Burden:", "Thermal:", "Breathing:", "Sleep:" }
             for li = 1, #labels do
-                local lw = tonumber(ctx("safeMethod")(measure, "MeasureStringX", font, labels[li])) or 60
+                local lw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, labels[li])) or 60
                 if lw > labelCol then labelCol = lw end
             end
             labelCol = labelCol + 12
@@ -1086,7 +743,7 @@ local function ensurePanelClasses()
 
         local maxNameW = 0
         for i = 1, maxRows do
-            local tw = measure and tonumber(ctx("safeMethod")(measure, "MeasureStringX", font, drivers[i].label))
+            local tw = measure and tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, drivers[i].label))
                 or (string.len(drivers[i].label) * 7)
             if tw > maxNameW then maxNameW = tw end
         end
@@ -1099,14 +756,14 @@ local function ensurePanelClasses()
             local nameW = barX - nameGap - x - 4
             local displayLabel = row.label
             if measure then
-                local tw = tonumber(ctx("safeMethod")(measure, "MeasureStringX", font, displayLabel)) or 0
+                local tw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, displayLabel)) or 0
                 if tw > nameW then
                     local base = row.label
                     local len = string.len(base)
                     while len > 1 do
                         len = len - 1
                         displayLabel = string.sub(base, 1, len) .. "..."
-                        tw = tonumber(ctx("safeMethod")(measure, "MeasureStringX", font, displayLabel)) or 0
+                        tw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, displayLabel)) or 0
                         if tw <= nameW then break end
                     end
                 end
@@ -1136,7 +793,7 @@ local function ensurePanelClasses()
     local helpSections = {
         { key = "UI_AMS_Help_Overview",        fallback = "Overview: Armor costs scale with activity. Standing still or walking costs almost nothing. Running, sprinting, and fighting is where heavy armor makes itself felt. The heavier your outfit, the faster you tire during exertion and the slower you recover afterward." },
         { key = "UI_AMS_Help_Burden",          fallback = "Burden: The total physical weight and bulk of your worn armor. The bar shows your current load on a fixed scale. Heavier loadouts drain endurance faster during running, sprinting, and melee combat. In heavy armor, your arms also tire faster per swing." },
-        { key = "UI_AMS_Help_Thermal",         fallback = "Thermal: Weather interacts with your armor. In hot weather, heavy armor amplifies endurance drain -- the panel shows this as Burdensome. In cold weather, insulating armor works in your favor, reducing effective burden -- shown as Helpful. Wet armor loses insulation." },
+        { key = "UI_AMS_Help_Thermal",         fallback = "Thermal: Insulating gear adds exertion cost only after your body remains hot long enough. Short temperature spikes fade without a penalty. In cold conditions, Helpful means the insulation suits the weather; AMS does not add a cold bonus. Vanilla clothing condition and wetness are included in the reading." },
         { key = "UI_AMS_Help_Breathing",       fallback = "Breathing: Respirators, gas masks, and other sealed headgear restrict airflow. This adds to your exertion cost during physical activity. The severity is shown as Mildly Restricted, Restricted, or Heavily Restricted depending on the gear." },
         { key = "UI_AMS_Help_Sleep",           fallback = "Sleep: Sleeping in rigid armor slows recovery. The percentage shows the estimated extra time needed to fully rest. Take off heavy gear before bed." },
         { key = "UI_AMS_Help_CostDrivers",     fallback = "Cost Drivers: Shows which worn items contribute most to your total burden, sorted by impact. If one item dominates the list, swapping it out will make the biggest difference." },
@@ -1154,7 +811,7 @@ local function ensurePanelClasses()
     end
 
     measureHelpText = function(wrapW, font, tm)
-        local fontH = (tm and font) and (tonumber(ctx("safeMethod")(tm, "getFontHeight", font)) or 18) or 18
+        local fontH = (tm and font) and (tonumber(ClientRuntime.safeMethod(tm, "getFontHeight", font)) or 18) or 18
         local lineH = fontH + 4
         local y = 10
         for i = 1, #helpSections do
@@ -1195,7 +852,7 @@ local function ensurePanelClasses()
     function AMSHelpPanel:render()
         local font = UIFont and UIFont.Small or nil
         local tm = type(getTextManager) == "function" and getTextManager() or nil
-        local fontH = (tm and font) and (tonumber(ctx("safeMethod")(tm, "getFontHeight", font)) or 18) or 18
+        local fontH = (tm and font) and (tonumber(ClientRuntime.safeMethod(tm, "getFontHeight", font)) or 18) or 18
         local lineH = fontH + 4
         local wrapW = getHelpContentWidth(self.width)
         local x = HELP_CONTENT_LEFT_PAD
@@ -1242,13 +899,8 @@ local function ensurePanelClasses()
             setmetatable(window, self)
             self.__index = self
             window.resizable = false
-            local versionTag = ""
-            if type(ctx("getLoadedModVersion")) == "function" then
-                local v = ctx("getLoadedModVersion")()
-                if v then
-                    versionTag = " v" .. tostring(v)
-                end
-            end
+            local version = ClientRuntime.getLoadedModVersion()
+            local versionTag = version and (" v" .. tostring(version)) or ""
             window.title = tr("UI_AMS_Help_Title", "Armor Makes Sense") .. versionTag
             return window
         end
@@ -1430,7 +1082,7 @@ local function installCharacterTabHook()
             end)
             if not ok or not attached then
                 tabHookFailed = true
-                ctx("logOnce")("ui_burden_tab_fallback", "[UI] Burden tab injection failed; enabling standalone fallback window.")
+                ClientRuntime.logOnce("ui_burden_tab_fallback", "[UI] Burden tab injection failed; enabling standalone fallback window.")
                 ensureFallbackWindow(true)
             elseif self._amsBurdenPanel and type(self._amsBurdenPanel.markDirty) == "function" then
                 self._amsBurdenPanel:markDirty()
@@ -1442,7 +1094,7 @@ local function installCharacterTabHook()
     screenClass._amsBurdenTabPatched = true
     screenClass._amsBurdenTabOriginalCreateChildren = originalCreateChildren
     tabHookInstalled = true
-    ctx("logOnce")("ui_burden_tab_hook_installed", "[UI] Character info Burden tab hook installed.")
+    ClientRuntime.logOnce("ui_burden_tab_hook_installed", "[UI] Character info Burden tab hook installed.")
 
     -- Retroactively attach to any already-created instance
     pcall(function()
@@ -1464,7 +1116,7 @@ end
 function UI.update(player, profile, options)
     UI._lastOptions = options or UI._lastOptions or {}
 
-    installTooltipHook()
+    UITooltip.install()
     installClothingUpdateHook()
     installCharacterTabHook()
 

@@ -12,6 +12,7 @@ local BenchRunnerSnapshot = Testing.BenchRunnerSnapshot
 local NORM_FLOOR = 0.05
 local VALIDITY_DEFAULTS = {
     movement_uptime_min = 0.70,
+    target_activity_uptime_min = 0.85,
     attack_success_ratio_min = 0.50,
     valid_sample_ratio_min = 0.85,
     completion_ratio_min = 0.50,
@@ -98,173 +99,6 @@ local function asMetricValue(value)
     return tonumber(value) or nil
 end
 
-local function clampPerkLevel(value)
-    return math.max(0, math.min(10, math.floor(tonumber(value) or 0)))
-end
-
-local function resolvePerkByName(name)
-    local perks = PerkFactory and PerkFactory.Perks
-    if not perks then
-        return nil
-    end
-    local key = string.lower(tostring(name or ""))
-    local map = {
-        str = "Strength",
-        strength = "Strength",
-        fit = "Fitness",
-        fitness = "Fitness",
-        axe = "Axe",
-        blunt = "Blunt",
-        smallblunt = "SmallBlunt",
-        sblunt = "SmallBlunt",
-        longblade = "LongBlade",
-        lblade = "LongBlade",
-        smallblade = "SmallBlade",
-        sblade = "SmallBlade",
-        spear = "Spear",
-        maintenance = "Maintenance",
-        maint = "Maintenance",
-    }
-    local token = map[key] or name
-    return perks[token]
-end
-
-local function getPerkLevelSafe(player, safeMethod, perk)
-    if not player or not perk then
-        return -1
-    end
-    return tonumber(safeMethod(player, "getPerkLevel", perk)) or -1
-end
-
-local function syncXpToPerkLevel(player, safeMethod, perk, level)
-    if not player or not perk then
-        return
-    end
-    local xp = safeMethod(player, "getXp")
-    if xp then
-        safeMethod(xp, "setXPToLevel", perk, clampPerkLevel(level))
-    end
-end
-
-local function setPerkLevelSafe(player, safeMethod, perk, targetLevel)
-    if not player or not perk then
-        return false
-    end
-    local wanted = clampPerkLevel(targetLevel)
-    local current = getPerkLevelSafe(player, safeMethod, perk)
-    if current == wanted then
-        syncXpToPerkLevel(player, safeMethod, perk, wanted)
-        return true
-    end
-
-    local debugSetResult = safeMethod(player, "setPerkLevelDebug", perk, wanted)
-    if debugSetResult ~= nil or getPerkLevelSafe(player, safeMethod, perk) == wanted then
-        syncXpToPerkLevel(player, safeMethod, perk, wanted)
-        return getPerkLevelSafe(player, safeMethod, perk) == wanted
-    end
-
-    local guard = 0
-    while current < wanted and guard < 32 do
-        safeMethod(player, "LevelPerk", perk, false)
-        current = getPerkLevelSafe(player, safeMethod, perk)
-        guard = guard + 1
-    end
-    while current > wanted and guard < 64 do
-        safeMethod(player, "LoseLevel", perk)
-        current = getPerkLevelSafe(player, safeMethod, perk)
-        guard = guard + 1
-    end
-    syncXpToPerkLevel(player, safeMethod, perk, wanted)
-    return getPerkLevelSafe(player, safeMethod, perk) == wanted
-end
-
-local function applyBenchStatProfile(player, safeMethod, profile)
-    if type(profile) ~= "table" then
-        return nil, true
-    end
-    local perks = PerkFactory and PerkFactory.Perks
-    if not perks then
-        return nil, false
-    end
-
-    local ok = true
-    if profile.strength ~= nil then
-        ok = setPerkLevelSafe(player, safeMethod, perks.Strength, profile.strength) and ok
-    end
-    if profile.fitness ~= nil then
-        ok = setPerkLevelSafe(player, safeMethod, perks.Fitness, profile.fitness) and ok
-    end
-    if profile.weaponSkill ~= nil then
-        local perkToken = string.lower(tostring(profile.weaponPerk or "all"))
-        if perkToken == "" then
-            perkToken = "all"
-        end
-        if perkToken == "all" or perkToken == "*" or perkToken == "all_melee" then
-            local melee = {
-                perks.Axe,
-                perks.Blunt,
-                perks.SmallBlunt,
-                perks.LongBlade,
-                perks.SmallBlade,
-                perks.Spear,
-            }
-            for _, perk in ipairs(melee) do
-                ok = setPerkLevelSafe(player, safeMethod, perk, profile.weaponSkill) and ok
-            end
-        else
-            local perk = resolvePerkByName(profile.weaponPerk)
-            if not perk then
-                ok = false
-            else
-                ok = setPerkLevelSafe(player, safeMethod, perk, profile.weaponSkill) and ok
-            end
-        end
-    end
-
-    local static = type(ctx("getStaticCombatSnapshot")) == "function" and ctx("getStaticCombatSnapshot")(player) or nil
-    return {
-        strength = tonumber(static and static.strength) or tonumber(profile.strength),
-        fitness = tonumber(static and static.fitness) or tonumber(profile.fitness),
-        weaponSkill = tonumber(static and static.weaponSkill) or tonumber(profile.weaponSkill),
-        weaponPerk = tostring(profile.weaponPerk or "all"),
-    }, ok
-end
-
-local function attachStatSnapshot(activity, snapshot)
-    if type(activity) ~= "table" or type(snapshot) ~= "table" then
-        return
-    end
-    activity.stat_strength = tonumber(snapshot.strength)
-    activity.stat_fitness = tonumber(snapshot.fitness)
-    activity.stat_weapon_skill = tonumber(snapshot.weaponSkill)
-    activity.stat_weapon_perk = tostring(snapshot.weaponPerk or "all")
-end
-
-local function enforceBenchStatProfile(exec, player, safeMethod)
-    if type(exec) ~= "table" or type(exec.statProfile) ~= "table" then
-        return
-    end
-    local statSnapshot, statOk = applyBenchStatProfile(player, safeMethod, exec.statProfile)
-    exec.appliedStatSnapshot = statSnapshot
-    attachStatSnapshot(exec.activityResult, statSnapshot)
-    if not statOk then
-        exec.statProfileApplyFailed = true
-    end
-end
-
-local function logStatProfileApplyError(exec, logError)
-    if not (exec and exec.statProfileApplyFailed and type(logError) == "function" and not exec.statProfileErrorLogged) then
-        return
-    end
-    exec.statProfileErrorLogged = true
-    logError(string.format(
-        "[AMS_BENCH_ERROR] id=%s set=%s scenario=%s msg=stat_profile_apply_failed",
-        tostring(exec.runId),
-        tostring(exec.setDef and exec.setDef.id or "na"),
-        tostring(exec.scenarioId)
-    ))
-end
-
 local function updateSetIntegrity(activity, expectedHash, actualHash)
     if type(activity) ~= "table" then
         return
@@ -293,14 +127,26 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
     local activitySource = activity and activity.activity_source or "na"
     local verbose = forceVerbose == true or isVerboseBenchLog(exec)
     local diagSuffix = string.format(
-        " eff_load=%s load_norm_runtime=%s thermal_scale=%s thermal_hot_strain=%s body_temp_runtime=%s thermal_contribution=%s breathing_contribution=%s muscle_contribution=%s recovery_contribution=%s end_before_ams=%s end_after_ams=%s end_natural_delta=%s end_applied_delta=%s weight_used_total=%s equipped_weight_total=%s actual_weight_total=%s fallback_weight_total=%s fallback_weight_count=%d source_actual_count=%d source_fallback_count=%d",
+        " eff_load=%s load_norm_runtime=%s runtime_updated_min=%s runtime_snapshot_age_min=%s thermal_resistance=%s airflow_resistance_runtime=%s sealed_restriction_runtime=%s thermal_scale=%s thermal_hot_pressure=%s cold_suitability=%s body_temp_runtime=%s thermal_contribution=%s breathing_contribution=%s metabolic_rate=%s metabolic_demand=%s metabolic_norm=%s breathing_effort_ramp=%s breathing_dynamic_load=%s breathing_sealed_load=%s muscle_contribution=%s recovery_contribution=%s end_before_ams=%s end_after_ams=%s end_natural_delta=%s end_applied_delta=%s weight_used_total=%s equipped_weight_total=%s actual_weight_total=%s fallback_weight_total=%s fallback_weight_count=%d source_actual_count=%d source_fallback_count=%d",
         metricOrNa(metrics.effectiveLoad, 4),
         metricOrNa(metrics.loadNormRuntime, 5),
-        metricOrNa(metrics.thermalPressureScale, 4),
-        metricOrNa(metrics.hotStrain, 4),
+        metricOrNa(metrics.runtimeUpdatedMinute, 3),
+        metricOrNa(metrics.runtimeSnapshotAgeMinutes, 3),
+        metricOrNa(metrics.thermalResistance, 4),
+        metricOrNa(metrics.airflowResistanceRuntime, 4),
+        metricOrNa(metrics.sealedRestrictionRuntime, 4),
+        metricOrNa(metrics.thermalStrainScale, 4),
+        metricOrNa(metrics.hotPressure, 4),
+        metricOrNa(metrics.coldSuitability, 4),
         metricOrNa(metrics.bodyTempRuntime, 4),
         metricOrNa(metrics.thermalContribution, 4),
         metricOrNa(metrics.breathingContribution, 4),
+        metricOrNa(metrics.metabolicRate, 4),
+        metricOrNa(metrics.metabolicDemand, 4),
+        metricOrNa(metrics.metabolicNorm, 4),
+        metricOrNa(metrics.breathingEffortRamp, 4),
+        metricOrNa(metrics.breathingDynamicLoad, 4),
+        metricOrNa(metrics.breathingSealedLoad, 4),
         metricOrNa(metrics.muscleContribution, 4),
         metricOrNa(metrics.recoveryContribution, 4),
         metricOrNa(metrics.enduranceBeforeAms, 6),
@@ -318,7 +164,7 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
     local line
     if not verbose then
         line = string.format(
-            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s windSpeed=%s windIntensity=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d pieces=%d phy=%.3f ub=%.3f sc=%.3f thm=%.3f br=%.3f compAdj=%.3f norm=%.5f tier=%d driver=%s env_source=%s activity_source=%s",
+            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s windSpeed=%s windIntensity=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d drivers=%d phy=%.3f sc=%.3f br=%.3f compAdj=%s norm=%s driver=%s env_source=%s activity_source=%s",
             runId,
             tostring(setDef.id),
             tostring(setDef.class),
@@ -358,15 +204,12 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
             metricOrNa(metrics.clothingCondAvg, 4),
             metricOrNa(metrics.clothingCondMin, 4),
             tonumber(metrics.clothingCondItems) or 0,
-            tonumber(metrics.pieces) or 0,
+            tonumber(metrics.driverCount) or 0,
             tonumber(metrics.phy) or 0,
-            tonumber(metrics.upperBodyLoad) or 0,
             tonumber(metrics.swingChainLoad) or 0,
-            tonumber(metrics.thm) or 0,
             tonumber(metrics.br) or 0,
-            tonumber(metrics.compAdj) or 0,
-            tonumber(metrics.norm) or 0,
-            tonumber(metrics.tier) or 0,
+            metricOrNa(metrics.compAdj, 3),
+            metricOrNa(metrics.norm, 5),
             tostring(driver),
             tostring(envSource),
             tostring(activitySource)
@@ -374,7 +217,7 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
         line = line .. diagSuffix
     else
         line = string.format(
-            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s strainTorsoUpper=%s strainTorsoLower=%s strainUpperLegR=%s strainLowerLegR=%s strainFootR=%s strainNeck=%s wet=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d pieces=%d phy=%.3f ub=%.3f sc=%.3f thm=%.3f br=%.3f compAdj=%.3f norm=%.5f tier=%d x=%s y=%s z=%s outdoors=%s in_vehicle=%s climbing=%s ambient=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s airTemp=%s airWindTemp=%s wind=%s windSpeed=%s windIntensity=%s cloud=%s rain=%s raining=%s driver=%s env_source=%s activity_source=%s",
+            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s strainTorsoUpper=%s strainTorsoLower=%s strainUpperLegR=%s strainLowerLegR=%s strainFootR=%s strainNeck=%s wet=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d drivers=%d phy=%.3f sc=%.3f br=%.3f compAdj=%s norm=%s x=%s y=%s z=%s outdoors=%s in_vehicle=%s climbing=%s ambient=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s airTemp=%s airWindTemp=%s wind=%s windSpeed=%s windIntensity=%s cloud=%s rain=%s raining=%s driver=%s env_source=%s activity_source=%s",
             runId,
             tostring(setDef.id),
             tostring(setDef.class),
@@ -410,15 +253,12 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
             metricOrNa(metrics.clothingCondAvg, 4),
             metricOrNa(metrics.clothingCondMin, 4),
             tonumber(metrics.clothingCondItems) or 0,
-            tonumber(metrics.pieces) or 0,
+            tonumber(metrics.driverCount) or 0,
             tonumber(metrics.phy) or 0,
-            tonumber(metrics.upperBodyLoad) or 0,
             tonumber(metrics.swingChainLoad) or 0,
-            tonumber(metrics.thm) or 0,
             tonumber(metrics.br) or 0,
-            tonumber(metrics.compAdj) or 0,
-            tonumber(metrics.norm) or 0,
-            tonumber(metrics.tier) or 0,
+            metricOrNa(metrics.compAdj, 3),
+            metricOrNa(metrics.norm, 5),
             metricOrNa(metrics.x, 3),
             metricOrNa(metrics.y, 3),
             metricOrNa(metrics.z, 1),
@@ -491,8 +331,8 @@ function BenchRunnerStep.summarizeStep(startMetrics, endMetrics)
     local strainDelta = (endStrain ~= nil and startStrain ~= nil) and (endStrain - startStrain) or nil
     local armStiffnessDelta = (endArmStiffness ~= nil and startArmStiffness ~= nil) and (endArmStiffness - startArmStiffness) or nil
 
-    local norm = tonumber(endMetrics and endMetrics.norm) or 0
-    local divisor = math.max(norm, NORM_FLOOR)
+    local norm = asMetricValue(endMetrics and endMetrics.norm)
+    local divisor = norm and math.max(norm, NORM_FLOOR) or nil
 
     return {
         endDelta = endDelta,
@@ -504,25 +344,33 @@ function BenchRunnerStep.summarizeStep(startMetrics, endMetrics)
         armStiffnessEnd = endArmStiffness,
         armStiffnessDelta = armStiffnessDelta,
         swingsPerMinute = nil,
-        enduranceCostPerNorm = endDelta and (endDelta / divisor) or nil,
-        thirstCostPerNorm = thirstDelta and (thirstDelta / divisor) or nil,
-        tempCostPerNorm = tempDelta and (tempDelta / divisor) or nil,
-        lowNormGuarded = norm < NORM_FLOOR,
+        enduranceCostPerNorm = endDelta and divisor and (endDelta / divisor) or nil,
+        thirstCostPerNorm = thirstDelta and divisor and (thirstDelta / divisor) or nil,
+        tempCostPerNorm = tempDelta and divisor and (tempDelta / divisor) or nil,
+        lowNormGuarded = norm and norm < NORM_FLOOR or nil,
         norm = norm,
-        tier = tonumber(endMetrics and endMetrics.tier) or 0,
-        compAdj = tonumber(endMetrics and endMetrics.compAdj) or 0,
+        compAdj = asMetricValue(endMetrics and endMetrics.compAdj),
         effectiveLoad = asMetricValue(endMetrics and endMetrics.effectiveLoad),
         loadNormRuntime = asMetricValue(endMetrics and endMetrics.loadNormRuntime),
-        upperBodyLoadRuntime = asMetricValue(endMetrics and endMetrics.upperBodyLoad),
+        runtimeUpdatedMinute = asMetricValue(endMetrics and endMetrics.runtimeUpdatedMinute),
+        runtimeSnapshotAgeMinutes = asMetricValue(endMetrics and endMetrics.runtimeSnapshotAgeMinutes),
         swingChainLoadRuntime = asMetricValue(endMetrics and endMetrics.swingChainLoad),
-        massLoadRuntime = asMetricValue(endMetrics and endMetrics.massLoadRuntime),
-        thermalLoadRuntime = asMetricValue(endMetrics and endMetrics.thermalLoadRuntime),
-        breathingLoadRuntime = asMetricValue(endMetrics and endMetrics.breathingLoadRuntime),
-        thermalPressureScale = asMetricValue(endMetrics and endMetrics.thermalPressureScale),
-        hotStrain = asMetricValue(endMetrics and endMetrics.hotStrain),
+        physicalLoadRuntime = asMetricValue(endMetrics and endMetrics.physicalLoadRuntime),
+        thermalResistance = asMetricValue(endMetrics and endMetrics.thermalResistance),
+        airflowResistanceRuntime = asMetricValue(endMetrics and endMetrics.airflowResistanceRuntime),
+        sealedRestrictionRuntime = asMetricValue(endMetrics and endMetrics.sealedRestrictionRuntime),
+        thermalStrainScale = asMetricValue(endMetrics and endMetrics.thermalStrainScale),
+        hotPressure = asMetricValue(endMetrics and endMetrics.hotPressure),
+        coldSuitability = asMetricValue(endMetrics and endMetrics.coldSuitability),
         bodyTempRuntime = asMetricValue(endMetrics and endMetrics.bodyTempRuntime),
         thermalContribution = asMetricValue(endMetrics and endMetrics.thermalContribution),
         breathingContribution = asMetricValue(endMetrics and endMetrics.breathingContribution),
+        metabolicRate = asMetricValue(endMetrics and endMetrics.metabolicRate),
+        metabolicDemand = asMetricValue(endMetrics and endMetrics.metabolicDemand),
+        metabolicNorm = asMetricValue(endMetrics and endMetrics.metabolicNorm),
+        breathingEffortRamp = asMetricValue(endMetrics and endMetrics.breathingEffortRamp),
+        breathingDynamicLoad = asMetricValue(endMetrics and endMetrics.breathingDynamicLoad),
+        breathingSealedLoad = asMetricValue(endMetrics and endMetrics.breathingSealedLoad),
         muscleContribution = asMetricValue(endMetrics and endMetrics.muscleContribution),
         recoveryContribution = asMetricValue(endMetrics and endMetrics.recoveryContribution),
         enduranceBeforeAms = asMetricValue(endMetrics and endMetrics.enduranceBeforeAms),
@@ -566,6 +414,7 @@ function BenchRunnerStep.resolveScenarioGateProfile(scenario)
         combat = false,
         realSleep = false,
         movementUptimeMin = tonumber(scenario and scenario.movement_uptime_min),
+        targetActivityUptimeMin = tonumber(scenario and scenario.target_activity_uptime_min),
     }
     for _, block in ipairs((scenario and scenario.blocks) or {}) do
         if tostring(block.kind or "") == "run_activity" then
@@ -582,6 +431,10 @@ function BenchRunnerStep.resolveScenarioGateProfile(scenario)
                     else
                         profile.movementUptimeMin = math.min(profile.movementUptimeMin, blockMovementUptimeMin)
                     end
+                end
+                local blockTargetActivityUptimeMin = tonumber(block.target_activity_uptime_min)
+                if blockTargetActivityUptimeMin ~= nil then
+                    profile.targetActivityUptimeMin = blockTargetActivityUptimeMin
                 end
             end
             if mode == "native_combat_air" then
@@ -612,6 +465,7 @@ function BenchRunnerStep.evaluateStepGates(exec, summary)
     local thresholds = exec and exec.validityThresholds or {}
 
     local movementUptimeMin = resolveThreshold(thresholds.movement_uptime_min, VALIDITY_DEFAULTS.movement_uptime_min, 0.0)
+    local targetActivityUptimeMin = resolveThreshold(thresholds.target_activity_uptime_min, VALIDITY_DEFAULTS.target_activity_uptime_min, 0.0)
     local attackSuccessRatioMin = resolveThreshold(thresholds.attack_success_ratio_min, VALIDITY_DEFAULTS.attack_success_ratio_min, 0.0)
     local validSampleRatioMin = resolveThreshold(thresholds.valid_sample_ratio_min, VALIDITY_DEFAULTS.valid_sample_ratio_min, 0.0)
     local completionRatioMin = resolveThreshold(thresholds.completion_ratio_min, VALIDITY_DEFAULTS.completion_ratio_min, 0.0)
@@ -630,6 +484,11 @@ function BenchRunnerStep.evaluateStepGates(exec, summary)
 
     summary.swingsPerMinute = calculateSwingsPerMinute(activity)
     activity.swings_per_minute = summary.swingsPerMinute
+
+    local clockRewindSec = tonumber(activity.clock_rewind_sec)
+    if clockRewindSec ~= nil and clockRewindSec > 0.1 then
+        reject("clock_continuity")
+    end
 
     local achievedSwings = tonumber(activity.achieved_swings) or 0
     if summary.armStiffnessDelta ~= nil and achievedSwings > 0 then
@@ -656,6 +515,14 @@ function BenchRunnerStep.evaluateStepGates(exec, summary)
         end
     end
 
+    if result.validity_gates_passed and profile.movement then
+        local targetActivityUptime = tonumber(activity.target_activity_pct)
+        local activityGateMin = resolveThreshold(profile.targetActivityUptimeMin, targetActivityUptimeMin, 0.0)
+        if targetActivityUptime == nil or targetActivityUptime < activityGateMin then
+            reject("target_activity_uptime")
+        end
+    end
+
     if profile.combat then
         local attackAttempts = math.max(0, tonumber(activity.attack_attempts) or 0)
         local attackSuccess = math.max(0, tonumber(activity.attack_success) or 0)
@@ -669,19 +536,29 @@ function BenchRunnerStep.evaluateStepGates(exec, summary)
     end
 
     if result.validity_gates_passed and not profile.realSleep then
+        if tonumber(summary and summary.loadNormRuntime) == nil then
+            reject("runtime_snapshot")
+        end
+    end
+
+    if result.validity_gates_passed and not profile.realSleep then
         local requestedSec = math.max(0, tonumber(activity.requested_sec) or 0)
         local achievedSec = math.max(0, tonumber(activity.achieved_sec) or 0)
         if requestedSec > 0 and achievedSec < (requestedSec * completionRatioMin) then
             reject("achieved_sec")
         end
     end
-    if result.validity_gates_passed and profile.realSleep and tostring(activity.step_validity or "valid") == "soft_fail" then
-        reject("sleep_soft_fail")
+    if result.validity_gates_passed and profile.realSleep then
+        local exitReason = tostring(activity.exit_reason or "completed")
+        if exitReason ~= "sleep_recovered" then
+            reject("sleep_completion")
+        end
     end
 
     if result.validity_gates_passed then
         local requestedSwings = math.max(0, tonumber(activity.requested_swings) or 0)
-        if requestedSwings > 0 and achievedSwings < (requestedSwings * completionRatioMin) then
+        local swingCompletionRatio = profile.combat and 1.0 or completionRatioMin
+        if requestedSwings > 0 and achievedSwings < (requestedSwings * swingCompletionRatio) then
             reject("achieved_swings")
         end
     end
@@ -730,7 +607,7 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         setActual = textSignature(setActual)
     end
     local line = string.format(
-        "[AMS_BENCH_STEP_DONE] id=%s idx=%d/%d set=%s class=%s scenario=%s repeat_index=%d exit_reason=%s requested_swings=%d achieved_swings=%d requested_sec=%.2f achieved_sec=%.2f endDelta=%s thirstDelta=%s fatigueDelta=%s tempDelta=%s strainDelta=%s arm_stiffness_start=%s arm_stiffness_end=%s arm_stiffness_delta=%s stiffness_per_swing=%s swings_per_minute=%s norm=%.5f compAdj=%.3f ub=%.3f sc=%.3f tier=%d endurance_cost_per_norm=%s thirst_cost_per_norm=%s temp_cost_per_norm=%s low_norm_guarded=%s set_source=%s set_expected=%s set_actual=%s set_integrity=%s driver=%s env_source=%s activity_source=%s step_validity=%s validity_gates_passed=%s gate_rejected=%s gate_failed=%s native_nav_mode=%s native_ai_mode=%s native_npc_mode=%s native_path_retries=%d native_path_has=%s native_path_goal=%s native_path_moving=%s native_path_started=%s native_path_len=%s native_path_result=%s reset_ok=%s reset_attempts=%d reset_error=%s forward_rearm_attempts=%d forward_rearm_failures=%d teleport_jump_count=%d anchor_start_err_tiles=%s anchor_end_err_tiles=%s anchor_delta_before_start=%s anchor_delta_after_post_reset=%s goal_x=%s goal_y=%s valid_sample_ratio=%s movement_uptime=%s distance_moved=%s total_distance_tiles=%s elapsed_game_sec=%s sample_window_sec=%s total_samples=%d valid_samples=%d moving_samples=%d stall_sec_accum=%s stall_reason=%s stall_reason_counts=%s phase_timeline=%s walk_pct=%s run_pct=%s sprint_pct=%s idle_pct=%s pct_idle=%s pct_walk=%s pct_run=%s pct_sprint=%s pct_combat=%s avg_move_speed=%s attack_attempts=%d attack_success=%d attack_success_ratio=%s attack_cooldown_blocks=%d attack_cooldown_sec=%s hit_events=%d",
+        "[AMS_BENCH_STEP_DONE] id=%s idx=%d/%d set=%s class=%s scenario=%s repeat_index=%d exit_reason=%s requested_swings=%d achieved_swings=%d requested_sec=%.2f achieved_sec=%.2f endDelta=%s thirstDelta=%s fatigueDelta=%s tempDelta=%s strainDelta=%s arm_stiffness_start=%s arm_stiffness_end=%s arm_stiffness_delta=%s stiffness_per_swing=%s swings_per_minute=%s norm=%s compAdj=%s sc=%.3f endurance_cost_per_norm=%s thirst_cost_per_norm=%s temp_cost_per_norm=%s low_norm_guarded=%s set_source=%s set_expected=%s set_actual=%s set_integrity=%s driver=%s env_source=%s activity_source=%s step_validity=%s validity_gates_passed=%s gate_rejected=%s gate_failed=%s native_nav_mode=%s native_ai_mode=%s native_npc_mode=%s native_path_retries=%d native_path_has=%s native_path_goal=%s native_path_moving=%s native_path_started=%s native_path_len=%s native_path_result=%s reset_ok=%s reset_attempts=%d reset_error=%s forward_rearm_attempts=%d forward_rearm_failures=%d teleport_jump_count=%d anchor_start_err_tiles=%s anchor_end_err_tiles=%s anchor_delta_before_start=%s anchor_delta_after_post_reset=%s goal_x=%s goal_y=%s valid_sample_ratio=%s movement_uptime=%s distance_moved=%s total_distance_tiles=%s elapsed_game_sec=%s sample_window_sec=%s total_samples=%d valid_samples=%d moving_samples=%d stall_sec_accum=%s stall_reason=%s stall_reason_counts=%s phase_timeline=%s walk_pct=%s run_pct=%s sprint_pct=%s idle_pct=%s pct_idle=%s pct_walk=%s pct_run=%s pct_sprint=%s pct_combat=%s avg_move_speed=%s attack_attempts=%d attack_success=%d attack_success_ratio=%s attack_cooldown_blocks=%d attack_cooldown_sec=%s hit_events=%d",
         runId,
         index,
         total,
@@ -753,11 +630,9 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         metricOrNa(summary.armStiffnessDelta, 6),
         metricOrNa(summary.stiffnessPerSwing, 6),
         metricOrNa(summary.swingsPerMinute, 4),
-        tonumber(summary.norm) or 0,
-        tonumber(summary.compAdj) or 0,
-        tonumber(summary.upperBodyLoadRuntime) or 0,
+        metricOrNa(summary.norm, 5),
+        metricOrNa(summary.compAdj, 3),
         tonumber(summary.swingChainLoadRuntime) or 0,
-        tonumber(summary.tier) or 0,
         metricOrNa(summary.enduranceCostPerNorm, 6),
         metricOrNa(summary.thirstCostPerNorm, 6),
         metricOrNa(summary.tempCostPerNorm, 6),
@@ -826,19 +701,28 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         tonumber(activity.hit_events) or 0
     )
     local diagStepSuffix = string.format(
-        " eff_load=%s load_norm_runtime=%s upper_body_load_runtime=%s swing_chain_load_runtime=%s mass_load_runtime=%s thermal_load_runtime=%s breathing_load_runtime=%s thermal_scale=%s thermal_hot_strain=%s body_temp_runtime=%s thermal_contribution=%s breathing_contribution=%s muscle_contribution=%s recovery_contribution=%s end_before_ams=%s end_after_ams=%s end_natural_delta=%s end_applied_delta=%s weight_used_total=%s equipped_weight_total=%s actual_weight_total=%s fallback_weight_total=%s fallback_weight_count=%d source_actual_count=%d source_fallback_count=%d stat_strength=%s stat_fitness=%s stat_weapon_skill=%s stat_weapon_perk=%s",
+        " eff_load=%s load_norm_runtime=%s runtime_updated_min=%s runtime_snapshot_age_min=%s swing_chain_load_runtime=%s physical_load_runtime=%s thermal_resistance=%s airflow_resistance_runtime=%s sealed_restriction_runtime=%s thermal_scale=%s thermal_hot_pressure=%s cold_suitability=%s body_temp_runtime=%s thermal_contribution=%s breathing_contribution=%s metabolic_rate=%s metabolic_demand=%s metabolic_norm=%s breathing_effort_ramp=%s breathing_dynamic_load=%s breathing_sealed_load=%s muscle_contribution=%s recovery_contribution=%s end_before_ams=%s end_after_ams=%s end_natural_delta=%s end_applied_delta=%s weight_used_total=%s equipped_weight_total=%s actual_weight_total=%s fallback_weight_total=%s fallback_weight_count=%d source_actual_count=%d source_fallback_count=%d stat_strength=%s stat_fitness=%s stat_weapon_skill=%s stat_weapon_perk=%s requested_activity=%s target_activity_pct=%s ams_applied_total=%s ams_applied_tick_count=%d clock_rewind_sec=%s",
         metricOrNa(summary.effectiveLoad, 4),
         metricOrNa(summary.loadNormRuntime, 5),
-        metricOrNa(summary.upperBodyLoadRuntime, 4),
+        metricOrNa(summary.runtimeUpdatedMinute, 3),
+        metricOrNa(summary.runtimeSnapshotAgeMinutes, 3),
         metricOrNa(summary.swingChainLoadRuntime, 4),
-        metricOrNa(summary.massLoadRuntime, 4),
-        metricOrNa(summary.thermalLoadRuntime, 4),
-        metricOrNa(summary.breathingLoadRuntime, 4),
-        metricOrNa(summary.thermalPressureScale, 4),
-        metricOrNa(summary.hotStrain, 4),
+        metricOrNa(summary.physicalLoadRuntime, 4),
+        metricOrNa(summary.thermalResistance, 4),
+        metricOrNa(summary.airflowResistanceRuntime, 4),
+        metricOrNa(summary.sealedRestrictionRuntime, 4),
+        metricOrNa(summary.thermalStrainScale, 4),
+        metricOrNa(summary.hotPressure, 4),
+        metricOrNa(summary.coldSuitability, 4),
         metricOrNa(summary.bodyTempRuntime, 4),
         metricOrNa(summary.thermalContribution, 4),
         metricOrNa(summary.breathingContribution, 4),
+        metricOrNa(summary.metabolicRate, 4),
+        metricOrNa(summary.metabolicDemand, 4),
+        metricOrNa(summary.metabolicNorm, 4),
+        metricOrNa(summary.breathingEffortRamp, 4),
+        metricOrNa(summary.breathingDynamicLoad, 4),
+        metricOrNa(summary.breathingSealedLoad, 4),
         metricOrNa(summary.muscleContribution, 4),
         metricOrNa(summary.recoveryContribution, 4),
         metricOrNa(summary.enduranceBeforeAms, 6),
@@ -855,7 +739,12 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         metricOrNa(activity and activity.stat_strength, 0),
         metricOrNa(activity and activity.stat_fitness, 0),
         metricOrNa(activity and activity.stat_weapon_skill, 0),
-        tostring((activity and activity.stat_weapon_perk) or "na")
+        tostring((activity and activity.stat_weapon_perk) or "na"),
+        tostring((activity and activity.requested_activity) or "na"),
+        metricOrNa(activity and activity.target_activity_pct, 4),
+        metricOrNa(activity and activity.ams_applied_total, 6),
+        tonumber(activity and activity.ams_applied_tick_count) or 0,
+        metricOrNa(activity and activity.clock_rewind_sec, 3)
     )
     line = line .. diagStepSuffix
     if useStream then
@@ -891,12 +780,19 @@ end
 -- Activity execution lifecycle
 -- -----------------------------------------------------------------------------
 
+local function registerVanillaSleep(player, hours, safeMethod)
+    local sleepingEvent = type(getSleepingEvent) == "function" and getSleepingEvent() or nil
+    if sleepingEvent then
+        safeMethod(sleepingEvent, "setPlayerFallAsleep", player, hours)
+    end
+end
+
 function BenchRunnerStep.runActivity(player, state, exec, block, deps)
     deps = deps or {}
     local ctx = depOr(deps, "ctx", ctx)
-    local clamp = depOr(deps, "clamp", BenchUtils.clamp)
+    local clamp = deps.clamp or (BenchUtils and BenchUtils.clamp)
     local setEnv = deps.setEnv
-    local safeMethod = depOr(deps, "safeMethod", BenchUtils.safeMethod)
+    local safeMethod = deps.safeMethod or (BenchUtils and BenchUtils.safeMethod)
     local startNativeDriver = deps.startNativeDriver
     local REAL_SLEEP_FATIGUE_WAKE_THRESHOLD_DEFAULT = tonumber(deps.realSleepFatigueWakeThresholdDefault) or 0.02
     local REAL_SLEEP_SAFETY_HOURS_DEFAULT = tonumber(deps.realSleepSafetyHoursDefault) or 16.0
@@ -940,8 +836,8 @@ function BenchRunnerStep.runActivity(player, state, exec, block, deps)
             while wakeHour >= 24.0 do
                 wakeHour = wakeHour - 24.0
             end
-            local modData = safeMethod(player, "getModData")
-            local amsState = modData and modData["ArmorMakesSenseState"]
+            local ensureState = ctx("ensureState")
+            local amsState = type(ensureState) == "function" and ensureState(player) or nil
             if type(amsState) == "table" then
                 amsState.sleepSnapshot = nil
                 amsState.wasSleeping = false
@@ -949,6 +845,7 @@ function BenchRunnerStep.runActivity(player, state, exec, block, deps)
             safeMethod(player, "setForceWakeUpTime", wakeHour)
             safeMethod(player, "setAsleepTime", 0.0)
             safeMethod(player, "setAsleep", true)
+            registerVanillaSleep(player, hours, safeMethod)
             pendingType = "real_sleep"
             if exec and exec.activityResult then
                 exec.activityResult.sleep_force_wake_hour = wakeHour
@@ -985,8 +882,9 @@ function BenchRunnerStep.runActivity(player, state, exec, block, deps)
             requestedSwings = tonumber(nativeDriver.targetSwings) or requestedSwings
         end
     else
-        requestedSec = requestedSec > 0 and requestedSec or 180
-        achievedSec = requestedSec
+        exitReason = "native_hard_unknown_activity_mode"
+        hardFail = true
+        stepValidity = "hard_fail"
     end
 
     return {
@@ -1029,6 +927,34 @@ function BenchRunnerStep.isPendingComplete(player, state, pendingType, exec, dep
         local elapsedSec = math.max(0, (nowMinutes() - startedAt) * 60.0)
         return elapsedSec >= requestedSec
     end
+    if pendingType == "wait_window" then
+        local requestedSec = math.max(0, tonumber(exec and exec.pendingWaitRequestedSec) or 0)
+        local startedAt = tonumber(exec and exec.pendingStartedAt) or nowMinutes()
+        if ((nowMinutes() - startedAt) * 60.0) < requestedSec then
+            return false
+        end
+        if exec and exec.pendingWaitRuntimeAligned == true then
+            local snapshot = type(state) == "table" and state.uiRuntimeSnapshot or nil
+            local updatedMinute = tonumber(snapshot and snapshot.updatedMinute)
+            return updatedMinute ~= nil and updatedMinute >= (startedAt + (requestedSec / 60.0))
+        end
+        return true
+    end
+    if pendingType == "runtime_tick" then
+        local snapshot = type(state) == "table" and state.uiRuntimeSnapshot or nil
+        local updatedMinute = tonumber(snapshot and snapshot.updatedMinute)
+        local baseline = tonumber(exec and exec.pendingRuntimeUpdatedMinute)
+        if updatedMinute ~= nil and (baseline == nil or updatedMinute > baseline) then
+            return true
+        end
+        local timeoutSec = math.max(1, tonumber(exec and exec.pendingWaitRequestedSec) or 120)
+        local startedAt = tonumber(exec and exec.pendingStartedAt) or nowMinutes()
+        if ((nowMinutes() - startedAt) * 60.0) >= timeoutSec then
+            exec.runtimeSyncTimedOut = true
+            return true
+        end
+        return false
+    end
     if pendingType == "real_sleep" then
         local startedAt = tonumber(exec and exec.pendingStartedAt) or nowMinutes()
         local elapsedSec = math.max(0, (nowMinutes() - startedAt) * 60.0)
@@ -1059,6 +985,9 @@ function BenchRunnerStep.isPendingComplete(player, state, pendingType, exec, dep
                 end
                 safeMethod(player, "setAsleepTime", 0.0)
                 safeMethod(player, "setAsleep", true)
+                local sleepHours = tonumber(exec and exec.activityResult and exec.activityResult.sleep_safety_hours)
+                    or REAL_SLEEP_SAFETY_HOURS_DEFAULT
+                registerVanillaSleep(player, sleepHours, safeMethod)
                 return false
             end
             if not observed then
@@ -1129,6 +1058,12 @@ function BenchRunnerStep.resetPrepareStateCarryover(player, state, deps)
     end
 
     state.thermalModelState = nil
+    state.uiRuntimeSnapshot = nil
+    local nowFn = ctx("getWorldAgeMinutes")
+    if type(nowFn) == "function" then
+        state.lastUpdateGameMinutes = tonumber(nowFn()) or state.lastUpdateGameMinutes
+    end
+    state.pendingCatchupMinutes = 0
     local enduranceNow = type(ctx("getEndurance")) == "function" and ctx("getEndurance")(player) or nil
     state.lastEnduranceObserved = tonumber(enduranceNow)
 end
@@ -1191,11 +1126,8 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
     local maybeLogMidActivitySample = deps.maybeLogMidActivitySample or BenchRunnerStep.maybeLogMidActivitySample
     local resetPrepareStateCarryover = deps.resetPrepareStateCarryover or BenchRunnerStep.resetPrepareStateCarryover
     local blocks = exec.scenario and exec.scenario.blocks or {}
-    enforceBenchStatProfile(exec, player, safeMethod)
-    logStatProfileApplyError(exec, ctx("logError"))
 
     if exec.pendingType then
-        enforceBenchStatProfile(exec, player, safeMethod)
         if exec.weatherOverride then
             refreshWeatherOverrides(exec.weatherOverride)
         end
@@ -1211,6 +1143,7 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
             exec.nativeDriver = nil
             exec.pendingType = nil
             exec.pendingSpeedReq = nil
+            exec.pendingWaitRuntimeAligned = nil
 
             if exec.expectedSetHash then
                 local actualHash = snapshotWornHash(player)
@@ -1225,14 +1158,21 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 exec.softFail = true
             end
         else
+            local completedPendingType = exec.pendingType
             if not isPendingComplete(player, state, exec.pendingType, exec) then
                 maybeLogMidActivitySample(exec, player)
                 return "pending", nil
             end
-            local elapsedSec = math.max(0, (nowMinutes() - (exec.pendingStartedAt or nowMinutes())) * 60.0)
-            exec.activityResult.achieved_sec = elapsedSec
-            if exec.activityResult.requested_sec <= 0 then
-                exec.activityResult.requested_sec = elapsedSec
+            if exec.runtimeSyncTimedOut then
+                clearExecWeatherOverride(exec)
+                return "error", "runtime_snapshot_timeout"
+            end
+            if completedPendingType ~= "wait_window" and completedPendingType ~= "runtime_tick" then
+                local elapsedSec = math.max(0, (nowMinutes() - (exec.pendingStartedAt or nowMinutes())) * 60.0)
+                exec.activityResult.achieved_sec = elapsedSec
+                if exec.activityResult.requested_sec <= 0 then
+                    exec.activityResult.requested_sec = elapsedSec
+                end
             end
             if exec.expectedSetHash then
                 local actualHash = snapshotWornHash(player)
@@ -1240,6 +1180,8 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
             end
             exec.pendingType = nil
             exec.pendingSpeedReq = nil
+            exec.pendingWaitRequestedSec = nil
+            exec.pendingRuntimeUpdatedMinute = nil
         end
     end
 
@@ -1273,10 +1215,6 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 safeMethod(thermoregulator, "update")
             end
             resetPrepareStateCarryover(player, state)
-            if type(exec.statProfile) == "table" then
-                enforceBenchStatProfile(exec, player, safeMethod)
-                logStatProfileApplyError(exec, ctx("logError"))
-            end
         elseif kind == "equip_set" then
             equipSet(player, exec.setDef)
             exec.expectedSetHash = snapshotWornHash(player)
@@ -1328,6 +1266,22 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 sampleLog(exec.runId, exec.setDef, exec.scenarioId, block.tag or "series", i, sample, exec.activityResult, exec)
                 exec.endMetrics = sample
             end
+        elseif kind == "await_runtime_tick" then
+            local snapshot = type(state) == "table" and state.uiRuntimeSnapshot or nil
+            exec.pendingType = "runtime_tick"
+            exec.pendingStartedAt = nowMinutes()
+            exec.pendingWaitRequestedSec = math.max(1, tonumber(block.timeout_sec) or 120)
+            exec.pendingRuntimeUpdatedMinute = tonumber(snapshot and snapshot.updatedMinute)
+            exec.runtimeSyncTimedOut = false
+            exec.blockIndex = exec.blockIndex + 1
+            return "pending", nil
+        elseif kind == "wait_window" then
+            exec.pendingType = "wait_window"
+            exec.pendingStartedAt = nowMinutes()
+            exec.pendingWaitRequestedSec = math.max(0, tonumber(block.requested_sec) or 0)
+            exec.pendingWaitRuntimeAligned = block.runtime_aligned == true
+            exec.blockIndex = exec.blockIndex + 1
+            return "pending", nil
         elseif kind == "run_activity" then
             if not exec.startMetrics then
                 exec.startMetrics = collectMetrics(player)
@@ -1362,7 +1316,6 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 end
             end
             exec.activityResult = runActivity(player, state, exec, block)
-            attachStatSnapshot(exec.activityResult, exec.appliedStatSnapshot)
             if exec.activityResult.hard_fail then
                 clearExecWeatherOverride(exec)
                 return "error", tostring(exec.activityResult.exit_reason or "native_hard_failed")
@@ -1371,6 +1324,10 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 exec.pendingType = exec.activityResult.pending_type
                 exec.pendingSpeedReq = tonumber(exec.activityResult.speed_req) or nil
                 exec.pendingStartedAt = nowMinutes()
+                local baselineAt = tonumber(exec.startMetrics and exec.startMetrics.t)
+                if baselineAt ~= nil then
+                    exec.activityResult.clock_rewind_sec = math.max(0, (baselineAt - exec.pendingStartedAt) * 60.0)
+                end
                 local blockMidEnabled = block.mid_activity_samples
                 if blockMidEnabled == nil then
                     blockMidEnabled = block.mid_samples
@@ -1406,6 +1363,9 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
             if tostring(exec.activityResult.step_validity or "valid") == "soft_fail" then
                 exec.softFail = true
             end
+        else
+            clearExecWeatherOverride(exec)
+            return "error", "unknown_block_kind:" .. kind
         end
         exec.blockIndex = exec.blockIndex + 1
     end
@@ -1417,7 +1377,6 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
         exec.startMetrics = exec.endMetrics
     end
 
-    attachStatSnapshot(exec.activityResult, exec.appliedStatSnapshot)
     local summary = summarizeStep(exec.startMetrics, exec.endMetrics)
     local finalActual = snapshotWornHash(player)
     if exec.expectedSetHash then

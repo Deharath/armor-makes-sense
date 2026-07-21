@@ -1,60 +1,96 @@
 # Armor Makes Sense
 
-**Build 42 mod for Project Zomboid.**
+Armor Makes Sense (AMS) is a Project Zomboid Build 42 mod that replaces
+wearable discomfort penalties with physical equipment costs.
 
-Armor is a physical tradeoff, not a psychological penalty. This mod removes armor as a vanilla discomfort source and adds physical costs: endurance drain, muscle strain, breathing restriction, thermal pressure, and sleep recovery penalties -- all through vanilla's existing systems.
+## Requirements
 
-No armor stress penalties. Just physics.
+- Project Zomboid Build 42.19.0 or later
+- No required library mods
 
-## What It Does
+## Features
 
-**Wearable discomfort zeroed.** Vanilla's discomfort modifier is set to zero on wearable items at boot. Armor no longer causes stress or unhappiness, while non-clothing discomfort sources remain vanilla.
+- **Wearable discomfort removal:** Sets `DiscomfortModifier` to zero on
+  wearable items while preserving non-clothing discomfort sources.
+- **Equipment burden:** Derives physical load from item weight, protection,
+  original discomfort, and movement modifiers.
+- **Endurance:** Increases movement cost and reduces endurance regeneration.
+  Vanilla remains responsible for melee stamina costs.
+- **Thermal pressure:** Adds exertion cost when insulating equipment contributes
+  to heat strain. Insulation can reduce cold strain.
+- **Breathing restriction:** Applies exertion-dependent penalties to
+  respirators, gas masks, and sealed suits.
+- **Muscle strain:** Adds melee strain from protective equipment worn on the
+  swing chain, including shoulders, arms, forearms, elbows, and hands.
+- **Sleep recovery:** Reduces fatigue recovery while sleeping in rigid gear.
+- **Speed rebalance:** Applies curated run-speed and combat-speed modifiers by
+  protected body region.
+- **Equipment layering:** Moves selected items to eight AMS body locations to
+  remove unnecessary vanilla slot conflicts.
 
-**Speed rebalance.** Run speed and combat speed modifiers are normalised by body region for known protective gear. Leg armor affects running. Arm and shoulder armor affect combat speed. Light pads stay neutral.
+## User Interface
 
-**Equipment layering.** Vanilla limits what you can wear together in ways that don't always make sense -- a watch can't go over a forearm guard, shoulder pads block your backpack. This mod re-slots 79 items across 8 custom body locations so layering works the way you'd expect.
+- Wearable tooltips show burden and breathing restriction when applicable.
+- The character information window includes a Burden tab with aggregate load,
+  thermal state, breathing restriction, sleep impact, and cost drivers.
+- The Burden tab can export an AMS support report.
 
-**Endurance drain.** Heavier armor increases endurance usage during movement and combat. Walking is almost free. Sprinting in full plate is not.
+## Multiplayer
 
-**Thermal pressure.** Armor traps heat. In hot weather you overheat faster. In cold weather, insulating armor helps. The system is intentionally asymmetric.
+AMS supports singleplayer, hosted co-op, and dedicated servers. Multiplayer
+gameplay calculations are server-authoritative. Clients receive snapshots for
+the Burden UI and apply server-authoritative sleep and wake corrections.
 
-**Breathing restriction.** Gas masks and respirators restrict airflow. The penalty scales with exertion: invisible at rest, noticeable in sustained combat.
+## Configuration
 
-**Muscle strain.** Heavy arm and shoulder armor adds fatigue per swing. A chest plate doesn't slow your swing, but gauntlets and shoulder pads do. Better-crafted armor restricts less than crude scrap.
+The sandbox settings expose independent toggles for:
 
-**Sleep recovery.** Sleeping in rigid armor slows fatigue recovery. It's an emergency choice, not a default.
-
-## UI
-
-- **Tooltips** show burden level and breathing restriction for each armor piece
-- **Burden tab** in the character info panel breaks down total loadout cost
-- **Help button** explains each mechanic in plain language
+- thermal pressure
+- muscle strain
+- sleep penalties
 
 ## Installation
 
-Subscribe on [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3677430162), or copy `common/` and `42/` into your PZ mods directory.
+Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3677430162).
 
-Requires Project Zomboid Build 42 (42.14.0+). Singleplayer only.
+For a manual installation, place the complete `ArmorMakesSense` directory in
+the Project Zomboid mods directory. Keep `mod.info`, `common/`, and `42/` in the
+same mod directory.
 
 ## Compatibility
 
-- Multiplayer compatible
-- Build 42.14.1+
-- Armor from other mods should work -- items are classified based on their defense stats, weight, and item properties (not yet tested with all armor mods)
-- Requires [Starlit Library](https://steamcommunity.com/sharedfiles/filedetails/?id=3378285185) for tooltip UI integration
+AMS classifies third-party wearable equipment from item properties, including
+protection, weight, tags, body location, and movement modifiers. Unknown armor
+can therefore receive AMS burden without a dedicated patch. Curated speed
+rebalance and slot changes apply only to items listed by AMS.
+
+The shared `MakesSenseCompat` protocol coordinates endurance and sleep effects
+when Caffeine Makes Sense or Nutrition Makes Sense is installed.
 
 ## Documentation
 
-| Document | Contents |
+| Document | Purpose |
 |---|---|
-| [Design Manifesto](docs/armor_makes_sense-design_manifesto.md) | Core philosophy and design goals |
-| [Technical Reference](docs/armor_makes_sense-technical_appendix.md) | Architecture, models, load channels, config values |
+| [Design Principles](docs/armor_makes_sense-design_manifesto.md) | Gameplay goals and non-goals |
+| [Technical Overview](docs/armor_makes_sense-technical_appendix.md) | Architecture and module ownership |
+| [Runtime Reference](docs/armor_makes_sense-runtime_reference.md) | Gameplay models and formulas |
+| [Multiplayer Reference](docs/armor_makes_sense-mp_reference.md) | Authority, transport, and diagnostics |
+| [UI Reference](docs/armor_makes_sense-ui_reference.md) | Tooltip and Burden panel behavior |
+| [Testing Reference](docs/armor_makes_sense-testing_reference.md) | Development commands and benchmark infrastructure |
 
-## Testing
+## Development Testing
 
-The `testing/` directory contains a full in-game benchmark harness: scenario catalogs, a native movement/combat driver, step pipelines, snapshot writer, and report aggregation. This ships with the GitHub release but not the Workshop build.
+Development builds include the in-game test and benchmark modules under
+`common/media/lua/client/testing/`. Workshop builds exclude testing and
+diagnostic modules. Release staging validates the exclusion and copies runtime
+Lua unchanged; it does not rewrite Main.
 
-Run benchmarks via console commands (see `testing/ArmorMakesSense_Commands.lua`). Parse results with `tools/parse_bench.py`.
+Workspace tooling is under `../tools/armor_makes_sense/`. See the
+[Testing Reference](docs/armor_makes_sense-testing_reference.md) for the Lua API
+and benchmark pipeline.
+
+Run `tests/run_tests.sh` from the mod root for deterministic shared-model and MP
+snapshot codec characterization checks.
 
 ## License
 

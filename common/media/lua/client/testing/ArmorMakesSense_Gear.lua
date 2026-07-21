@@ -50,9 +50,12 @@ function Gear.snapshotWornItems(player, deps)
         local worn = safeMethod(deps, wornItems, "get", i)
         local item = worn and safeMethod(deps, worn, "getItem")
         if item then
+            local location = safeMethod(deps, worn, "getLocation")
             out[#out + 1] = {
                 fullType = tostring(safeMethod(deps, item, "getFullType") or safeMethod(deps, item, "getType") or ""),
-                location = tostring(safeMethod(deps, worn, "getLocation") or ""),
+                location = tostring(location or ""),
+                item = item,
+                locationObject = location,
             }
         end
     end
@@ -200,6 +203,12 @@ local function restoreVirtualItemCondition(item, deps)
     end
 end
 
+local function notifyClothingUpdated(player)
+    if type(triggerEvent) == "function" then
+        pcall(triggerEvent, "OnClothingUpdated", player)
+    end
+end
+
 function Gear.wearProfile(player, profileEntries, mode, deps)
     if not profileEntries then
         return 0, 0, 0
@@ -279,6 +288,7 @@ function Gear.wearProfile(player, profileEntries, mode, deps)
         Gear.zeroLiveItemDiscomfortIfWearable(step.item, step.loc, deps)
         worn = worn + 1
     end
+    notifyClothingUpdated(player)
     return worn, missing, spawned
 end
 

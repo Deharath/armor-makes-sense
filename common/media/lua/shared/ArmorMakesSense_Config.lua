@@ -7,10 +7,6 @@ ArmorMakesSense.DEFAULTS = {
     BaseEnduranceDrainPerMinute = 0.0033,
     EnduranceRegenPenalty = 0.45,
 
-    -- Environment amplifiers are intentionally mild to avoid double-counting vanilla thermal systems.
-    HeatAmplifierStrength = 0.25,
-    WetAmplifierStrength = 0.18,
-
     -- Secondary physical effects.
     EnableThermalModel = true,
     EnableMuscleStrainModel = true,
@@ -18,20 +14,13 @@ ArmorMakesSense.DEFAULTS = {
     MuscleStrainMaxExtra = 0.15,
     MuscleStrainLoadStart = 3.0,
     MuscleStrainLoadFull = 22.0,
-    ThermalEnduranceWeight = 0.35,
+    ThermalContributionMax = 14.0,
 
-    -- Breathing restriction is intensity-thresholded: near invisible at low effort,
-    -- then ramps with ventilation demand (sealed masks ramp steeper).
-    BreathingDemandThreshold = 0.52,
-    BreathingCombatDemandFloor = 0.50,
-    BreathingPenaltyLoadStart = 1.20,
-    BreathingPenaltyLoadSpan = 2.20,
-    BreathingSealLoadStart = 3.45,
-    BreathingSealLoadSpan = 0.20,
-    BreathingReliefMaxLoad = 3.30,
-    BreathingStaticReliefWeight = 0.25,
-    BreathingDynamicLoadWeight = 5.10,
-    BreathingSealedDynamicLoadWeight = 29.00,
+    -- Vanilla rate plus immediate native movement floors. Brisk walking stays
+    -- free; modest equivalent-load weights avoid exaggerating mask performance.
+    BreathingEffortOnset = 0.20,
+    BreathingDynamicLoadWeight = 0.70,
+    BreathingSealedDynamicLoadWeight = 1.00,
 
     -- Sleep-in-armor continuous fatigue recovery slowdown.
     SleepRigidityFatigueRate = 0.0045,

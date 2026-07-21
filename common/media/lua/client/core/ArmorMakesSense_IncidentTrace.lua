@@ -1,27 +1,13 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
-local okSchema, schemaOrErr = pcall(require, "ArmorMakesSense_MPIncidentSchema")
-if not okSchema or type(schemaOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][INCIDENT][CLIENT][ERROR] require failed: ArmorMakesSense_MPIncidentSchema :: " .. tostring(schemaOrErr))
-    return
-end
+local Schema = require "ArmorMakesSense_MPIncidentSchema"
 
 local Core = ArmorMakesSense.Core
 Core.IncidentTrace = Core.IncidentTrace or {}
 
 local IncidentTrace = Core.IncidentTrace
-local Schema = schemaOrErr
-local C = {}
 local latestIncident = nil
-
-local function ctx(name)
-    return C[name]
-end
-
-function IncidentTrace.setContext(context)
-    C = context or {}
-end
 
 local function formatNumber(value, precision)
     local num = tonumber(value)
@@ -151,7 +137,7 @@ function IncidentTrace.appendReportSection(lines)
             formatBool(row.activityChanged == true)
         )
         lines[#lines + 1] = string.format(
-            "     end_before=%s end_after=%s nat_delta=%s ams_delta=%s | load_norm=%s eff=%s phy=%s thm=%s br=%s rig=%s | env=%s tcontrib=%s bcontrib=%s",
+            "     end_before=%s end_after=%s nat_delta=%s ams_delta=%s | load_norm=%s eff=%s phy=%s resistance=%s airflow=%s rig=%s | heat=%s tcontrib=%s bcontrib=%s",
             formatNumber(row.enduranceBeforeAms, 4),
             formatNumber(row.enduranceAfterAms, 4),
             formatNumber(row.enduranceNaturalDelta, 4),
@@ -159,10 +145,10 @@ function IncidentTrace.appendReportSection(lines)
             formatNumber(row.loadNorm, 4),
             formatNumber(row.effectiveLoad, 3),
             formatNumber(row.physicalLoad, 3),
-            formatNumber(row.thermalLoad, 3),
-            formatNumber(row.breathingLoad, 3),
+            formatNumber(row.thermalResistance, 3),
+            formatNumber(row.airflowResistance, 3),
             formatNumber(row.rigidityLoad, 3),
-            formatNumber(row.enduranceEnvFactor, 4),
+            formatNumber(row.thermalStrainScale, 4),
             formatNumber(row.thermalContribution, 4),
             formatNumber(row.breathingContribution, 4)
         )

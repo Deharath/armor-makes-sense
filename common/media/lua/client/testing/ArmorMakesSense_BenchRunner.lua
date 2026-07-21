@@ -40,6 +40,7 @@ local RUN_COUNTER = 0
 local NORM_FLOOR = 0.05
 local VALIDITY_DEFAULTS = {
     movement_uptime_min = 0.70,
+    target_activity_uptime_min = 0.85,
     attack_success_ratio_min = 0.50,
     valid_sample_ratio_min = 0.85,
     completion_ratio_min = 0.50,
@@ -95,8 +96,7 @@ end
 
 local function normalizeRestoreSpeed(value)
     local speed = tonumber(value) or 1.0
-    if speed < 1.0 then return 1.0 end
-    return speed
+    return clamp(speed, 0.05, 40.0)
 end
 
 local function makeRunId()
@@ -135,17 +135,19 @@ end
 -- -----------------------------------------------------------------------------
 
 local benchSnapshotAppend = BenchRunnerSnapshot.benchSnapshotAppend
-local openStreamWriter = BenchRunnerSnapshot.openStreamWriter
 local streamLine = BenchRunnerSnapshot.streamLine
 local streamAppend = BenchRunnerSnapshot.streamAppend
-local closeStreamWriter = BenchRunnerSnapshot.closeStreamWriter
+
+local function openStreamWriter(runner)
+    return BenchRunnerSnapshot.openStreamWriter(runner)
+end
 
 local function streamActive(runner)
     return type(runner) == "table" and runner.streamWriterOpen == true and runner.streamWriterFailed ~= true and runner.streamWriter ~= nil
 end
 
-local function writeBenchSnapshotFile(runner, reason)
-    return BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutes, NORM_FLOOR)
+local function finalizeBenchLog(runner, reason)
+    return BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutes, NORM_FLOOR)
 end
 
 -- -----------------------------------------------------------------------------
@@ -189,7 +191,6 @@ local function nativeDeps()
         registerNativeTickPump = registerNativeTickPump,
         unregisterNativeTickPump = unregisterNativeTickPump,
         setIsoPlayerTestAIMode = setIsoPlayerTestAIMode,
-        setNativeTimeOfDay = setNativeTimeOfDay,
         distance2D = distance2D,
         readPlayerCoords = readPlayerCoords,
         snapPlayerToCoords = snapPlayerToCoords,
@@ -308,6 +309,7 @@ local function resolveValidityThresholds(plan)
     local thresholds = type(plan and plan.thresholds) == "table" and plan.thresholds or {}
     return {
         movement_uptime_min = pickThresholdValue(thresholds, "movement_uptime_min", VALIDITY_DEFAULTS.movement_uptime_min, 0.0),
+        target_activity_uptime_min = pickThresholdValue(thresholds, "target_activity_uptime_min", VALIDITY_DEFAULTS.target_activity_uptime_min, 0.0),
         attack_success_ratio_min = pickThresholdValue(thresholds, "attack_success_ratio_min", VALIDITY_DEFAULTS.attack_success_ratio_min, 0.0),
         valid_sample_ratio_min = pickThresholdValue(thresholds, "valid_sample_ratio_min", VALIDITY_DEFAULTS.valid_sample_ratio_min, 0.0),
         completion_ratio_min = pickThresholdValue(thresholds, "completion_ratio_min", VALIDITY_DEFAULTS.completion_ratio_min, 0.0),
@@ -551,7 +553,7 @@ local function resetStepMuscleStrainState(player, exec)
     return BenchRunnerStep.resetStepMuscleStrainState(player, {
         safeMethod = safeMethod,
         fitnessStiffnessGroups = FITNESS_STIFFNESS_GROUPS,
-        skipFitnessResetValues = type(exec and exec.statProfile) == "table",
+        skipFitnessResetValues = false,
     })
 end
 
@@ -689,9 +691,7 @@ local function finalizeRun(player, state, runner, reason)
     else
         benchSnapshotAppend(runner.snapshot, doneLine, "done")
     end
-    closeStreamWriter(runner)
-
-    local snapshotOk, snapshotPath, snapshotErr = writeBenchSnapshotFile(runner, doneReason)
+    local snapshotOk, snapshotPath, snapshotErr = finalizeBenchLog(runner, doneReason)
     runner.snapshotWriteOk = snapshotOk
     runner.snapshotPath = snapshotPath
     runner.snapshotWriteErr = snapshotErr
@@ -738,7 +738,22 @@ function BenchRunner.run(presetId, opts)
         return false
     end
 
-    if not BenchCatalog.validate() then
+    if type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")() then
+        if type(ctx("logError")) == "function" then
+            ctx("logError")("[AMS_BENCH_ERROR] benchmarks are singleplayer-only")
+        end
+        return false
+    end
+
+    local scenariosValid, scenarioError = BenchScenarios.validate()
+    if not scenariosValid then
+        if type(ctx("logError")) == "function" then
+            ctx("logError")("[AMS_BENCH_ERROR] " .. tostring(scenarioError))
+        end
+        return false
+    end
+
+    if not BenchCatalog.validate(BenchScenarios.exists) then
         return false
     end
 
@@ -779,7 +794,6 @@ function BenchRunner.run(presetId, opts)
     local combatSpeedReq = resolveCombatSpeedReq(runOpts)
     local pinnedTimeOfDay = resolvePinnedTimeOfDay(runOpts)
     local nativeOptions = resolveNativeOptions(runOpts)
-    local statProfile = type(plan.statProfile) == "table" and plan.statProfile or nil
     local benchLogMode = benchLogVerbose and "verbose" or "compact"
     local speedOriginal = tonumber(type(ctx("getCurrentGameSpeed")) == "function" and ctx("getCurrentGameSpeed")() or 1.0) or 1.0
     local baselineOutfit = type(ctx("snapshotWornItems")) == "function" and ctx("snapshotWornItems")(player) or {}
@@ -824,14 +838,6 @@ function BenchRunner.run(presetId, opts)
         NORM_FLOOR,
         baselineHash
     )
-    benchStartLine = benchStartLine .. string.format(
-        " stat_strength=%s stat_fitness=%s stat_weapon_skill=%s stat_weapon_perk=%s",
-        statProfile and tostring(statProfile.strength ~= nil and statProfile.strength or "na") or "na",
-        statProfile and tostring(statProfile.fitness ~= nil and statProfile.fitness or "na") or "na",
-        statProfile and tostring(statProfile.weaponSkill ~= nil and statProfile.weaponSkill or "na") or "na",
-        statProfile and tostring(statProfile.weaponPerk or "all") or "na"
-    )
-
     local log = ctx("log")
     if type(log) == "function" then
         log(benchStartLine)
@@ -891,7 +897,6 @@ function BenchRunner.run(presetId, opts)
         combatSpeedReq = combatSpeedReq,
         pinnedTimeOfDay = pinnedTimeOfDay,
         nativeOptions = nativeOptions,
-        statProfile = statProfile,
         validityThresholds = validityThresholds,
         reportThresholds = reportThresholds,
         setOrder = setOrder,
@@ -1116,7 +1121,6 @@ function BenchRunner.tick(player, state)
         combatSpeedReq = tonumber(runner.combatSpeedReq) or nil,
         pinnedTimeOfDay = runner.pinnedTimeOfDay,
         nativeOptions = runner.nativeOptions,
-        statProfile = runner.statProfile,
         validityThresholds = runner.validityThresholds or {},
         benchLogVerbose = runner.logVerbose == true,
         midSampleEnabled = runner.midSampleEnabled == true,
@@ -1225,7 +1229,7 @@ function BenchRunner.setList(presetId)
     end
     local ids = BenchCatalog.listSetIds(presetId)
     if type(ctx("log")) == "function" then
-        ctx("log")(string.format("[AMS_BENCH_SET_LIST] preset=%s sets=%s", tostring(presetId or "holistic_v1"), table.concat(ids, ",")))
+        ctx("log")(string.format("[AMS_BENCH_SET_LIST] preset=%s sets=%s", tostring(presetId or "benchmark_core_v1"), table.concat(ids, ",")))
     end
     return true
 end
@@ -1236,7 +1240,7 @@ function BenchRunner.scenarioList(presetId)
     end
     local ids = BenchCatalog.listScenarioIds(presetId)
     if type(ctx("log")) == "function" then
-        ctx("log")(string.format("[AMS_BENCH_SCENARIO_LIST] preset=%s scenarios=%s", tostring(presetId or "holistic_v1"), table.concat(ids, ",")))
+        ctx("log")(string.format("[AMS_BENCH_SCENARIO_LIST] preset=%s scenarios=%s", tostring(presetId or "benchmark_core_v1"), table.concat(ids, ",")))
     end
     return true
 end
@@ -1271,7 +1275,7 @@ function BenchRunner.wearSet(presetId, setId)
 
     local worn, missing = equipSet(player, setDef)
     if type(ctx("log")) == "function" then
-        ctx("log")(string.format("[AMS_BENCH_SET] preset=%s set=%s class=%s worn=%d missing=%d", tostring(presetId or "holistic_v1"), wanted, tostring(setDef.class), worn, missing))
+        ctx("log")(string.format("[AMS_BENCH_SET] preset=%s set=%s class=%s worn=%d missing=%d", tostring(presetId or "benchmark_core_v1"), wanted, tostring(setDef.class), worn, missing))
     end
     return true
 end

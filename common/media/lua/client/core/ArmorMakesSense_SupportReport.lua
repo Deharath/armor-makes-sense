@@ -4,16 +4,15 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 local Core = ArmorMakesSense.Core
 Core.SupportReport = Core.SupportReport or {}
 
+local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local Environment = require "ArmorMakesSense_EnvironmentShared"
+local IncidentTrace = require "core/ArmorMakesSense_IncidentTrace"
+local LoadModel = require "ArmorMakesSense_LoadModelShared"
+local Options = require "ArmorMakesSense_Options"
+local Stats = require "ArmorMakesSense_StatsShared"
+local Utils = require "ArmorMakesSense_UtilsShared"
+
 local SupportReport = Core.SupportReport
-local C = {}
-
-local function ctx(name)
-    return C[name]
-end
-
-function SupportReport.setContext(context)
-    C = context or {}
-end
 
 local function callGlobalIfPresent(name, ...)
     local fn = _G[name]
@@ -51,7 +50,7 @@ local function getWallClockFileStamp()
             return tostring(value)
         end
     end
-    local worldMinutes = tonumber(type(ctx("getWorldAgeMinutes")) == "function" and ctx("getWorldAgeMinutes")() or 0) or 0
+    local worldMinutes = tonumber(Utils.getWorldAgeMinutes()) or 0
     return string.format("world-%d", math.floor(worldMinutes))
 end
 
@@ -180,7 +179,7 @@ local PLAYER_FACING_OPTIONS = {
 }
 
 local function collectOptions()
-    local options = type(ctx("getOptions")) == "function" and ctx("getOptions")() or {}
+    local options = Options.get()
     if type(options) ~= "table" then
         return {}
     end
@@ -197,17 +196,12 @@ end
 
 
 local function resolveActivityLabel(player)
-    if type(ctx("getActivityLabel")) == "function" then
-        return tostring(ctx("getActivityLabel")(player) or "idle")
-    end
-    return "idle"
+    local activity = Environment.resolveActivity(player, Options.get())
+    return tostring(activity.label or "idle")
 end
 
 local function resolvePostureFlags(player)
-    local postureLabel = nil
-    if type(ctx("getPostureLabel")) == "function" then
-        postureLabel = tostring(ctx("getPostureLabel")(player) or "")
-    end
+    local postureLabel = tostring(Environment.getPostureLabel(player) or "")
     local flags = {
         sitting = callMethodIfPresent(player, "isSitOnGround") == true,
         asleep = callMethodIfPresent(player, "isAsleep") == true,
@@ -227,16 +221,12 @@ end
 
 local function collectPlayerState(player)
     local posture = resolvePostureFlags(player)
-    local bodyTemp = nil
-    if type(ctx("getBodyTemperature")) == "function" then
-        bodyTemp = ctx("getBodyTemperature")(player)
-    end
     return {
-        endurance = type(ctx("getEndurance")) == "function" and ctx("getEndurance")(player) or nil,
-        fatigue = type(ctx("getFatigue")) == "function" and ctx("getFatigue")(player) or nil,
-        thirst = type(ctx("getThirst")) == "function" and ctx("getThirst")(player) or nil,
-        wetness = type(ctx("getWetness")) == "function" and ctx("getWetness")(player) or nil,
-        bodyTemperature = bodyTemp,
+        endurance = Stats.getEndurance(player),
+        fatigue = Stats.getFatigue(player),
+        thirst = Stats.getThirst(player),
+        wetness = Stats.getWetness(player),
+        bodyTemperature = Stats.getBodyTemperature(player),
         carriedWeight = tonumber(callMethodIfPresent(player, "getInventoryWeight")),
         maxWeight = tonumber(callMethodIfPresent(player, "getMaxWeight")),
         activityLabel = resolveActivityLabel(player),
@@ -270,55 +260,6 @@ local function collectClimateState(player)
         raining = raining,
         snowing = snowing,
     }
-end
-
-local function collectWornItems(player)
-    local rows = {}
-    local wornItems = callMethodIfPresent(player, "getWornItems")
-    if not wornItems then
-        return rows
-    end
-    local count = tonumber(callMethodIfPresent(wornItems, "size")) or 0
-    for i = 0, count - 1 do
-        local worn = callMethodIfPresent(wornItems, "get", i)
-        local item = worn and callMethodIfPresent(worn, "getItem")
-        if item then
-            local bodyLocation = tostring(callMethodIfPresent(worn, "getLocation")
-                or callMethodIfPresent(item, "getBodyLocation")
-                or "unknown")
-            local signal = nil
-            if type(ctx("itemToArmorSignal")) == "function" then
-                signal = ctx("itemToArmorSignal")(item, bodyLocation)
-            end
-            local modId = tostring(callMethodIfPresent(item, "getModID") or "")
-            if modId == "" then
-                local scriptItem = callMethodIfPresent(item, "getScriptItem")
-                modId = tostring(callMethodIfPresent(scriptItem, "getModID") or "")
-            end
-            rows[#rows + 1] = {
-                bodyLocation = bodyLocation,
-                fullType = tostring(callMethodIfPresent(item, "getFullType") or callMethodIfPresent(item, "getType") or "unknown"),
-                displayName = tostring(callMethodIfPresent(item, "getDisplayName") or callMethodIfPresent(item, "getName") or "Unknown Item"),
-                sourceMod = modId ~= "" and modId or nil,
-                physical = tonumber(signal and signal.physicalLoad) or 0,
-                thermal = tonumber(signal and signal.thermalLoad) or 0,
-                breathing = tonumber(signal and signal.breathingLoad) or 0,
-                rigidity = tonumber(signal and signal.rigidityLoad) or 0,
-                weightUsed = tonumber(signal and signal.weightUsed) or 0,
-                weightSource = tostring(signal and signal.weightSource or "na"),
-                discomfort = tonumber(signal and signal.discomfort) or 0,
-                breathingClass = tostring(signal and signal.breathingClass or "none"),
-                breathingHasFilter = (signal and tostring(signal.breathingClass or "none") ~= "none") and signal.breathingHasFilter or nil,
-            }
-        end
-    end
-    table.sort(rows, function(a, b)
-        if a.physical == b.physical then
-            return tostring(a.fullType) < tostring(b.fullType)
-        end
-        return a.physical > b.physical
-    end)
-    return rows
 end
 
 local function resolveDisplayPath(relativePath)
@@ -367,12 +308,7 @@ local function collectMpSnapshot(state)
     local mpClient = type(state.mpClient) == "table" and state.mpClient or nil
     local lastSnapshotWallSecond = tonumber(mpClient and mpClient.lastSnapshotWallSecond) or nil
     if lastSnapshotWallSecond ~= nil and lastSnapshotWallSecond > 0 then
-        local nowSeconds = nil
-        if type(getTimestampMs) == "function" then
-            nowSeconds = math.floor((tonumber(getTimestampMs()) or 0) / 1000)
-        elseif type(getTimestamp) == "function" then
-            nowSeconds = math.floor(tonumber(getTimestamp()) or 0)
-        end
+        local nowSeconds = Utils.getWallClockSeconds()
         if nowSeconds ~= nil and nowSeconds > 0 then
             ageSeconds = math.max(0, nowSeconds - lastSnapshotWallSecond)
         end
@@ -381,16 +317,22 @@ local function collectMpSnapshot(state)
         updatedMinute = tonumber(snapshot.updatedMinute) or nil,
         loadNorm = tonumber(snapshot.loadNorm) or nil,
         physicalLoad = tonumber(snapshot.physicalLoad) or nil,
-        thermalLoad = tonumber(snapshot.thermalLoad) or nil,
-        breathingLoad = tonumber(snapshot.breathingLoad) or nil,
+        thermalResistance = tonumber(snapshot.thermalResistance) or nil,
+        airflowResistance = tonumber(snapshot.airflowResistance) or nil,
+        sealedRestriction = tonumber(snapshot.sealedRestriction) or nil,
         rigidityLoad = tonumber(snapshot.rigidityLoad) or nil,
         effectiveLoad = tonumber(snapshot.effectiveLoad) or nil,
         thermalContribution = tonumber(snapshot.thermalContribution) or nil,
         breathingContribution = tonumber(snapshot.breathingContribution) or nil,
-        hotStrain = tonumber(snapshot.hotStrain) or nil,
-        coldAppropriateness = tonumber(snapshot.coldAppropriateness) or nil,
-        thermalPressureScale = tonumber(snapshot.thermalPressureScale) or nil,
-        enduranceEnvFactor = tonumber(snapshot.enduranceEnvFactor) or nil,
+        metabolicRate = tonumber(snapshot.metabolicRate) or nil,
+        metabolicDemand = tonumber(snapshot.metabolicDemand) or nil,
+        metabolicNorm = tonumber(snapshot.metabolicNorm) or nil,
+        breathingEffortRamp = tonumber(snapshot.breathingEffortRamp) or nil,
+        breathingDynamicLoad = tonumber(snapshot.breathingDynamicLoad) or nil,
+        breathingSealedLoad = tonumber(snapshot.breathingSealedLoad) or nil,
+        hotPressure = tonumber(snapshot.hotPressure) or nil,
+        coldSuitability = tonumber(snapshot.coldSuitability) or nil,
+        thermalStrainScale = tonumber(snapshot.thermalStrainScale) or nil,
         enduranceBeforeAms = tonumber(snapshot.enduranceBeforeAms) or nil,
         enduranceAfterAms = tonumber(snapshot.enduranceAfterAms) or nil,
         enduranceNaturalDelta = tonumber(snapshot.enduranceNaturalDelta) or nil,
@@ -426,15 +368,16 @@ local function openWriter(path)
 end
 
 local function buildReport(player)
-    local worldMinutes = tonumber(type(ctx("getWorldAgeMinutes")) == "function" and ctx("getWorldAgeMinutes")() or 0) or 0
-    local isMp = type(ctx("isMultiplayer")) == "function" and ctx("isMultiplayer")() == true
-    local state = type(ctx("ensureState")) == "function" and ctx("ensureState")(player) or nil
+    local worldMinutes = tonumber(Utils.getWorldAgeMinutes()) or 0
+    local isMp = Utils.isMultiplayer()
+    local state = ClientRuntime.ensureState(player)
     local options = collectOptions()
-    local profile = type(ctx("computeArmorProfile")) == "function" and (ctx("computeArmorProfile")(player) or {}) or {}
+    local analysis = LoadModel.analyzeWornGear(player)
+    local profile = analysis.profile
     local runtime = collectRuntime(state)
     local playerState = collectPlayerState(player)
     local climateState = collectClimateState(player)
-    local wornRows = collectWornItems(player)
+    local wornRows = analysis.rows
     local activeMods = collectActiveMods()
     local mpSnapshot = isMp and collectMpSnapshot(state) or nil
 
@@ -444,10 +387,10 @@ local function buildReport(player)
     appendLine(lines, "# AMS Support Report")
     appendLine(lines, string.format("timestamp=%s", getWallClockStamp()))
     appendLine(lines, string.format("world_age_minutes=%s", formatNumber(worldMinutes, 3)))
-    appendLine(lines, string.format("ams_version=%s", formatScalar(type(ctx("getLoadedModVersion")) == "function" and ctx("getLoadedModVersion")() or nil)))
-    appendLine(lines, string.format("script_version=%s", formatScalar(ctx("scriptVersion"))))
-    appendLine(lines, string.format("script_build=%s", formatScalar(ctx("scriptBuild"))))
-    appendLine(lines, string.format("game_version=%s", formatScalar(type(ctx("getGameVersionTag")) == "function" and ctx("getGameVersionTag")() or nil)))
+    appendLine(lines, string.format("ams_version=%s", formatScalar(ClientRuntime.getLoadedModVersion())))
+    appendLine(lines, string.format("script_version=%s", formatScalar(ClientRuntime.SCRIPT_VERSION)))
+    appendLine(lines, string.format("script_build=%s", formatScalar(ClientRuntime.SCRIPT_BUILD)))
+    appendLine(lines, string.format("game_version=%s", formatScalar(ClientRuntime.getGameVersionTag())))
     appendLine(lines, string.format("mode=%s", isMp and "MP" or "SP"))
     appendLine(lines, string.format("player_index=%s", formatScalar(callMethodIfPresent(player, "getPlayerNum"))))
     appendLine(lines, "")
@@ -494,16 +437,15 @@ local function buildReport(player)
     appendLine(lines, string.format("max_weight=%s", formatNumber(playerState.maxWeight, 3)))
     appendLine(lines, "")
 
-    -- AMS Totals (always from local computeArmorProfile)
+    -- AMS Totals (always from the local worn profile)
     appendLine(lines, "## AMS Totals")
     appendLine(lines, string.format("source=%s", "local"))
     appendLine(lines, string.format("physical_load=%s", formatNumber(profile.physicalLoad, 3)))
-    appendLine(lines, string.format("thermal_load=%s", formatNumber(profile.thermalLoad, 3)))
-    appendLine(lines, string.format("breathing_load=%s", formatNumber(profile.breathingLoad, 3)))
+    appendLine(lines, string.format("airflow_resistance=%s", formatNumber(profile.airflowResistance, 3)))
+    appendLine(lines, string.format("sealed_restriction=%s", formatNumber(profile.sealedRestriction, 3)))
     appendLine(lines, string.format("rigidity_load=%s", formatNumber(profile.rigidityLoad, 3)))
-    appendLine(lines, string.format("combined_load=%s", formatNumber(profile.combinedLoad, 3)))
     appendLine(lines, string.format("burden_tier=%s", burdenTierLabel(profile.physicalLoad)))
-    appendLine(lines, string.format("armor_count=%s", formatScalar(profile.armorCount)))
+    appendLine(lines, string.format("driver_count=%s", formatScalar(profile.driverCount)))
     appendLine(lines, string.format("sleep_penalty=%s", formatScalar(sleepPenaltyLabel(profile.rigidityLoad))))
     appendLine(lines, string.format("top_contributors=%s", topContributorsOneLiner(wornRows, 3)))
     appendLine(lines, "")
@@ -517,12 +459,18 @@ local function buildReport(player)
             appendLine(lines, string.format("effectiveLoad=%s", formatNumber(runtime.effectiveLoad, 4)))
             appendLine(lines, string.format("thermalContribution=%s", formatNumber(runtime.thermalContribution, 4)))
             appendLine(lines, string.format("breathingContribution=%s", formatNumber(runtime.breathingContribution, 4)))
-            appendLine(lines, string.format("hotStrain=%s", formatNumber(runtime.hotStrain, 4)))
-            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(runtime.thermalPressureScale) or 0) >= 0.15)))
-            appendLine(lines, string.format("coldAppropriateness=%s", formatNumber(runtime.coldAppropriateness, 4)))
-            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(runtime.coldAppropriateness) or 0) > 0.45)))
-            appendLine(lines, string.format("thermalPressureScale=%s", formatNumber(runtime.thermalPressureScale, 4)))
-            appendLine(lines, string.format("enduranceEnvFactor=%s", formatNumber(runtime.enduranceEnvFactor, 4)))
+            appendLine(lines, string.format("metabolicRate=%s", formatNumber(runtime.metabolicRate, 4)))
+            appendLine(lines, string.format("metabolicDemand=%s", formatNumber(runtime.metabolicDemand, 4)))
+            appendLine(lines, string.format("metabolicNorm=%s", formatNumber(runtime.metabolicNorm, 4)))
+            appendLine(lines, string.format("breathingEffortRamp=%s", formatNumber(runtime.breathingEffortRamp, 4)))
+            appendLine(lines, string.format("breathingDynamicLoad=%s", formatNumber(runtime.breathingDynamicLoad, 4)))
+            appendLine(lines, string.format("breathingSealedLoad=%s", formatNumber(runtime.breathingSealedLoad, 4)))
+            appendLine(lines, string.format("thermalResistance=%s", formatNumber(runtime.thermalResistance, 4)))
+            appendLine(lines, string.format("hotPressure=%s", formatNumber(runtime.hotPressure, 4)))
+            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(runtime.thermalStrainScale) or 0) >= 0.15)))
+            appendLine(lines, string.format("coldSuitability=%s", formatNumber(runtime.coldSuitability, 4)))
+            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(runtime.coldSuitability) or 0) > 0.45)))
+            appendLine(lines, string.format("thermalStrainScale=%s", formatNumber(runtime.thermalStrainScale, 4)))
             appendLine(lines, string.format("activityLabel=%s", formatScalar(runtime.activityLabel)))
             appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(runtime.enduranceBeforeAms, 4)))
             appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(runtime.enduranceAfterAms, 4)))
@@ -544,19 +492,25 @@ local function buildReport(player)
             appendLine(lines, string.format("ageSeconds=%s", formatNumber(mpSnapshot.ageSeconds, 1)))
             appendLine(lines, string.format("loadNorm=%s", formatNumber(mpSnapshot.loadNorm, 4)))
             appendLine(lines, string.format("physicalLoad=%s", formatNumber(mpSnapshot.physicalLoad, 3)))
-            appendLine(lines, string.format("thermalLoad=%s", formatNumber(mpSnapshot.thermalLoad, 3)))
-            appendLine(lines, string.format("breathingLoad=%s", formatNumber(mpSnapshot.breathingLoad, 3)))
+            appendLine(lines, string.format("thermalResistance=%s", formatNumber(mpSnapshot.thermalResistance, 3)))
+            appendLine(lines, string.format("airflowResistance=%s", formatNumber(mpSnapshot.airflowResistance, 3)))
+            appendLine(lines, string.format("sealedRestriction=%s", formatNumber(mpSnapshot.sealedRestriction, 3)))
             appendLine(lines, string.format("rigidityLoad=%s", formatNumber(mpSnapshot.rigidityLoad, 3)))
             appendLine(lines, string.format("effectiveLoad=%s", formatNumber(mpSnapshot.effectiveLoad, 3)))
             appendLine(lines, string.format("thermalContribution=%s", formatNumber(mpSnapshot.thermalContribution, 4)))
             appendLine(lines, string.format("breathingContribution=%s", formatNumber(mpSnapshot.breathingContribution, 4)))
-            appendLine(lines, string.format("enduranceEnvFactor=%s", formatNumber(mpSnapshot.enduranceEnvFactor, 4)))
+            appendLine(lines, string.format("metabolicRate=%s", formatNumber(mpSnapshot.metabolicRate, 4)))
+            appendLine(lines, string.format("metabolicDemand=%s", formatNumber(mpSnapshot.metabolicDemand, 4)))
+            appendLine(lines, string.format("metabolicNorm=%s", formatNumber(mpSnapshot.metabolicNorm, 4)))
+            appendLine(lines, string.format("breathingEffortRamp=%s", formatNumber(mpSnapshot.breathingEffortRamp, 4)))
+            appendLine(lines, string.format("breathingDynamicLoad=%s", formatNumber(mpSnapshot.breathingDynamicLoad, 4)))
+            appendLine(lines, string.format("breathingSealedLoad=%s", formatNumber(mpSnapshot.breathingSealedLoad, 4)))
             appendLine(lines, string.format("activityLabel=%s", formatScalar(mpSnapshot.activityLabel)))
-            appendLine(lines, string.format("hotStrain=%s", formatNumber(mpSnapshot.hotStrain, 4)))
-            appendLine(lines, string.format("coldAppropriateness=%s", formatNumber(mpSnapshot.coldAppropriateness, 4)))
-            appendLine(lines, string.format("thermalPressureScale=%s", formatNumber(mpSnapshot.thermalPressureScale, 4)))
-            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(mpSnapshot.thermalPressureScale) or 0) >= 0.15)))
-            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(mpSnapshot.coldAppropriateness) or 0) > 0.45)))
+            appendLine(lines, string.format("hotPressure=%s", formatNumber(mpSnapshot.hotPressure, 4)))
+            appendLine(lines, string.format("coldSuitability=%s", formatNumber(mpSnapshot.coldSuitability, 4)))
+            appendLine(lines, string.format("thermalStrainScale=%s", formatNumber(mpSnapshot.thermalStrainScale, 4)))
+            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(mpSnapshot.thermalStrainScale) or 0) >= 0.15)))
+            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(mpSnapshot.coldSuitability) or 0) > 0.45)))
             appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(mpSnapshot.enduranceBeforeAms, 4)))
             appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(mpSnapshot.enduranceAfterAms, 4)))
             appendLine(lines, string.format("enduranceNaturalDelta=%s", formatNumber(mpSnapshot.enduranceNaturalDelta, 4)))
@@ -582,7 +536,7 @@ local function buildReport(player)
         end
         appendLine(lines, "")
 
-        local appendIncidentTraceSection = ctx("appendIncidentTraceSection")
+        local appendIncidentTraceSection = IncidentTrace.appendReportSection
         if type(appendIncidentTraceSection) == "function" then
             appendIncidentTraceSection(lines)
         else
@@ -601,13 +555,14 @@ local function buildReport(player)
             local row = wornRows[i]
             local modPart = row.sourceMod and (" | mod=" .. formatScalar(row.sourceMod)) or ""
             local breathingPart = ""
-            if row.breathingClass ~= "none" then
-                breathingPart = string.format(" | breathing=%s filter=%s",
-                    formatScalar(row.breathingClass),
-                    formatScalar(row.breathingHasFilter))
+            if row.respiratoryClass ~= "none" then
+                breathingPart = string.format(" | respiratory=%s filter=%s sealed=%s",
+                    formatScalar(row.respiratoryClass),
+                    formatScalar(row.respiratoryHasFilter),
+                    formatNumber(row.sealedRestriction, 2))
             end
             appendLine(lines, string.format(
-                "[%02d] loc=%s | type=%s | name=%s%s\n     phy=%s thm=%s br=%s rig=%s | weight=%s source=%s | discomfort=%s%s",
+                "[%02d] loc=%s | type=%s | name=%s%s\n     phy=%s thm=%s airflow=%s rig=%s | weight=%s source=%s | discomfort=%s%s",
                 i,
                 formatScalar(row.bodyLocation),
                 formatScalar(row.fullType),
@@ -615,12 +570,19 @@ local function buildReport(player)
                 modPart,
                 formatNumber(row.physical, 3),
                 formatNumber(row.thermal, 3),
-                formatNumber(row.breathing, 3),
+                formatNumber(row.airflow, 3),
                 formatNumber(row.rigidity, 3),
                 formatNumber(row.weightUsed, 3),
                 formatScalar(row.weightSource),
                 formatNumber(row.discomfort, 3),
                 breathingPart
+            ))
+            appendLine(lines, string.format(
+                "     included=%s reason=%s | armor_like=%s classification=%s",
+                formatScalar(row.included),
+                formatScalar(row.inclusionReason),
+                formatScalar(row.armorLike),
+                formatScalar(row.classificationReason)
             ))
         end
     end
@@ -630,8 +592,8 @@ end
 
 function SupportReport.writeCurrentPlayerReport(player)
     local playerObj = player
-    if not playerObj and type(ctx("getLocalPlayer")) == "function" then
-        playerObj = ctx("getLocalPlayer")()
+    if not playerObj then
+        playerObj = ClientRuntime.getLocalPlayer()
     end
     if not playerObj then
         return false, nil, "No local player available."
@@ -641,9 +603,7 @@ function SupportReport.writeCurrentPlayerReport(player)
     local relativePath = "ams_reports/" .. fileName
     local okBuild, linesOrErr = pcall(buildReport, playerObj)
     if not okBuild or type(linesOrErr) ~= "table" then
-        if type(ctx("log")) == "function" then
-            ctx("log")("support report build failed: " .. tostring(linesOrErr))
-        end
+        ClientRuntime.log("support report build failed: " .. tostring(linesOrErr))
         return false, nil, "Failed while building report file."
     end
 
@@ -659,16 +619,12 @@ function SupportReport.writeCurrentPlayerReport(player)
     end)
     if not okWrite then
         closeWriterQuietly(writer)
-        if type(ctx("log")) == "function" then
-            ctx("log")("support report write failed: " .. tostring(writeErr))
-        end
+        ClientRuntime.log("support report write failed: " .. tostring(writeErr))
         return false, nil, "Failed while writing report file."
     end
 
     local displayPath = resolveDisplayPath(relativePath)
-    if type(ctx("log")) == "function" then
-        ctx("log")("support report written: " .. tostring(displayPath))
-    end
+    ClientRuntime.log("support report written: " .. tostring(displayPath))
     return true, displayPath, nil
 end
 

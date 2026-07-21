@@ -17,6 +17,8 @@ if type(MP) ~= "table" then
     return
 end
 
+local SLEEP_WAKE_DIAG_COMMAND = "sleep_wake_diag"
+
 local lastDiagDump = nil
 local sleepTrace = {}
 
@@ -153,7 +155,7 @@ local function sendSleepWakeDiagnostic(playerObj, payload)
     local ok, err = pcall(
         sendClientCommand,
         tostring(MP.NET_MODULE),
-        tostring(MP.SLEEP_WAKE_DIAG_COMMAND),
+        SLEEP_WAKE_DIAG_COMMAND,
         payload
     )
     if not ok then
@@ -322,7 +324,7 @@ function ams_mp_diag_last()
         tonumber(lastDiagDump.thirst) or -1,
         tonumber(lastDiagDump.load_norm) or 0,
         tonumber(lastDiagDump.physical_load) or 0,
-        tonumber(lastDiagDump.breathing_load) or 0,
+        tonumber(lastDiagDump.airflow_resistance) or 0,
         tonumber(lastDiagDump.rigidity_load) or 0,
         tonumber(lastDiagDump.effective_load) or 0,
         tonumber(lastDiagDump.breathing_contribution) or 0,
@@ -362,7 +364,7 @@ local function onServerCommand(module, command, args)
         tonumber(args.thirst) or -1,
         tonumber(args.load_norm) or 0,
         tonumber(args.physical_load) or 0,
-        tonumber(args.breathing_load) or 0,
+        tonumber(args.airflow_resistance) or 0,
         tonumber(args.rigidity_load) or 0,
         tonumber(args.effective_load) or 0,
         tonumber(args.breathing_contribution) or 0,

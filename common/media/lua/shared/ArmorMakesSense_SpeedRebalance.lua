@@ -26,29 +26,14 @@ if ArmorMakesSense._speedRebalanceLoaded then
     return
 end
 ArmorMakesSense._speedRebalanceLoaded = true
-pcall(require, "ArmorMakesSense_ArmorClassifier")
-pcall(require, "ArmorMakesSense_SlotCompat")
+require "ArmorMakesSense_SlotCompat"
+local Utils = require "ArmorMakesSense_UtilsShared"
 
 local function log(msg)
     print('[ArmorMakesSense] ' .. tostring(msg))
 end
 
--- Deliberate duplicate of ArmorMakesSense_Utils.safeMethod.
--- shared/ modules load before client/ modules, so this file cannot import Utils.
-local function safeMethod(target, methodName, ...)
-    if not target then
-        return nil
-    end
-    local fn = target[methodName]
-    if type(fn) ~= "function" then
-        return nil
-    end
-    local ok, result = pcall(fn, target, ...)
-    if not ok then
-        return nil
-    end
-    return result
-end
+local safeMethod = Utils.safeMethod
 
 local function safeScriptString(item, methodName)
     local value = safeMethod(item, methodName)
@@ -94,8 +79,10 @@ local function safeScriptNumber(item, methodName)
 end
 
 ArmorMakesSense._originalDiscomfort = ArmorMakesSense._originalDiscomfort or {}
+ArmorMakesSense._originalRunSpeedModifier = ArmorMakesSense._originalRunSpeedModifier or {}
+ArmorMakesSense._originalCombatSpeedModifier = ArmorMakesSense._originalCombatSpeedModifier or {}
 
-local function cacheOriginalDiscomfort(item)
+local function cacheOriginalWearableStats(item)
     if not item then
         return
     end
@@ -106,6 +93,14 @@ local function cacheOriginalDiscomfort(item)
     local origDiscomfort = safeScriptNumber(item, "getDiscomfortModifier") or 0
     if origDiscomfort > 0 then
         ArmorMakesSense._originalDiscomfort[fullType] = origDiscomfort
+    end
+    local runSpeed = safeScriptNumber(item, "getRunSpeedModifier")
+    if runSpeed ~= nil and ArmorMakesSense._originalRunSpeedModifier[fullType] == nil then
+        ArmorMakesSense._originalRunSpeedModifier[fullType] = runSpeed
+    end
+    local combatSpeed = safeScriptNumber(item, "getCombatSpeedModifier")
+    if combatSpeed ~= nil and ArmorMakesSense._originalCombatSpeedModifier[fullType] == nil then
+        ArmorMakesSense._originalCombatSpeedModifier[fullType] = combatSpeed
     end
 end
 
@@ -544,7 +539,7 @@ local function applySlotReslots(sm)
         for _, fullType in ipairs(def.fullTypes) do
             local item = sm:getItem(fullType)
             if item then
-                cacheOriginalDiscomfort(item)
+                cacheOriginalWearableStats(item)
                 safeDoParam(item, "BodyLocation = " .. def.slot)
                 safeDoParam(item, "DiscomfortModifier = 0.00")
                 -- Vanilla shoulderpads carry Tooltip_item_NoBackpack. After AMS slot
@@ -571,7 +566,7 @@ local function applySpeedRebalance()
     for fullType, values in pairs(overrides) do
         local item = sm:getItem(fullType)
         if item then
-            cacheOriginalDiscomfort(item)
+            cacheOriginalWearableStats(item)
             if values.run then
                 safeDoParam(item, string.format('RunSpeedModifier = %.2f', values.run))
             end
@@ -600,7 +595,7 @@ local function applySpeedRebalance()
                 local bodyLoc = safeScriptString(it, "getBodyLocation")
                 local canEquip = safeScriptString(it, "canBeEquipped")
                 if bodyLoc ~= "" or canEquip ~= "" then
-                    cacheOriginalDiscomfort(it)
+                    cacheOriginalWearableStats(it)
                     safeDoParam(it, 'DiscomfortModifier = 0.00')
                     discomfortZeroed = discomfortZeroed + 1
                 end

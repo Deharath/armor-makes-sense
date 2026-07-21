@@ -2,28 +2,10 @@ ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.BreathingClassifier = ArmorMakesSense.BreathingClassifier or {}
 
 local BreathingClassifier = ArmorMakesSense.BreathingClassifier
+local Utils = require "ArmorMakesSense_UtilsShared"
 
-local function lower(text)
-    if text == nil then
-        return ""
-    end
-    return string.lower(tostring(text))
-end
-
-local function safeCall(target, methodName, ...)
-    if not target then
-        return nil
-    end
-    local fn = target[methodName]
-    if type(fn) ~= "function" then
-        return nil
-    end
-    local ok, result = pcall(fn, target, ...)
-    if not ok then
-        return nil
-    end
-    return result
-end
+local lower = Utils.lower
+local safeCall = Utils.safeMethod
 
 local function contains(text, pattern)
     return string.find(lower(text), tostring(pattern), 1, true) ~= nil
@@ -174,7 +156,10 @@ function BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
     local tags = collectTags(item, scriptItem)
 
     local slotClass = bodyLocationClass(locationName)
-    local hasFilter = not contains(identity, "nofilter")
+    local hasNoFilterTag = tagPresent(tags, "gasmasknofilter")
+        or tagPresent(tags, "respiratornofilter")
+        or tagPresent(tags, "scbanotank")
+    local hasFilter = not hasNoFilterTag and not contains(identity, "nofilter")
     local class = "none"
     local tagClass = nil
     local keywordClass = respiratoryKeywordClass(identity)
@@ -212,37 +197,35 @@ function BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
         class = strongerClass(class, keywordClass)
     end
 
-    local breathingLoad = 0
-    local thermalLoad = 0
+    local airflowResistance = 0
     if class == "face_covering" then
-        breathingLoad = 0
-        thermalLoad = 0
+        airflowResistance = 0
     elseif class == "respirator" then
         if hasFilter then
-            breathingLoad = 3.30
-            thermalLoad = 1.35
+            airflowResistance = 3.30
         else
-            breathingLoad = 0.90
-            thermalLoad = 0.45
+            airflowResistance = 0.90
         end
     elseif class == "sealed_mask" then
         if hasFilter then
-            breathingLoad = 3.75
-            thermalLoad = 1.35
+            airflowResistance = 3.75
         else
-            breathingLoad = 1.35
-            thermalLoad = 0.45
+            airflowResistance = 1.35
         end
     elseif class == "sealed_suit" then
-        breathingLoad = 3.75
-        thermalLoad = 1.35
+        airflowResistance = 3.75
+    end
+
+    local sealedRestriction = 0
+    if hasFilter and (class == "sealed_mask" or class == "sealed_suit") then
+        sealedRestriction = 1
     end
 
     return {
         class = class,
         hasFilter = hasFilter,
-        breathingLoad = breathingLoad,
-        thermalLoad = thermalLoad,
+        airflowResistance = airflowResistance,
+        sealedRestriction = sealedRestriction,
         reasons = {
             slotClass = slotClass,
             slotFloorClass = slotFloorClass,

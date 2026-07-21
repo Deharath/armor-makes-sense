@@ -69,6 +69,18 @@ local function closeWriterSafe(writer)
     end)
 end
 
+local function writeLineSafe(writer, line)
+    local okWrite = pcall(function()
+        writer:writeln(tostring(line))
+    end)
+    if not okWrite then
+        okWrite = pcall(function()
+            writer:write(tostring(line) .. "\n")
+        end)
+    end
+    return okWrite
+end
+
 function BenchRunnerSnapshot.openStreamWriter(runner)
     if type(runner) ~= "table" then
         return false, nil, "stream_missing_runner"
@@ -95,14 +107,31 @@ function BenchRunnerSnapshot.openStreamWriter(runner)
                 runner.streamWriter = writer
                 runner.streamWriterPath = attempt.path
                 runner.streamWriterOpen = true
-                local banner = "# AMS Bench Stream (final header written at completion)"
-                local okBanner = pcall(function()
-                    writer:writeln(banner)
-                end)
-                if not okBanner then
-                    okBanner = pcall(function()
-                        writer:write(banner .. "\n")
-                    end)
+                local headerLines = {
+                    "# AMS Bench Stream",
+                    "snapshot_version=3",
+                    string.format("run_id=%s", tostring(runner.id or "na")),
+                    string.format("label=%s", tostring(runner.label or "")),
+                    string.format("preset=%s", tostring(runner.preset or "na")),
+                    "reason=active",
+                    string.format("mode=%s", tostring(runner.mode or "lab")),
+                    string.format("speed=%.2f", tonumber(runner.speedReq) or 0),
+                    string.format("repeats=%d", math.max(1, math.floor(tonumber(runner.repeats) or 1))),
+                    string.format("sets_applied=%d", math.max(0, math.floor(tonumber(runner.setsApplied) or 0))),
+                    string.format("scenarios_applied=%d", math.max(0, math.floor(tonumber(runner.scenariosApplied) or 0))),
+                    string.format("total_steps=%d", math.max(0, math.floor(tonumber(runner.total) or 0))),
+                    string.format("script_version=%s", tostring(runner.scriptVersion or "na")),
+                    string.format("script_build=%s", tostring(runner.scriptBuild or "na")),
+                    string.format("started_at_world_min=%.3f", tonumber(runner.startedAt) or 0),
+                    "",
+                    "# Streamed bench markers",
+                }
+                local okBanner = true
+                for _, line in ipairs(headerLines) do
+                    if not writeLineSafe(writer, line) then
+                        okBanner = false
+                        break
+                    end
                 end
                 if not okBanner then
                     closeWriterSafe(writer)
@@ -130,14 +159,7 @@ function BenchRunnerSnapshot.streamLine(runner, line)
         return false
     end
 
-    local okWrite = pcall(function()
-        writer:writeln(line)
-    end)
-    if not okWrite then
-        okWrite = pcall(function()
-            writer:write(tostring(line) .. "\n")
-        end)
-    end
+    local okWrite = writeLineSafe(writer, line)
     if okWrite then
         return true
     end
@@ -166,6 +188,43 @@ function BenchRunnerSnapshot.closeStreamWriter(runner)
     runner.streamWriter = nil
     runner.streamWriterOpen = false
     return true
+end
+
+function BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutesFn, normFloor)
+    if type(runner) ~= "table" then
+        return false, nil, "snapshot_missing_runner"
+    end
+
+    local streamPath = runner.streamWriterPath
+    if runner.streamWriterOpen == true and runner.streamWriterFailed ~= true and runner.streamWriter ~= nil then
+        local endedAt = tonumber(type(nowMinutesFn) == "function" and nowMinutesFn() or 0) or 0
+        local footerLines = {
+            "",
+            "# AMS Bench Completion",
+            string.format("reason=%s", tostring(reason or "completed")),
+            string.format("completed_steps=%d", math.max(0, math.floor(tonumber(runner.index) or 0))),
+            string.format("ended_at_world_min=%.3f", endedAt),
+            string.format("error=%s", tostring(runner.lastError or "none")),
+            string.format("last_gate_failed=%s", tostring(runner.lastGateFailed or "none")),
+            string.format("last_step_validity=%s", tostring(runner.lastStepValidity or "none")),
+            string.format("last_exit_reason=%s", tostring(runner.lastExitReason or "none")),
+        }
+        local okStream = true
+        for _, line in ipairs(footerLines) do
+            if not BenchRunnerSnapshot.streamLine(runner, line) then
+                okStream = false
+                break
+            end
+        end
+        BenchRunnerSnapshot.closeStreamWriter(runner)
+        if okStream then
+            return true, streamPath, nil
+        end
+    else
+        BenchRunnerSnapshot.closeStreamWriter(runner)
+    end
+
+    return BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn, normFloor)
 end
 
 function BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn, normFloor)

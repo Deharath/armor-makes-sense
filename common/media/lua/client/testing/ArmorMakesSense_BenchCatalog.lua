@@ -221,6 +221,22 @@ local function makeCatalog()
             speed = 8.0,
             mode = "sim",
         },
+        benchmark_thermal_transient_v1 = {
+            id = "benchmark_thermal_transient_v1",
+            sets = {
+                "naked",
+                "civilian_baseline",
+                "heavy",
+            },
+            scenarios = {
+                "thermal_transient_run_60s",
+                "thermal_transient_run_180s",
+                "thermal_transient_run_360s",
+            },
+            repeats = 2,
+            speed = 8.0,
+            mode = "sim",
+        },
         benchmark_thermal_cold_windy_v1 = {
             id = "benchmark_thermal_cold_windy_v1",
             sets = {
@@ -261,9 +277,9 @@ local function makeCatalog()
                 "mask_gas_nofilter",
             },
             scenarios = {
-                "native_treadmill_walk",
-                "native_treadmill_run",
-                "native_treadmill_sprint",
+                "breathing_treadmill_walk",
+                "breathing_treadmill_run",
+                "breathing_treadmill_sprint",
             },
             repeats = 3,
             speed = 8.0,
@@ -279,7 +295,7 @@ local function makeCatalog()
                 "mask_gas_nofilter",
             },
             scenarios = {
-                "native_treadmill_run",
+                "breathing_treadmill_run",
             },
             repeats = 1,
             speed = 8.0,
@@ -333,7 +349,7 @@ end
 
 local CATALOG = makeCatalog()
 
-function BenchCatalog.validate()
+function BenchCatalog.validate(scenarioExists)
     local seen = {}
     for _, setDef in ipairs(CATALOG.sets) do
         local id = tostring(setDef.id or "")
@@ -356,6 +372,35 @@ function BenchCatalog.validate()
             return false
         end
     end
+
+    for presetId, preset in pairs(CATALOG.presets) do
+        if tostring(preset.id or "") ~= tostring(presetId) then
+            if ctx("logError") then ctx("logError")("[AMS_BENCH_CATALOG_ERROR] preset id mismatch=" .. tostring(presetId)) end
+            return false
+        end
+        if preset.mode ~= "sim" and preset.mode ~= "lab" then
+            if ctx("logError") then ctx("logError")("[AMS_BENCH_CATALOG_ERROR] invalid preset mode=" .. tostring(presetId)) end
+            return false
+        end
+        if type(preset.sets) ~= "table" or #preset.sets == 0 or type(preset.scenarios) ~= "table" or #preset.scenarios == 0 then
+            if ctx("logError") then ctx("logError")("[AMS_BENCH_CATALOG_ERROR] empty preset=" .. tostring(presetId)) end
+            return false
+        end
+        for _, setId in ipairs(preset.sets) do
+            if not CATALOG.setById[tostring(setId)] then
+                if ctx("logError") then ctx("logError")("[AMS_BENCH_CATALOG_ERROR] unknown set=" .. tostring(setId) .. " preset=" .. tostring(presetId)) end
+                return false
+            end
+        end
+        if type(scenarioExists) == "function" then
+            for _, scenarioId in ipairs(preset.scenarios) do
+                if not scenarioExists(scenarioId) then
+                    if ctx("logError") then ctx("logError")("[AMS_BENCH_CATALOG_ERROR] unknown scenario=" .. tostring(scenarioId) .. " preset=" .. tostring(presetId)) end
+                    return false
+                end
+            end
+        end
+    end
     return true
 end
 
@@ -365,6 +410,15 @@ function BenchCatalog.getPreset(presetId)
         id = "benchmark_core_v1"
     end
     return CATALOG.presets[id], id
+end
+
+function BenchCatalog.listPresetIds()
+    local out = {}
+    for id in pairs(CATALOG.presets) do
+        out[#out + 1] = id
+    end
+    table.sort(out)
+    return out
 end
 
 function BenchCatalog.getSet(setId)
@@ -395,47 +449,10 @@ function BenchCatalog.listScenarioIds(presetId)
     return out
 end
 
-local function normalizeStatProfile(raw)
-    if type(raw) ~= "table" then
-        return nil
-    end
-    local function clampLevel(value)
-        return math.max(0, math.min(10, math.floor(tonumber(value) or 0)))
-    end
-    local strengthRaw = raw.strength
-    if strengthRaw == nil then
-        strengthRaw = raw.str
-    end
-    local fitnessRaw = raw.fitness
-    if fitnessRaw == nil then
-        fitnessRaw = raw.fit
-    end
-    local weaponSkillRaw = raw.weapon_skill
-    if weaponSkillRaw == nil then
-        weaponSkillRaw = raw.weaponSkill
-    end
-    if weaponSkillRaw == nil then
-        weaponSkillRaw = raw.wpn
-    end
-    local hasStrength = strengthRaw ~= nil
-    local hasFitness = fitnessRaw ~= nil
-    local hasWeaponSkill = weaponSkillRaw ~= nil
-    local weaponPerk = tostring(raw.weapon_perk or raw.weaponPerk or raw.perk or "all")
-    if weaponPerk == "" then
-        weaponPerk = "all"
-    end
-    if (not hasStrength) and (not hasFitness) and (not hasWeaponSkill) then
-        return nil
-    end
-    return {
-        strength = hasStrength and clampLevel(strengthRaw) or nil,
-        fitness = hasFitness and clampLevel(fitnessRaw) or nil,
-        weaponSkill = hasWeaponSkill and clampLevel(weaponSkillRaw) or nil,
-        weaponPerk = string.lower(weaponPerk),
-    }
-end
-
 function BenchCatalog.resolveRunPlan(presetId, opts)
+    if opts and (opts.stat_profile ~= nil or opts.statProfile ~= nil) then
+        return nil, "stat_profile is unsupported because benchmarks must not rewrite character XP"
+    end
     local preset, resolvedId = BenchCatalog.getPreset(presetId)
     if not preset then
         return nil, "unknown preset '" .. tostring(resolvedId) .. "'"
@@ -562,7 +579,6 @@ function BenchCatalog.resolveRunPlan(presetId, opts)
         speed = tonumber(opts and opts.speed) or tonumber(preset.speed) or 10.0,
         mode = tostring((opts and opts.mode) or preset.mode or "lab"),
         label = tostring((opts and opts.label) or ""),
-        statProfile = normalizeStatProfile((opts and (opts.stat_profile or opts.statProfile)) or preset.statProfile),
         thresholds = type(opts and opts.thresholds) == "table" and opts.thresholds or (type(preset.thresholds) == "table" and preset.thresholds or {}),
         repeats = repeats,
         sets = selectedSets,

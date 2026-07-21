@@ -1,55 +1,30 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
+local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local Options = require "ArmorMakesSense_Options"
+local Strain = require "ArmorMakesSense_StrainShared"
+
 local Core = ArmorMakesSense.Core
 Core.Combat = Core.Combat or {}
 
 local Combat = Core.Combat
-local C = {}
-
--- -----------------------------------------------------------------------------
--- Combat event forwarding
--- -----------------------------------------------------------------------------
-
-local function ctx(name)
-    return C[name]
-end
-
-function Combat.setContext(context)
-    C = context or {}
-end
-
-function Combat.onWeaponSwing(attacker, weapon)
-    return
-end
 
 function Combat.onPlayerAttackFinished(attacker, weapon)
-    if ctx("isRuntimeDisabled")() or ctx("isMultiplayer")() then
+    if ClientRuntime.isDisabled() or not attacker then
         return
     end
-    if not attacker then
-        return
-    end
-    local player = ctx("getLocalPlayer")()
+    local player = ClientRuntime.getLocalPlayer()
     if not player or attacker ~= player then
         return
     end
 
-    local options = ctx("getOptions")()
-    if not options.EnableMuscleStrainModel then
+    local options = Options.get()
+    if not options.EnableMuscleStrainModel or not weapon then
         return
     end
 
-    if not weapon then
-        return
-    end
-
-    local equipped = ctx("safeMethod")(player, "getUseHandWeapon") or ctx("safeMethod")(player, "getPrimaryHandItem")
-    if not equipped or weapon ~= equipped then
-        return
-    end
-
-    ctx("applyArmorStrainOverlay")(player, weapon, nil, options)
+    Strain.applyArmorStrainOverlay(player, weapon, options)
 end
 
 return Combat

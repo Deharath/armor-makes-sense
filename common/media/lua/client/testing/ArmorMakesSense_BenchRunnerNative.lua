@@ -60,7 +60,6 @@ local getRuntimeBenchRunner             = depCall("getRuntimeBenchRunner")
 local registerNativeTickPump            = depCall("registerNativeTickPump")
 local unregisterNativeTickPump          = depCall("unregisterNativeTickPump")
 local setIsoPlayerTestAIMode            = depCall("setIsoPlayerTestAIMode")
-local setNativeTimeOfDay                = depCall("setNativeTimeOfDay")
 local snapPlayerToCoords                = depCall("snapPlayerToCoords")
 local applyNativeActivityMode           = depCall("applyNativeActivityMode")
 local stabilizeNativeCombatStance       = depCall("stabilizeNativeCombatStance")
@@ -602,6 +601,11 @@ local function startNativeDriver(player, exec, block)
 
         end
     end
+    if resetToAnchor then
+        x = math.floor(tonumber(x) or 0)
+        y = math.floor(tonumber(y) or 0)
+        z = math.floor(tonumber(z) or 0)
+    end
     if movementMode == "forward" then
         safeMethod(player, "setForwardDirection", forwardDirX, forwardDirY)
     end
@@ -630,19 +634,6 @@ local function startNativeDriver(player, exec, block)
     local timeoutSec = tonumber(block.timeout_sec)
     if timeoutSec == nil then
         timeoutSec = (mode == "native_combat_air") and math.max(180, targetSwings * 6) or targetSec
-    end
-
-    local activitySetTime = nil
-    if exec.pinnedTimeOfDay ~= nil then
-        activitySetTime = tonumber(exec.pinnedTimeOfDay)
-    else
-        activitySetTime = tonumber(block.set_time_of_day)
-    end
-    if activitySetTime ~= nil then
-        local setOk, setReason = setNativeTimeOfDay(activitySetTime)
-        if not setOk then
-            return nil, setReason
-        end
     end
 
     local probeEnabledRaw = readNativeOption(exec, "nativeProbe", false)
@@ -697,6 +688,9 @@ local function startNativeDriver(player, exec, block)
         combatTicks = 0,
         speedSum = 0,
         speedSamples = 0,
+        amsAppliedTotal = 0,
+        amsAppliedTickCount = 0,
+        lastAmsRuntimeMinute = nil,
         stallLimitMin = (math.max(10, tonumber(block.stall_sec) or 30)) / 60.0,
         patrolRadius = math.max(1.5, tonumber(block.patrol_radius) or 4.0),
         patrolShape = patrolShapeRaw,
@@ -825,9 +819,10 @@ local function startNativeDriver(player, exec, block)
                 local startWp = driver.waypoints[1]
                 if startWp then
                     snapPlayerToCoords(player, startWp.x, startWp.y, startWp.z)
-                    driver.lastX = tonumber(startWp.x) or driver.lastX
-                    driver.lastY = tonumber(startWp.y) or driver.lastY
-                    driver.lastZ = tonumber(startWp.z) or driver.lastZ
+                    local startX, startY, startZ = readPlayerCoords(player)
+                    driver.lastX = tonumber(startX) or driver.lastX
+                    driver.lastY = tonumber(startY) or driver.lastY
+                    driver.lastZ = tonumber(startZ) or driver.lastZ
                     driver.progressRefX = driver.lastX
                     driver.progressRefY = driver.lastY
                 end
@@ -915,12 +910,23 @@ local function finalizeNativeActivity(player, exec, driver, outcome, reason)
     exec.activityResult.run_pct = stateTicks > 0 and (runTicks / stateTicks) or nil
     exec.activityResult.sprint_pct = stateTicks > 0 and (sprintTicks / stateTicks) or nil
     exec.activityResult.idle_pct = stateTicks > 0 and (idleTicks / stateTicks) or nil
+    local requestedActivity = tostring(driver.activity or "walk")
+    exec.activityResult.requested_activity = requestedActivity
+    if requestedActivity == "sprint" then
+        exec.activityResult.target_activity_pct = exec.activityResult.sprint_pct
+    elseif requestedActivity == "run" then
+        exec.activityResult.target_activity_pct = exec.activityResult.run_pct
+    else
+        exec.activityResult.target_activity_pct = exec.activityResult.walk_pct
+    end
     exec.activityResult.pct_idle = labelTicks > 0 and (idleTicks / labelTicks) or nil
     exec.activityResult.pct_walk = labelTicks > 0 and (walkTicks / labelTicks) or nil
     exec.activityResult.pct_run = labelTicks > 0 and (runTicks / labelTicks) or nil
     exec.activityResult.pct_sprint = labelTicks > 0 and (sprintTicks / labelTicks) or nil
     exec.activityResult.pct_combat = labelTicks > 0 and (combatTicks / labelTicks) or nil
     exec.activityResult.avg_move_speed = avgMoveSpeed
+    exec.activityResult.ams_applied_total = tonumber(driver.amsAppliedTotal) or 0
+    exec.activityResult.ams_applied_tick_count = tonumber(driver.amsAppliedTickCount) or 0
     exec.activityResult.attack_attempts = tonumber(driver.attackAttempts) or 0
     exec.activityResult.attack_success = tonumber(driver.attackSuccess) or 0
     exec.activityResult.attack_cooldown_blocks = tonumber(driver.attackCooldownBlocks) or 0
@@ -1079,6 +1085,19 @@ local function tickNativeDriver(player, exec)
     else
         driver.distanceMoved = (tonumber(driver.distanceMoved) or 0) + moved
         driver.totalSamples = (tonumber(driver.totalSamples) or 0) + 1
+
+        local ensureState = ctx("ensureState")
+        local runtimeState = type(ensureState) == "function" and ensureState(player) or nil
+        local snapshot = type(runtimeState) == "table" and runtimeState.uiRuntimeSnapshot or nil
+        local updatedMinute = tonumber(snapshot and snapshot.updatedMinute)
+        if updatedMinute ~= nil
+            and updatedMinute >= driver.startedAt
+            and updatedMinute ~= tonumber(driver.lastAmsRuntimeMinute) then
+            driver.lastAmsRuntimeMinute = updatedMinute
+            driver.amsAppliedTotal = (tonumber(driver.amsAppliedTotal) or 0)
+                + (tonumber(snapshot.enduranceAppliedDelta) or 0)
+            driver.amsAppliedTickCount = (tonumber(driver.amsAppliedTickCount) or 0) + 1
+        end
     end
 
     local elapsedSec = math.max(0, (now - (driver.startedAt or now)) * 60.0)
@@ -1104,20 +1123,15 @@ local function tickNativeDriver(player, exec)
 
         if combatLabel then
             driver.combatTicks = (tonumber(driver.combatTicks) or 0) + 1
+        elseif not moving then
+            driver.idleTicks = (tonumber(driver.idleTicks) or 0) + 1
+        elseif isSprinting then
+            driver.sprintTicks = (tonumber(driver.sprintTicks) or 0) + 1
+        elseif isRunning then
+            driver.runTicks = (tonumber(driver.runTicks) or 0) + 1
         else
-            -- Speed-tier classification using per-tick displacement from getMovementSpeed().
-            -- Thresholds derived from observed data: sprint >=0.08, run >=0.04, walk >=0.005.
-            -- isSprinting/isRunning flags are kept as telemetry above but not used for tick bins.
-            local speed = movementSpeed or 0
-            if speed >= 0.08 then
-                driver.sprintTicks = (tonumber(driver.sprintTicks) or 0) + 1
-            elseif speed >= 0.04 then
-                driver.runTicks = (tonumber(driver.runTicks) or 0) + 1
-            elseif speed >= 0.005 then
-                driver.walkTicks = (tonumber(driver.walkTicks) or 0) + 1
-            else
-                driver.idleTicks = (tonumber(driver.idleTicks) or 0) + 1
-            end
+            -- Match vanilla Thermoregulator's movement-intensity authority.
+            driver.walkTicks = (tonumber(driver.walkTicks) or 0) + 1
         end
     end
     if driver.startedAt ~= nil then

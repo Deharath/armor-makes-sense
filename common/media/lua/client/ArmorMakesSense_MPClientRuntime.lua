@@ -1,124 +1,42 @@
 ArmorMakesSense = ArmorMakesSense or {}
 
-local okMpCompat, mpCompatOrErr = pcall(require, "ArmorMakesSense_MPCompat")
-if not okMpCompat then
-    print("[ArmorMakesSense][MP][CLIENT][ERROR] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))
-    return
-end
+local MP = require "ArmorMakesSense_MPCompat"
+local RuntimeState = require "ArmorMakesSense_RuntimeState"
+local Utils = require "ArmorMakesSense_UtilsShared"
+local MPClientRuntime = {}
+ArmorMakesSense.MPClientRuntime = MPClientRuntime
 
-local MP = (type(mpCompatOrErr) == "table" and mpCompatOrErr) or ArmorMakesSense.MP
-if type(MP) ~= "table" then
-    print("[ArmorMakesSense][MP][CLIENT][ERROR] MP compat constants unavailable; runtime disabled")
-    return
-end
+local SnapshotCodec = require "ArmorMakesSense_MPSnapshotCodec"
 
-local okIncidentTrace, incidentTraceOrErr = pcall(require, "core/ArmorMakesSense_IncidentTrace")
-local IncidentTrace = okIncidentTrace and type(incidentTraceOrErr) == "table"
-    and incidentTraceOrErr
-    or (ArmorMakesSense and ArmorMakesSense.Core and ArmorMakesSense.Core.IncidentTrace)
+local IncidentTrace = require "core/ArmorMakesSense_IncidentTrace"
+local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local Options = require "ArmorMakesSense_Options"
+local UI = require "core/ArmorMakesSense_UI"
 
-local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 local SNAPSHOT_INTERVAL_SECONDS = math.max(1, math.floor(tonumber(MP.SNAPSHOT_FALLBACK_SECONDS) or 2))
 local SNAPSHOT_STALE_SECONDS = math.max(10, SNAPSHOT_INTERVAL_SECONDS * 4)
 local firstSnapshotLogged = false
 local uiHooksEnsured = false
 local markUiDirty
-local sendSnapshotRequest
 local SLEEP_FATIGUE_CORRECTION_EPSILON = 0.002
 
 local function log(message)
     print("[ArmorMakesSense][MP][CLIENT] " .. tostring(message))
 end
 
-local function toBoolean(value)
-    if type(value) == "boolean" then
-        return value
-    end
-    if type(value) == "string" then
-        local lowered = string.lower(value)
-        return lowered == "true" or lowered == "1" or lowered == "yes" or lowered == "on"
-    end
-    if type(value) == "number" then
-        return value ~= 0
-    end
-    return false
-end
-
-local function safeCall(target, methodName, ...)
-    if not target then
-        return nil
-    end
-    local okResolve, fn = pcall(function()
-        return target[methodName]
-    end)
-    if not okResolve then
-        return nil
-    end
-    if type(fn) ~= "function" then
-        return nil
-    end
-    local ok, result = pcall(fn, target, ...)
-    if not ok then
-        return nil
-    end
-    return result
-end
-
-local function getLocalPlayer()
-    if type(getPlayer) ~= "function" then
-        return nil
-    end
-    local ok, playerObj = pcall(getPlayer)
-    if not ok then
-        return nil
-    end
-    return playerObj
-end
-
-local function getWallClockSeconds()
-    if type(getTimestampMs) == "function" then
-        local nowMs = tonumber(getTimestampMs())
-        if nowMs ~= nil then
-            return math.floor(nowMs / 1000)
-        end
-    end
-    if type(getTimestamp) == "function" then
-        local nowSeconds = tonumber(getTimestamp())
-        if nowSeconds ~= nil then
-            return math.floor(nowSeconds)
-        end
-    end
-    return 0
-end
-
-local function getWorldAgeMinutes()
-    local gameTime = type(getGameTime) == "function" and getGameTime() or nil
-    local worldAgeHours = tonumber(gameTime and safeCall(gameTime, "getWorldAgeHours") or nil)
-    if worldAgeHours == nil then
-        return 0
-    end
-    return worldAgeHours * 60.0
-end
-
 local function isMultiplayerClientSession(playerObj)
     if GameClient and GameClient.bClient ~= nil then
         return GameClient.bClient == true
     end
-    local onlineId = tonumber(playerObj and safeCall(playerObj, "getOnlineID") or nil)
+    local onlineId = tonumber(playerObj and Utils.safeMethod(playerObj, "getOnlineID") or nil)
     return onlineId ~= nil and onlineId >= 0
 end
 
 local function ensureState(playerObj)
-    if not playerObj then
+    local state = RuntimeState.get(playerObj, RuntimeState.ROLE_MP_CLIENT)
+    if not state then
         return nil
     end
-    local modData = safeCall(playerObj, "getModData")
-    if type(modData) ~= "table" then
-        return nil
-    end
-
-    modData[STATE_KEY] = modData[STATE_KEY] or {}
-    local state = modData[STATE_KEY]
     state.mpClient = type(state.mpClient) == "table" and state.mpClient or {}
 
     local mpClient = state.mpClient
@@ -126,12 +44,6 @@ local function ensureState(playerObj)
     mpClient.lastSnapshotWallSecond = tonumber(mpClient.lastSnapshotWallSecond) or 0
 
     return state, mpClient
-end
-
-local function readLatestSnapshotState()
-    local playerObj = getLocalPlayer()
-    local state, mpClient = ensureState(playerObj)
-    return playerObj, state, mpClient
 end
 
 local function clearSnapshotState(playerObj, resetLogLatch)
@@ -160,7 +72,7 @@ local function expireStaleSnapshot(playerObj)
     if lastSnapshot <= 0 then
         return false
     end
-    local ageSeconds = getWallClockSeconds() - lastSnapshot
+    local ageSeconds = Utils.getWallClockSeconds() - lastSnapshot
     if ageSeconds < SNAPSHOT_STALE_SECONDS then
         return false
     end
@@ -192,37 +104,14 @@ local function canSendRequest(playerObj)
 end
 
 function markUiDirty()
-    local ui = ArmorMakesSense and ArmorMakesSense.Core and ArmorMakesSense.Core.UI or nil
-    if ui and type(ui.markDirty) == "function" then
-        pcall(ui.markDirty)
-    end
-
-    local screenClass = _G.ISCharacterInfoWindow
-    local existing = screenClass and screenClass.instance or nil
-    if existing and existing._amsBurdenPanel and type(existing._amsBurdenPanel.markDirty) == "function" then
-        pcall(existing._amsBurdenPanel.markDirty, existing._amsBurdenPanel)
-    end
+    pcall(UI.markDirty)
 end
 
 local function ensureMpUiHooks(playerObj)
     if uiHooksEnsured then
         return true
     end
-    local ui = ArmorMakesSense and ArmorMakesSense.Core and ArmorMakesSense.Core.UI or nil
-    if type(ui) ~= "table" or type(ui.update) ~= "function" then
-        return false
-    end
-
-    local options = {}
-    local stateModule = ArmorMakesSense and ArmorMakesSense.Core and ArmorMakesSense.Core.State or nil
-    if stateModule and type(stateModule.getOptions) == "function" then
-        local okOptions, resolved = pcall(stateModule.getOptions)
-        if okOptions and type(resolved) == "table" then
-            options = resolved
-        end
-    end
-
-    local okUpdate = pcall(ui.update, playerObj or getLocalPlayer(), nil, options)
+    local okUpdate = pcall(UI.update, playerObj or ClientRuntime.getLocalPlayer(), nil, Options.get())
     if okUpdate then
         uiHooksEnsured = true
         log("MP UI hooks ensured (Burden tab/fallback active)")
@@ -232,32 +121,32 @@ local function ensureMpUiHooks(playerObj)
 end
 
 local function getFatigue(playerObj)
-    local stats = safeCall(playerObj, "getStats")
+    local stats = Utils.safeMethod(playerObj, "getStats")
     if not stats then
         return nil
     end
-    local fatigue = tonumber(safeCall(stats, "getFatigue"))
+    local fatigue = tonumber(Utils.safeMethod(stats, "getFatigue"))
     if fatigue ~= nil then
         return fatigue
     end
     if CharacterStat and CharacterStat.FATIGUE then
-        return tonumber(safeCall(stats, "get", CharacterStat.FATIGUE))
+        return tonumber(Utils.safeMethod(stats, "get", CharacterStat.FATIGUE))
     end
     return nil
 end
 
 local function setFatigue(playerObj, value)
-    local stats = safeCall(playerObj, "getStats")
+    local stats = Utils.safeMethod(playerObj, "getStats")
     if not stats then
         return false
     end
     local clamped = math.max(0, math.min(1, tonumber(value) or 0))
     if type(stats.setFatigue) == "function" then
-        safeCall(stats, "setFatigue", clamped)
+        Utils.safeMethod(stats, "setFatigue", clamped)
         return true
     end
     if CharacterStat and CharacterStat.FATIGUE then
-        safeCall(stats, "set", CharacterStat.FATIGUE, clamped)
+        Utils.safeMethod(stats, "set", CharacterStat.FATIGUE, clamped)
         return true
     end
     return false
@@ -270,13 +159,13 @@ local function reconcileAuthoritativeWakeState(playerObj, snapshot)
     if snapshot.serverSleeping ~= false then
         return false
     end
-    if not toBoolean(safeCall(playerObj, "isAsleep")) then
+    if not Utils.toBoolean(Utils.safeMethod(playerObj, "isAsleep")) then
         return false
     end
 
-    safeCall(playerObj, "setAsleep", false)
-    safeCall(playerObj, "setAsleepTime", 0.0)
-    safeCall(playerObj, "setForceWakeUpTime", -1.0)
+    Utils.safeMethod(playerObj, "setAsleep", false)
+    Utils.safeMethod(playerObj, "setAsleepTime", 0.0)
+    Utils.safeMethod(playerObj, "setForceWakeUpTime", -1.0)
     log("reconciled local wake state from authoritative server snapshot")
     return true
 end
@@ -320,26 +209,6 @@ local function applyAuthoritativeFatigue(playerObj, snapshot)
     return applied
 end
 
-local function getClientActivityLabel(playerObj)
-    if not playerObj then
-        return "idle"
-    end
-    if toBoolean(safeCall(playerObj, "isSprinting")) then
-        return "sprint"
-    end
-    if toBoolean(safeCall(playerObj, "isRunning")) then
-        return "run"
-    end
-    local moving = toBoolean(safeCall(playerObj, "isPlayerMoving")) or toBoolean(safeCall(playerObj, "isMoving"))
-    if moving then
-        return "walk"
-    end
-    if toBoolean(safeCall(playerObj, "isAttackStarted")) then
-        return "combat"
-    end
-    return "idle"
-end
-
 local function sendSnapshotRequest(playerObj, reason)
     if not canSendRequest(playerObj) then
         return false
@@ -350,7 +219,7 @@ local function sendSnapshotRequest(playerObj, reason)
         return false
     end
 
-    local nowSecond = getWallClockSeconds()
+    local nowSecond = Utils.getWallClockSeconds()
     local lastRequest = tonumber(mpClient.lastRequestWallSecond) or 0
     if lastRequest > 0
         and nowSecond >= lastRequest
@@ -360,11 +229,7 @@ local function sendSnapshotRequest(playerObj, reason)
 
     local args = {
         reason = tostring(reason or "fallback"),
-        world_minute = math.floor(getWorldAgeMinutes()),
-        activity_label = tostring(getClientActivityLabel(playerObj)),
-        incident_seq = tonumber(IncidentTrace and IncidentTrace.getSeq and IncidentTrace.getSeq() or 0) or 0,
-        script_version = tostring(MP.SCRIPT_VERSION),
-        script_build = tostring(MP.SCRIPT_BUILD),
+        incident_seq = tonumber(IncidentTrace.getSeq()) or 0,
     }
 
     local ok, err = pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.REQUEST_SNAPSHOT_COMMAND), args)
@@ -377,75 +242,29 @@ local function sendSnapshotRequest(playerObj, reason)
     return true
 end
 
-local function parseServerSnapshot(args)
-    if type(args) ~= "table" then
-        return nil
-    end
-    local parsedDrivers = {}
-    if type(args.drivers) == "table" then
-        for i = 1, #args.drivers do
-            local row = args.drivers[i]
-            if type(row) == "table" then
-                parsedDrivers[#parsedDrivers + 1] = {
-                    label = tostring(row.label or "Unknown Item"),
-                    fullType = tostring(row.full_type or ""),
-                    physical = tonumber(row.physical) or 0,
-                }
-            end
-        end
-    end
-    return {
-        loadNorm = tonumber(args.load_norm) or 0,
-        physicalLoad = tonumber(args.physical_load) or 0,
-        thermalLoad = tonumber(args.thermal_load) or 0,
-        breathingLoad = tonumber(args.breathing_load) or 0,
-        rigidityLoad = tonumber(args.rigidity_load) or 0,
-        armorCount = tonumber(args.armor_count) or 0,
-        effectiveLoad = tonumber(args.effective_load) or 0,
-        thermalContribution = tonumber(args.thermal_contribution) or 0,
-        breathingContribution = tonumber(args.breathing_contribution) or 0,
-        drivers = parsedDrivers,
-        activityLabel = tostring(args.activity_label or "idle"),
-        hotStrain = tonumber(args.hot_strain) or (toBoolean(args.thermal_hot) and 1 or 0),
-        coldAppropriateness = tonumber(args.cold_appropriateness) or (toBoolean(args.thermal_cold) and 1 or 0),
-        thermalPressureScale = tonumber(args.thermal_pressure_scale) or 0,
-        enduranceEnvFactor = tonumber(args.endurance_env_factor) or 1,
-        enduranceBeforeAms = tonumber(args.endurance_before_ams) or 0,
-        enduranceAfterAms = tonumber(args.endurance_after_ams) or 0,
-        enduranceNaturalDelta = tonumber(args.endurance_natural_delta) or 0,
-        enduranceAppliedDelta = tonumber(args.endurance_applied_delta) or 0,
-        lastAppliedDtMinutes = tonumber(args.last_applied_dt_minutes) or 0,
-        catchupPendingMinutes = tonumber(args.catchup_pending_minutes) or 0,
-        updatedMinute = tonumber(args.updated_minute) or 0,
-        authoritativeFatigue = tonumber(args.fatigue),
-        serverSleeping = toBoolean(args.server_sleeping),
-        reason = tostring(args.reason or ""),
-        source = "server_snapshot",
-    }
-end
-
 local function onServerCommand(module, command, args)
     if tostring(module) ~= tostring(MP.NET_MODULE) then
         return
     end
 
     if tostring(command) == tostring(MP.SNAPSHOT_COMMAND) then
-        local playerObj = getLocalPlayer()
+        local playerObj = ClientRuntime.getLocalPlayer()
         local state, mpClient = ensureState(playerObj)
         if not state or not mpClient then
             return
         end
 
-        local snapshot = parseServerSnapshot(args)
+        local snapshot, decodeError = SnapshotCodec.decode(args)
         if not snapshot then
+            log("snapshot rejected: " .. tostring(decodeError))
             return
         end
 
         reconcileAuthoritativeWakeState(playerObj, snapshot)
         applyAuthoritativeFatigue(playerObj, snapshot)
         state.mpServerSnapshot = snapshot
-        mpClient.lastSnapshotWallSecond = getWallClockSeconds()
-        if IncidentTrace and type(IncidentTrace.applyServerIncident) == "function" and type(args.incident_trace) == "table" then
+        mpClient.lastSnapshotWallSecond = Utils.getWallClockSeconds()
+        if type(args.incident_trace) == "table" then
             IncidentTrace.applyServerIncident(args.incident_trace)
         end
         if not firstSnapshotLogged then
@@ -456,8 +275,8 @@ local function onServerCommand(module, command, args)
                 tonumber(snapshot.physicalLoad) or 0,
                 #(snapshot.drivers or {}),
                 tostring(snapshot.activityLabel or "idle"),
-                tostring((tonumber(snapshot.hotStrain) or 0) > 0),
-                tostring((tonumber(snapshot.coldAppropriateness) or 0) > 0),
+                tostring((tonumber(snapshot.hotPressure) or 0) > 0),
+                tostring((tonumber(snapshot.coldSuitability) or 0) > 0),
                 tonumber(snapshot.updatedMinute) or 0
             ))
         end
@@ -467,23 +286,21 @@ local function onServerCommand(module, command, args)
 end
 
 local function onConnected()
-    local player = getLocalPlayer()
+    local player = ClientRuntime.getLocalPlayer()
     clearSnapshotState(player, true)
-    if IncidentTrace and type(IncidentTrace.clear) == "function" then
-        IncidentTrace.clear()
-    end
+    IncidentTrace.clear()
     ensureMpUiHooks(player)
     sendSnapshotRequest(player, "OnConnected")
 end
 
 function ams_mp_snapshot_status()
-    local _, state, mpClient = readLatestSnapshotState()
+    local state, mpClient = ensureState(ClientRuntime.getLocalPlayer())
     local snapshot = state and state.mpServerSnapshot or nil
     if type(snapshot) ~= "table" then
         log("snapshot status: none yet")
         return nil
     end
-    local nowSecond = getWallClockSeconds()
+    local nowSecond = Utils.getWallClockSeconds()
     local ageSeconds = nowSecond - (tonumber(mpClient and mpClient.lastSnapshotWallSecond) or nowSecond)
     log(string.format(
         "snapshot status: load_norm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f age_s=%.1f",
@@ -491,29 +308,27 @@ function ams_mp_snapshot_status()
         tonumber(snapshot.physicalLoad) or 0,
         #(snapshot.drivers or {}),
         tostring(snapshot.activityLabel or "idle"),
-        tostring((tonumber(snapshot.hotStrain) or 0) > 0),
-        tostring((tonumber(snapshot.coldAppropriateness) or 0) > 0),
+        tostring((tonumber(snapshot.hotPressure) or 0) > 0),
+        tostring((tonumber(snapshot.coldSuitability) or 0) > 0),
         tonumber(snapshot.updatedMinute) or 0,
         tonumber(ageSeconds) or 0
     ))
     return snapshot
 end
 
-local function onCreatePlayer(playerIndex, playerObj)
+local function onCreatePlayer(_playerIndex, playerObj)
     if playerObj and type(playerObj.isLocalPlayer) == "function" and not playerObj:isLocalPlayer() then
         return
     end
-    local player = playerObj or getLocalPlayer()
+    local player = playerObj or ClientRuntime.getLocalPlayer()
     clearSnapshotState(player, true)
-    if IncidentTrace and type(IncidentTrace.clear) == "function" then
-        IncidentTrace.clear()
-    end
+    IncidentTrace.clear()
     ensureMpUiHooks(player)
     sendSnapshotRequest(player, "OnCreatePlayer")
 end
 
 local function onClothingUpdated(changedPlayer)
-    local player = getLocalPlayer()
+    local player = ClientRuntime.getLocalPlayer()
     if changedPlayer and changedPlayer ~= player then
         return
     end
@@ -522,7 +337,7 @@ local function onClothingUpdated(changedPlayer)
 end
 
 local function onEveryOneMinute()
-    local player = getLocalPlayer()
+    local player = ClientRuntime.getLocalPlayer()
     local expired = expireStaleSnapshot(player)
     ensureMpUiHooks(player)
     local state = player and ensureState(player) or nil
@@ -543,30 +358,35 @@ local function logBootBanner(contextTag)
     ))
 end
 
-local function registerEvents()
+function MPClientRuntime.registerEvents(_mod)
     if ArmorMakesSense._mpClientRuntimeRegistered then
-        return
+        return true
     end
-    ArmorMakesSense._mpClientRuntimeRegistered = true
+    local requiredEvents = {
+        "OnServerCommand",
+        "OnConnected",
+        "OnCreatePlayer",
+        "OnClothingUpdated",
+        "EveryOneMinute",
+    }
+    for i = 1, #requiredEvents do
+        local name = requiredEvents[i]
+        if not (Events and Events[name] and type(Events[name].Add) == "function") then
+            log("runtime registration failed: Events." .. name .. ".Add unavailable")
+            return false
+        end
+    end
 
-    if Events and Events.OnServerCommand and type(Events.OnServerCommand.Add) == "function" then
-        Events.OnServerCommand.Add(onServerCommand)
-    end
-    if Events and Events.OnConnected and type(Events.OnConnected.Add) == "function" then
-        Events.OnConnected.Add(onConnected)
-    end
-    if Events and Events.OnCreatePlayer and type(Events.OnCreatePlayer.Add) == "function" then
-        Events.OnCreatePlayer.Add(onCreatePlayer)
-    end
-    if Events and Events.OnClothingUpdated and type(Events.OnClothingUpdated.Add) == "function" then
-        Events.OnClothingUpdated.Add(onClothingUpdated)
-    end
-    if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
-        Events.EveryOneMinute.Add(onEveryOneMinute)
-    end
+    ArmorMakesSense._mpClientRuntimeRegistered = true
+    Events.OnServerCommand.Add(onServerCommand)
+    Events.OnConnected.Add(onConnected)
+    Events.OnCreatePlayer.Add(onCreatePlayer)
+    Events.OnClothingUpdated.Add(onClothingUpdated)
+    Events.EveryOneMinute.Add(onEveryOneMinute)
+    logBootBanner("load")
+    clearSnapshotState(ClientRuntime.getLocalPlayer(), true)
+    sendSnapshotRequest(ClientRuntime.getLocalPlayer(), "load")
+    return true
 end
 
-registerEvents()
-logBootBanner("load")
-clearSnapshotState(getLocalPlayer(), true)
-sendSnapshotRequest(getLocalPlayer(), "load")
+return MPClientRuntime

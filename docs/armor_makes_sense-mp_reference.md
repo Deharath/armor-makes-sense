@@ -1,220 +1,222 @@
-# Armor Makes Sense — Multiplayer Reference (v1.2.11)
+# Armor Makes Sense - Multiplayer Reference
 
-_As of July 10, 2026_
+## Authority Model
 
-`SCRIPT_VERSION=1.2.11`
+| Context | Responsibility |
+|---|---|
+| Singleplayer client | Gameplay calculations and UI state |
+| Multiplayer server | Endurance, sleep fatigue, wake correction, melee strain, and snapshots |
+| Multiplayer client | Snapshot requests, UI cache, and server-authoritative sleep reconciliation |
 
-`SCRIPT_BUILD=ams-b42-2026-07-10-v1211`
+The MP client does not run the local gameplay mutation path. Shared model code
+under `common/media/lua/shared/` is used by both the SP client and MP server.
+Shared utilities and character-stat IO are required directly; the server no
+longer installs its own copies into model contexts.
 
-## Boot Structure
+## Server Runtime
 
-`ArmorMakesSense_Main.lua` is the client entry facade. On client load it:
-- requires shared modules (`Config`, `MPCompat`, classifier/load/physiology shared helpers)
-- requires client core/model/testing modules
-- builds and injects the shared context for client-side systems
-- registers the SP client runtime
+`server/ArmorMakesSense_MPServerRuntime.lua` registers these events:
 
-Server runtime:
-- `server/ArmorMakesSense_MPServerRuntime.lua` loads when `isServer() == true`
-- it requires `MPCompat`, `LoadModelShared`, `EnvironmentShared`, `StrainShared`, and `PhysiologyShared`
-- it binds a reduced shared context directly inside the server module instead of using the client context factory/binder stack
+| Event | Use |
+|---|---|
+| `OnClientCommand` | Snapshot requests and sleep bed-type hints |
+| `EveryOneMinute` | Per-player model advancement and normal snapshot push |
+| `OnWeaponSwing` | Per-swing armor strain |
+| `OnPlayerUpdate` | Sleep updates and asleep-to-awake detection |
+| `OnGameBoot` | Runtime identity log |
 
-## Runtime Modes
+Active non-sleep catch-up is capped at one game minute. When pending active
+catch-up exceeds the cap, the server anchors `lastEnduranceObserved` to the live
+stat and discards the excess. Sleep catch-up remains time-based.
 
-Singleplayer:
-- `Runtime.registerEvents` owns local gameplay loops
-- formulas apply to `getPlayer()`
+Shared-input failures discard pending catch-up. The incident recorder also
+aborts an invocation when AMS-only endurance loss crosses its burst threshold.
 
-Multiplayer server:
-- `MPServerRuntime` owns gameplay authority
-- `EveryOneMinute` advances player state and catch-up slices
-- `OnClientCommand` handles snapshot requests
-- client session-start requests (`OnConnected`, `OnCreatePlayer`) reset stale per-player catch-up so offline world time is not replayed on reconnect
-- a release-path incident recorder keeps a short rolling server trace per player and freezes suspicious endurance events for later support-report export
-- `OnWeaponSwing` applies armor-based strain overlay
-- `OnWeaponSwing` also opens a short recent-combat context pulse; the pulse is not a continuous AMS endurance-drain source
-- `OnPlayerUpdate` handles wake-edge authority between snapshot sends:
-  - it keeps a dedicated wake-sync asleep marker instead of reusing general
-    runtime sleep state, so normal snapshot refreshes cannot consume the wake edge
-  - on asleep→awake transition it sends a `WakeTransition` snapshot
-  - it also sends native `syncPlayerStats` for FATIGUE (`CharacterStat` mask bit 4) on the same wake edge
-- while sleeping it sends the same native FATIGUE stat sync at a wall-clock
-  cadence capped to one send per five seconds; accelerated game time cannot
-  multiply this traffic
-- while sleeping it pushes realtime (`SleepRealtimeSync`) snapshots from
-  `OnPlayerUpdate`, with all sleep snapshot sources sharing a one-per-second
-  wall-clock cap
+Elapsed accumulation, active catch-up capping, bounded slicing, and
+sleep/endurance call order come from `shared/ArmorMakesSense_Simulation.lua`,
+the same operation used by singleplayer. The server coordinator owns input
+sampling, sleep-only policy, incident callbacks, native stat synchronization,
+and snapshot transport.
+The sleep-only policy is also used by SP, so armor does not throttle endurance
+recovery while a player is asleep in either authority mode.
 
-Multiplayer client:
-- `MPClientRuntime` registers `OnServerCommand`, `OnConnected`, `OnCreatePlayer`, `OnClothingUpdated`, and `EveryOneMinute`
-- it ensures UI hooks exist, requests snapshots for session/local-clothing/recovery
-  events, expires stale cache entries, and marks the Burden UI dirty when new
-  data arrives
-- on `WakeTransition` snapshots it reconciles local sleep flags to server authority (`asleep=false`, `asleepTime=0`, `forceWakeUpTime=-1`)
-- it applies authoritative fatigue for `WakeTransition` and sleeping snapshots
-- it does not apply awake non-wake fatigue snapshots downward (to avoid fighting
-  post-wake client-side recovery paths while still allowing wake correction)
-- UI data comes from the cached server snapshot
+All AMS-owned server runtime modules are direct requirements. Missing shared
+models, protocol constants, codecs, or incident schema stop initialization
+instead of selecting an empty or reduced behavior path.
+
+## Client Runtime
+
+`client/ArmorMakesSense_MPClientRuntime.lua` has no module-load side effects.
+The client bootstrap calls `MPClientRuntime.registerEvents()` only when
+`isClient()` selects the multiplayer role. The singleplayer runtime is not
+registered in that session.
+
+MP registration requires:
+
+| Event | Use |
+|---|---|
+| `OnServerCommand` | Parse snapshots and incident traces |
+| `OnConnected` | Reset cache and request initial state |
+| `OnCreatePlayer` | Reset cache for the local player and request state |
+| `OnClothingUpdated` | Request a rate-limited refresh for local clothing changes |
+| `EveryOneMinute` | Expire stale state and request recovery only when needed |
+
+Clothing events for remote players are ignored. A healthy client consumes
+server minute pushes without sending a matching minute request.
+
+The MP runtime imports the shared client UI and options modules directly. It
+installs UI hooks when the local player is available and marks the UI dirty
+when snapshot state changes.
 
 ## Snapshot Protocol
 
-Constants in `ArmorMakesSense_MPCompat.lua`:
-- network module: `ArmorMakesSenseRuntime`
-- request command: `request_snapshot`
-- response command: `snapshot`
-- request cadence constant: `SNAPSHOT_FALLBACK_SECONDS = 2`
-- state key: `ArmorMakesSenseState`
+Protocol constants are defined in `shared/ArmorMakesSense_MPCompat.lua`.
+`shared/ArmorMakesSense_MPSnapshotCodec.lua` is the only snapshot wire-field
+encoder and decoder.
 
-Client flow:
-- load/connect/player-create requests are coalesced by the cadence defined by
-  `SNAPSHOT_FALLBACK_SECONDS`
-- local clothing changes request a rate-limited refresh; clothing packets for
-  remote players are ignored
-- healthy clients consume the server's minute pushes without polling the server
-  back on the same minute event
-- `EveryOneMinute` requests a recovery snapshot only when the local cache is
-  missing or stale
-- cache expiry is `max(10, fallback * 4)` seconds
-- snapshot requests include the latest known incident sequence so the server only mirrors new frozen incidents
+| Constant | Value |
+|---|---|
+| Network module | `ArmorMakesSenseRuntime` |
+| Request command | `request_snapshot` |
+| Response command | `snapshot` |
+| Request throttle | 2 wall-clock seconds |
+| Client cache expiry | 10 wall-clock seconds |
+| Snapshot schema | `2` |
 
-Server flow:
-- `MPServerRuntime` recomputes or reuses the latest runtime snapshot for the requesting player
-- `EveryOneMinute` is the normal awake snapshot push; it is not paired with a
-  healthy-client request/reply round trip
-- fresh request snapshots run the shared physiology path at `dt=0` so UI/runtime fields refresh without applying gameplay drain
-- if shared input preparation fails, pending catch-up is discarded instead of being allowed to accumulate into a large replay backlog
-- awake active endurance replay is capped to one game minute; if a server/client request arrives with a larger pending active backlog, the server anchors `lastEnduranceObserved` to the current endurance stat and discards the stale excess before applying endurance costs
-- if AMS applies an abnormal burst of endurance loss during one server update invocation, the runtime freezes an incident trace, aborts further replay in that invocation, clears pending replay, and rebuilds a fresh `dt=0` snapshot
-- the snapshot payload includes:
-  - `loadNorm`
-  - `physicalLoad`
-  - `thermalLoad`
-  - `breathingLoad`
-  - `rigidityLoad`
-  - `armorCount`
-  - `effectiveLoad`
-  - `thermalPressureScale`
-  - `enduranceEnvFactor`
-  - `updatedMinute`
-  - `fatigue`
-  - `server_sleeping`
-  - `reason`
-  - `incidentSeq`
-  - thermal hot/cold flags
-  - physical cost drivers
-  - optional `incidentTrace` payload when the client is behind the server-held frozen incident
+### Client Requests
 
-Client storage:
-- parsed snapshots are stored in `player:getModData()[STATE_KEY].mpServerSnapshot`
-- the latest mirrored incident trace is cached client-side and appended to support reports
+A request contains:
 
-UI behavior:
-- burden, thermal, breathing, and sleep panel data read from the latest server snapshot
-- missing or expired snapshots return the panel to its waiting state
-- the `Save Report` flow remains client-side, but MP reports now include a hidden `Incident Trace` section when the server has frozen one for that player
+- reason
+- latest known incident sequence
 
-## Multiplayer Option Resolution
+Load, connect, create-player, and clothing requests share the same request
+throttle. `EveryOneMinute` requests `SnapshotRecovery` only when the cached
+snapshot is absent or expired.
 
-Server/MP (`MPServerRuntime.getOptions()`) precedence:
-1. `ArmorMakesSense.DEFAULTS`
-2. `SandboxVars.ArmorMakesSense`
+### Server Responses
 
-Client/SP uses the same sandbox-backed gameplay toggles.
+The server returns aggregate load, activity, numeric environment and endurance
+telemetry, fatigue, sleep state, physical cost drivers, and optional incident data.
+Every response includes `snapshot_schema_version`. The client rejects a missing
+or unsupported schema instead of interpreting a partial payload.
 
-## Multiplayer State
+The response contains these field groups:
 
-Client-side MP state:
+| Group | Fields |
+|---|---|
+| Load | physical, airflow resistance, sealed restriction, rigidity, effective load, driver count |
+| Thermal | availability, effective resistance, hot pressure, strain scale, cold suitability, contribution |
+| Breathing | smoothed metabolic rate, immediate metabolic demand, normalized effort, effort ramp, open and sealed contribution |
+| Endurance | before, after, natural delta, applied delta, applied time, pending catch-up |
+| State | activity label, update minute, fatigue, sleeping flag, reason |
+| Attribution | physical cost drivers and optional incident trace |
+
+Request-triggered refreshes run the physiology model with `dtMinutes = 0`.
+This updates telemetry without applying drain, changing regeneration, invoking
+NMS endurance contribution, or writing endurance.
+
+## Sleep and Wake Synchronization
+
+The server tracks the sleep edge independently from general runtime sleep state.
+
+- Sleeping snapshots are capped at one per wall-clock second across all server
+  update sources.
+- Native FATIGUE synchronization while sleeping is capped at one send per five
+  wall-clock seconds.
+- An asleep-to-awake transition produces a `WakeTransition` snapshot and native
+  FATIGUE synchronization with mask `16`.
+- Sleeping and wake-transition snapshots may update client fatigue.
+- Awake snapshots with other reasons do not lower client fatigue.
+- A server-declared wake clears local `asleep`, `asleepTime`, and
+  `forceWakeUpTime` state.
+
+These limits are wall-clock based, so accelerated co-op sleep does not multiply
+network traffic.
+
+Wake fatigue is derived and synchronized by the server. Released runtime does
+not accept a client-supplied fatigue correction; the development-only sleep
+diagnostic command is handled only by the excluded diagnostics modules.
+
+## Multiplayer Transient State
+
+Client state is stored in the weak-key `multiplayer_client` store:
+
 - `mpClient.lastRequestWallSecond`
 - `mpClient.lastSnapshotWallSecond`
 - `mpServerSnapshot`
 
-Server-side MP state:
-- `mpServer.lastUpdateGameMinutes`
-- `mpServer.lastEnduranceObserved`
-- `mpServer.pendingCatchupMinutes`
-- `mpServer.runtimeSnapshot`
-- `mpServer.lastSnapshotSentSecond`
-- `mpServer.recentCombatUntilMinute`
-- `mpServer.lastWakeSyncAsleepFlag`
-- `mpServer.lastSleepSnapshotSentWallSecond`
-- `mpServer.lastSleepFatigueSyncWallSecond`
-- `mpServer.lastSleepRealtimeUpdateWallSecond`
-- `mpServer.thermalModelState`
-- `mpServer.incidentRecorder`
+Server state is stored separately in the weak-key `multiplayer_server` store:
 
-## Diagnostics Stack
+- `lastUpdateGameMinutes`
+- `lastEnduranceObserved`
+- `pendingCatchupMinutes`
+- `runtimeSnapshot`
+- `lastWakeSyncAsleepFlag`
+- `lastSleepSnapshotSentWallSecond`
+- `lastSleepFatigueSyncWallSecond`
+- `lastSleepRealtimeUpdateWallSecond`
+- `thermalModelState`
+- `incidentRecorder`
 
-The diagnostics modules expose runtime state and per-item attribution for MP inspection.
+Neither store is saved. The first state access removes the obsolete
+`ArmorMakesSenseState` player blob without importing its timing, catch-up, or
+snapshot values.
 
-### Harness Layer
+## Option Resolution
 
-`client/diagnostics/ArmorMakesSense_MPClientHarness.lua`:
-- loads only on MP clients
-- registers on load, connect, player-create, and minute events
-- sends one-shot `harness_ping` requests
-- exposes `ams_mp_ping(reason)`
+The MP server resolves options in this order:
 
-`server/diagnostics/ArmorMakesSense_MPServerHarness.lua`:
-- listens for `harness_ping` on `OnClientCommand`
-- replies with `diag` pong payloads containing server minute, script version, and build
-- logs player identity and request reason
+1. `ArmorMakesSense.DEFAULTS`
+2. matching values from `SandboxVars.ArmorMakesSense`
 
-### Diagnostic Dump Path
+The public MP gameplay toggles are thermal burden, muscle strain, and sleep
+penalties.
 
-`client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua`:
-- exposes `ams_mp_diag_dump(reason)`
-- exposes `ams_mp_diag_last()`
-- stores the last dump locally and logs a compact summary on receipt
+The server weapon-swing handler calls the shared strain application policy.
+That policy honors both the AMS toggle and vanilla `muscleStrainFactor`; the
+server does not reproduce eligibility or magnitude calculations. Weapon swings
+do not create endurance, breathing, or activity state on the server.
 
-`server/diagnostics/ArmorMakesSense_MPDiagnosticsServer.lua`:
-- listens for `diag_dump_request`
-- builds payloads from `mpServer.runtimeSnapshot`, `mpServer.uiRuntimeSnapshot`, live stats, and per-item load signals
-- returns payloads over `diag_dump`
+## Incident Capture
 
-Server dump payload contents:
-- player identity and online id
-- script version/build and world minute
-- live endurance, fatigue, and thirst
-- aggregate AMS loads
-- runtime modifiers
-- activity label
-- thermal flags
-- pending catch-up time
-- physical cost drivers
-- per-item rows derived from `LoadModel.itemToArmorSignal`
+`server/ArmorMakesSense_MPIncidentRecorder.lua` keeps a bounded per-player ring
+buffer. It freezes a trace for abnormal time steps, catch-up, natural endurance
+drops, or AMS-applied endurance drops. The client sends only the request reason
+and its latest incident sequence; the server sends a trace only when the client
+is behind.
 
-Optional minute summaries:
-- `MPDiagnosticsServer` can emit one-line summaries for all online players
-- gate: `_G.ams_enable_mp_diag_minute_summary == true`
-- output form: log lines
+The client appends the latest trace to the exported support report. Incident
+capture is part of the release runtime and has no separate player-facing UI.
 
-## Context Injection
+## Development Diagnostics
 
-AMS uses context injection for most gameplay/model code.
+Development builds provide:
 
-Client/SP context path:
-- `ArmorMakesSense_ContextFactory.lua` builds the full context table
-- `ArmorMakesSense_ContextBinder.lua` injects it into modules that expose `setContext`
-- `ArmorMakesSense_ContextRefs.lua` holds stable references
-- `ArmorMakesSense_Bootstrap.lua` provides thin binding/runtime registration helpers
+- `ams_mp_ping(reason)` through the client/server harness pair
+- `ams_mp_diag_dump(reason)` to request a server state dump
+- `ams_mp_diag_last()` to read the latest client-held dump
+- optional server minute summaries gated by
+  `_G.ams_enable_mp_diag_minute_summary == true`
 
-MP server context path:
-- `MPServerRuntime` constructs a smaller ad-hoc context with clamp/softNorm helpers, stat IO, environment readers, load-model entry points, and MP-specific `ensureState`
-- it injects that context into `LoadModelShared`, `EnvironmentShared`, `StrainShared`, and `PhysiologyShared`
+The Workshop packaging process excludes files under the client and server
+`diagnostics/` directories. Staging validates that remaining Lua has no
+development references and does not rewrite runtime source files.
 
-## MP-Facing Module Map
+## Modules
 
-- `client/ArmorMakesSense_MPClientRuntime.lua` — snapshot transport and UI bridge
-- `server/ArmorMakesSense_MPServerRuntime.lua` — gameplay authority and snapshot sender
-- `server/ArmorMakesSense_MPIncidentRecorder.lua` — hidden server incident trace recorder and burst-drain guard helper
-- `shared/ArmorMakesSense_MPCompat.lua` — MP constants
-- `shared/ArmorMakesSense_MPIncidentSchema.lua` — frozen incident trace shape and thresholds
-- `shared/ArmorMakesSense_LoadModelShared.lua` — shared load-model math
-- `shared/ArmorMakesSense_EnvironmentShared.lua` — shared environment sampling
-- `shared/ArmorMakesSense_PhysiologyShared.lua` — shared physiology formulas
-- `shared/ArmorMakesSense_StrainShared.lua` — shared strain logic
-- `client/core/ArmorMakesSense_IncidentTrace.lua` — client cache/formatting for mirrored MP incident traces
-- `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua` — MP-client-only diagnostics receive/logging
-- `client/diagnostics/ArmorMakesSense_MPClientHarness.lua` — MP-client-only harness ping path
-- `server/diagnostics/ArmorMakesSense_MPDiagnosticsServer.lua` — server diagnostics dump/minute summaries
-- `server/diagnostics/ArmorMakesSense_MPServerHarness.lua` — server harness pong path
+- `client/ArmorMakesSense_MPClientRuntime.lua`: client transport and
+  reconciliation
+- `server/ArmorMakesSense_MPServerRuntime.lua`: gameplay authority
+- `server/ArmorMakesSense_MPIncidentRecorder.lua`: bounded incident capture
+- `shared/ArmorMakesSense_MPCompat.lua`: protocol constants
+- `shared/ArmorMakesSense_MPSnapshotCodec.lua`: versioned snapshot wire codec
+- `shared/ArmorMakesSense_MPIncidentSchema.lua`: trace schema and thresholds
+- `client/core/ArmorMakesSense_IncidentTrace.lua`: client trace cache and report
+  formatter
+- `client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua`: diagnostic dump
+  client
+- `server/diagnostics/ArmorMakesSense_MPDiagnosticsServer.lua`: diagnostic dump
+  server
+- `client/diagnostics/ArmorMakesSense_MPClientHarness.lua`: ping client
+- `server/diagnostics/ArmorMakesSense_MPServerHarness.lua`: ping server

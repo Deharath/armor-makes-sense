@@ -5,207 +5,37 @@ if not runningOnServer then
     return
 end
 
-local okConfig, configErr = pcall(require, "ArmorMakesSense_Config")
-if not okConfig then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_Config :: " .. tostring(configErr))
-    return
-end
-local okMpCompat, mpCompatOrErr = pcall(require, "ArmorMakesSense_MPCompat")
-if not okMpCompat then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))
-    return
-end
-pcall(require, "ArmorMakesSense_Compat")
-
-local MP = (type(mpCompatOrErr) == "table" and mpCompatOrErr) or ArmorMakesSense.MP
-if type(MP) ~= "table" then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] MP compat constants unavailable; runtime disabled")
-    return
-end
-
-pcall(require, "ArmorMakesSense_ArmorClassifier")
-local Classifier = ArmorMakesSense and ArmorMakesSense.Classifier or nil
-
-local okLoadModel, loadModelOrErr = pcall(require, "ArmorMakesSense_LoadModelShared")
-if not okLoadModel or type(loadModelOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_LoadModelShared :: " .. tostring(loadModelOrErr))
-    return
-end
-local LoadModel = loadModelOrErr
-
-local okEnvironment, environmentOrErr = pcall(require, "ArmorMakesSense_EnvironmentShared")
-if not okEnvironment or type(environmentOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_EnvironmentShared :: " .. tostring(environmentOrErr))
-    return
-end
-local Environment = environmentOrErr
-
-local okStrain, strainOrErr = pcall(require, "ArmorMakesSense_StrainShared")
-if not okStrain or type(strainOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_StrainShared :: " .. tostring(strainOrErr))
-    return
-end
-local Strain = strainOrErr
-
-local okPhysiology, physiologyOrErr = pcall(require, "ArmorMakesSense_PhysiologyShared")
-if not okPhysiology or type(physiologyOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_PhysiologyShared :: " .. tostring(physiologyOrErr))
-    return
-end
-local Physiology = physiologyOrErr
-
-local okIncidentRecorder, incidentRecorderOrErr = pcall(require, "ArmorMakesSense_MPIncidentRecorder")
-if not okIncidentRecorder or type(incidentRecorderOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][SERVER][ERROR] require failed: ArmorMakesSense_MPIncidentRecorder :: " .. tostring(incidentRecorderOrErr))
-    return
-end
-local IncidentRecorder = incidentRecorderOrErr
-
-local DEFAULTS = ArmorMakesSense.DEFAULTS or {}
-local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
-local COST_DRIVER_THRESHOLD = 1.5
-local COMBAT_LATCH_ATTACK_SECONDS = 3.0
-local ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES = 1.0
-local ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES = 1.10
+local MP = require "ArmorMakesSense_MPCompat"
+require "ArmorMakesSense_Compat"
+local Options = require "ArmorMakesSense_Options"
+local Utils = require "ArmorMakesSense_UtilsShared"
+local Stats = require "ArmorMakesSense_StatsShared"
+local LoadModel = require "ArmorMakesSense_LoadModelShared"
+local Environment = require "ArmorMakesSense_EnvironmentShared"
+local Strain = require "ArmorMakesSense_StrainShared"
+local Physiology = require "ArmorMakesSense_PhysiologyShared"
+local IncidentRecorder = require "ArmorMakesSense_MPIncidentRecorder"
+local SnapshotCodec = require "ArmorMakesSense_MPSnapshotCodec"
+local RuntimeState = require "ArmorMakesSense_RuntimeState"
+local Simulation = require "ArmorMakesSense_Simulation"
 local FATIGUE_STAT_MASK = 16
 local SLEEP_FATIGUE_SYNC_INTERVAL_WALL_SECONDS = 5
 local SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS = 1
-
-local activeFormulaState = nil
 
 local function log(message)
     print("[ArmorMakesSense][MP][SERVER] " .. tostring(message))
 end
 
-local function safeCall(target, methodName, ...)
-    if not target then
-        return nil
-    end
-    local fn = target[methodName]
-    if type(fn) ~= "function" then
-        return nil
-    end
-    local ok, result = pcall(fn, target, ...)
-    if not ok then
-        return nil
-    end
-    return result
-end
-
-local function clamp(value, minimum, maximum)
-    local minV = tonumber(minimum) or 0
-    local maxV = tonumber(maximum) or minV
-    if minV > maxV then
-        minV, maxV = maxV, minV
-    end
-
-    local v = tonumber(value)
-    if v == nil or v ~= v then
-        return minV
-    end
-    if v < minV then
-        return minV
-    end
-    if v > maxV then
-        return maxV
-    end
-    return v
-end
-
-local function softNorm(value, pivot, maxNorm)
-    local v = math.max(0, tonumber(value) or 0)
-    local p = math.max(0.001, tonumber(pivot) or 1.0)
-    local m = math.max(0.001, tonumber(maxNorm) or 1.0)
-    local ratio = v / (v + p)
-    return clamp(ratio * m, 0, m)
-end
-
-local function toBoolean(value)
-    if type(value) == "boolean" then
-        return value
-    end
-    if type(value) == "string" then
-        local lowered = string.lower(value)
-        return lowered == "true" or lowered == "1" or lowered == "yes" or lowered == "on"
-    end
-    if type(value) == "number" then
-        return value ~= 0
-    end
-    return false
-end
-
-local function lower(value)
-    if value == nil then
-        return ""
-    end
-    return string.lower(tostring(value))
-end
-
-local function containsAny(text, patterns)
-    local t = lower(text)
-    if t == "" or type(patterns) ~= "table" then
-        return false
-    end
-    for i = 1, #patterns do
-        if string.find(t, tostring(patterns[i]), 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function getWorldAgeMinutes()
-    local gameTime = type(getGameTime) == "function" and getGameTime() or nil
-    local worldAgeHours = tonumber(gameTime and safeCall(gameTime, "getWorldAgeHours") or nil)
-    if worldAgeHours == nil then
-        return 0
-    end
-    return worldAgeHours * 60.0
-end
-
-local function getWallClockSeconds()
-    if type(getTimestampMs) == "function" then
-        local nowMs = tonumber(getTimestampMs())
-        if nowMs ~= nil then
-            return math.floor(nowMs / 1000)
-        end
-    end
-    if type(getTimestamp) == "function" then
-        local nowSeconds = tonumber(getTimestamp())
-        if nowSeconds ~= nil then
-            return math.floor(nowSeconds)
-        end
-    end
-    local nowFromWorld = tonumber(getWorldAgeMinutes()) or 0
-    return math.floor(nowFromWorld * 60)
-end
-
-local function getOptions()
-    local options = {}
-    for key, value in pairs(DEFAULTS) do
-        options[key] = value
-    end
-
-    if SandboxVars and SandboxVars.ArmorMakesSense then
-        for key, value in pairs(SandboxVars.ArmorMakesSense) do
-            local defaultValue = options[key]
-            if defaultValue ~= nil then
-                if type(defaultValue) == "boolean" then
-                    options[key] = toBoolean(value)
-                elseif type(defaultValue) == "number" then
-                    local parsed = tonumber(value)
-                    if parsed ~= nil then
-                        options[key] = parsed
-                    end
-                elseif type(defaultValue) == "string" then
-                    options[key] = tostring(value)
-                end
-            end
-        end
-    end
-
-    return options
-end
+local safeCall = Utils.safeMethod
+local clamp = Utils.clamp
+local lower = Utils.lower
+local toBoolean = Utils.toBoolean
+local getWorldAgeMinutes = Utils.getWorldAgeMinutes
+local getEndurance = Stats.getEndurance
+local setEndurance = Stats.setEndurance
+local getFatigue = Stats.getFatigue
+local setFatigue = Stats.setFatigue
+local getWallClockSeconds = Utils.getWallClockSeconds
 
 local function playerName(playerObj)
     if not playerObj then
@@ -223,41 +53,31 @@ local function playerName(playerObj)
 end
 
 local function ensurePlayerState(playerObj)
-    local modData = safeCall(playerObj, "getModData")
-    if type(modData) ~= "table" then
+    local state = RuntimeState.get(playerObj, RuntimeState.ROLE_MP_SERVER)
+    if not state then
         return nil
     end
-
-    modData[STATE_KEY] = modData[STATE_KEY] or {}
-    local state = modData[STATE_KEY]
-    state.version = tonumber(state.version) or 2
     state.mpServer = type(state.mpServer) == "table" and state.mpServer or {}
 
     local mpState = state.mpServer
     mpState.lastUpdateGameMinutes = tonumber(mpState.lastUpdateGameMinutes) or getWorldAgeMinutes()
     mpState.lastEnduranceObserved = tonumber(mpState.lastEnduranceObserved)
     mpState.wasSleeping = toBoolean(mpState.wasSleeping)
-    mpState.recentCombatUntilMinute = tonumber(mpState.recentCombatUntilMinute)
-    mpState.lastSnapshotSentSecond = tonumber(mpState.lastSnapshotSentSecond) or 0
     mpState.lastSleepSnapshotSentWallSecond = tonumber(mpState.lastSleepSnapshotSentWallSecond) or 0
     mpState.lastSleepFatigueSyncWallSecond = tonumber(mpState.lastSleepFatigueSyncWallSecond) or 0
     mpState.lastSleepRealtimeUpdateWallSecond = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
     mpState.pendingCatchupMinutes = math.max(0, tonumber(mpState.pendingCatchupMinutes) or 0)
-    mpState.pendingSleepSession = type(mpState.pendingSleepSession) == "table" and mpState.pendingSleepSession or nil
+    local pendingSleepBedType = tostring(mpState.pendingSleepBedType or "")
+    mpState.pendingSleepBedType = pendingSleepBedType ~= "" and pendingSleepBedType or nil
     mpState.runtimeSnapshot = type(mpState.runtimeSnapshot) == "table" and mpState.runtimeSnapshot or nil
     if type(mpState.lastWakeSyncAsleepFlag) ~= "boolean" then
-        if type(mpState.lastAsleepFlag) == "boolean" then
-            mpState.lastWakeSyncAsleepFlag = mpState.lastAsleepFlag
-        else
-            mpState.lastWakeSyncAsleepFlag = nil
-        end
+        mpState.lastWakeSyncAsleepFlag = nil
     end
-    mpState.lastAsleepFlag = nil
 
     return state, mpState
 end
 
-local function recordSleepSession(playerObj, args)
+local function recordSleepBedType(playerObj, args)
     local _, mpState = ensurePlayerState(playerObj)
     if not mpState then
         return
@@ -268,102 +88,18 @@ local function recordSleepSession(playerObj, args)
         return
     end
 
-    mpState.pendingSleepSession = {
-        bedType = bedType,
-        sleepFor = tonumber(args and args.sleep_for),
-        wakeHour = tonumber(args and args.wake_hour),
-        clientWorldMinute = tonumber(args and args.world_minute),
-        clientFatigue = tonumber(args and args.fatigue),
-        receivedMinute = getWorldAgeMinutes(),
-    }
+    mpState.pendingSleepBedType = bedType
 
     if type(mpState.sleepSnapshot) == "table"
         and tostring(mpState.sleepSnapshot.bedType or "") == "" then
         mpState.sleepSnapshot.bedType = bedType
     end
 
-    log(string.format(
-        "sleep session from client: player=%s bed=%s sleepFor=%.2f wake=%.2f clientFat=%s",
-        tostring(playerName(playerObj)),
-        bedType,
-        tonumber(args and args.sleep_for) or 0,
-        tonumber(args and args.wake_hour) or -1,
-        args and args.fatigue ~= nil and string.format("%.3f", tonumber(args.fatigue) or -1) or "nil"
-    ))
-end
-
-local function getEndurance(playerObj)
-    local stats = safeCall(playerObj, "getStats")
-    if not stats then
-        return nil
-    end
-
-    local endurance = tonumber(safeCall(stats, "getEndurance"))
-    if endurance ~= nil then
-        return endurance
-    end
-
-    if CharacterStat and CharacterStat.ENDURANCE then
-        return tonumber(safeCall(stats, "get", CharacterStat.ENDURANCE))
-    end
-
-    return nil
+    log("sleep bed type from client: player=" .. tostring(playerName(playerObj)) .. " bed=" .. bedType)
 end
 
 local function isPlayerAsleep(playerObj)
     return toBoolean(safeCall(playerObj, "isAsleep"))
-end
-
-local function setEndurance(playerObj, value)
-    local stats = safeCall(playerObj, "getStats")
-    if not stats then
-        return
-    end
-
-    value = clamp(value, 0, 1)
-    if type(stats.setEndurance) == "function" then
-        safeCall(stats, "setEndurance", value)
-        return
-    end
-
-    if CharacterStat and CharacterStat.ENDURANCE then
-        safeCall(stats, "set", CharacterStat.ENDURANCE, value)
-    end
-end
-
-local function getFatigue(playerObj)
-    local stats = safeCall(playerObj, "getStats")
-    if not stats then
-        return nil
-    end
-
-    local fatigue = tonumber(safeCall(stats, "getFatigue"))
-    if fatigue ~= nil then
-        return fatigue
-    end
-
-    if CharacterStat and CharacterStat.FATIGUE then
-        return tonumber(safeCall(stats, "get", CharacterStat.FATIGUE))
-    end
-
-    return nil
-end
-
-local function setFatigue(playerObj, value)
-    local stats = safeCall(playerObj, "getStats")
-    if not stats then
-        return
-    end
-
-    value = clamp(value, 0, 1)
-    if type(stats.setFatigue) == "function" then
-        safeCall(stats, "setFatigue", value)
-        return
-    end
-
-    if CharacterStat and CharacterStat.FATIGUE then
-        safeCall(stats, "set", CharacterStat.FATIGUE, value)
-    end
 end
 
 local function syncFatigueToClient(playerObj, phaseTag)
@@ -400,185 +136,6 @@ local function syncSleepingFatigueToClient(playerObj, mpState)
     return sent
 end
 
-local function applyClientWakeFatigue(playerObj, args)
-    local clientFatigue = tonumber(args and args.fat)
-    if clientFatigue == nil then
-        return
-    end
-
-    local _, mpState = ensurePlayerState(playerObj)
-    if not mpState then
-        return
-    end
-
-    local serverFatigue = tonumber(getFatigue(playerObj))
-    if serverFatigue == nil or clientFatigue >= (serverFatigue - 0.002) then
-        return
-    end
-
-    local hadSleepContext = mpState.wasSleeping == true
-        or type(mpState.sleepSnapshot) == "table"
-        or type(mpState.pendingSleepSession) == "table"
-        or (tonumber(mpState.lastSleepPenaltyFraction) or 0) > 0
-    if not hadSleepContext then
-        return
-    end
-
-    local applied = clamp(clientFatigue, 0, 1)
-    setFatigue(playerObj, applied)
-    mpState.lastSleepWakeAdjustment = applied - serverFatigue
-    mpState.lastWakeClientFatigue = applied
-    mpState.lastWakeServerFatigue = serverFatigue
-    mpState.lastWakeClientWorldMinute = tonumber(args and args.world)
-
-    log(string.format(
-        "accepted client wake fatigue: player=%s server=%.3f client=%.3f delta=%.3f",
-        tostring(playerName(playerObj)),
-        serverFatigue,
-        applied,
-        applied - serverFatigue
-    ))
-
-    syncWakeFatigueToClient(playerObj)
-end
-
-local function getWetness(playerObj)
-    local stats = safeCall(playerObj, "getStats")
-    if stats and CharacterStat and CharacterStat.WETNESS then
-        local wet = tonumber(safeCall(stats, "get", CharacterStat.WETNESS))
-        if wet ~= nil then
-            return wet
-        end
-    end
-
-    local body = safeCall(playerObj, "getBodyDamage")
-    if body then
-        return tonumber(safeCall(body, "getWetness"))
-    end
-
-    return nil
-end
-
-local function getBodyTemperature(playerObj)
-    local stats = safeCall(playerObj, "getStats")
-    if stats and CharacterStat and CharacterStat.TEMPERATURE then
-        local temp = tonumber(safeCall(stats, "get", CharacterStat.TEMPERATURE))
-        if temp ~= nil then
-            return temp
-        end
-    end
-
-    local body = safeCall(playerObj, "getBodyDamage")
-    if body then
-        local temp = tonumber(safeCall(body, "getTemperature"))
-        if temp ~= nil then
-            return temp
-        end
-    end
-
-    return nil
-end
-
-local function getItemDisplayLabel(item)
-    local displayName = tostring(safeCall(item, "getDisplayName") or safeCall(item, "getName") or "")
-    if displayName ~= "" then
-        return displayName
-    end
-    local fullType = tostring(safeCall(item, "getFullType") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-    return "Unknown Item"
-end
-
-local function collectSnapshotDrivers(playerObj)
-    local wornItems = safeCall(playerObj, "getWornItems")
-    if not wornItems or type(LoadModel.itemToArmorSignal) ~= "function" then
-        return {}
-    end
-
-    local itemCount = tonumber(safeCall(wornItems, "size")) or 0
-    local drivers = {}
-
-    for i = 0, itemCount - 1 do
-        local worn = safeCall(wornItems, "get", i)
-        local item = worn and safeCall(worn, "getItem")
-        if item then
-            local locationName = safeCall(worn, "getLocation")
-            local signal = LoadModel.itemToArmorSignal(item, locationName)
-            local physical = tonumber(signal and signal.physicalLoad) or 0
-            if physical >= COST_DRIVER_THRESHOLD then
-                drivers[#drivers + 1] = {
-                    label = getItemDisplayLabel(item),
-                    fullType = tostring(safeCall(item, "getFullType") or safeCall(item, "getType") or ""),
-                    physical = physical,
-                }
-            end
-        end
-    end
-
-    table.sort(drivers, function(a, b)
-        return (tonumber(a and a.physical) or 0) > (tonumber(b and b.physical) or 0)
-    end)
-
-    return drivers
-end
-
-local function bindSharedContexts()
-    local context = {
-        Classifier = Classifier,
-        armorKeywords = (Classifier and Classifier.ARMOR_KEYWORDS) or {},
-        armorLocationHints = (Classifier and Classifier.ARMOR_LOCATION_HINTS) or {},
-        clamp = clamp,
-        computeArmorProfile = function(playerObj)
-            return LoadModel.computeArmorProfile(playerObj)
-        end,
-        containsAny = containsAny,
-        ensureState = function()
-            return activeFormulaState
-        end,
-        getBodyTemperature = getBodyTemperature,
-        getEndurance = getEndurance,
-        getFatigue = getFatigue,
-        getWetness = getWetness,
-        getWorldAgeMinutes = getWorldAgeMinutes,
-        getCompat = function()
-            return ArmorMakesSense.Compat
-        end,
-        isMultiplayer = function()
-            return true
-        end,
-        log = log,
-        lower = lower,
-        markUiDirty = function()
-            return
-        end,
-        safeMethod = safeCall,
-        setEndurance = setEndurance,
-        setFatigue = setFatigue,
-        softNorm = softNorm,
-        toBoolean = toBoolean,
-    }
-
-    if type(LoadModel.setContext) == "function" then
-        LoadModel.setContext(context)
-    end
-    if type(Environment.setContext) == "function" then
-        Environment.setContext(context)
-    end
-    if type(Strain.setContext) == "function" then
-        Strain.setContext(context)
-    end
-    if type(Physiology.setContext) == "function" then
-        Physiology.setContext(context)
-    end
-    if type(IncidentRecorder.setContext) == "function" then
-        IncidentRecorder.setContext(context)
-    end
-end
-
-bindSharedContexts()
-
 local prepareRuntimeInputs
 
 local function registerCompatProvider()
@@ -603,16 +160,14 @@ local function registerCompatProvider()
                     }
                 end
 
-                local options = getOptions()
-                local profile, _, heatFactor, wetFactor = prepareRuntimeInputs(playerObj, options)
+                local options = Options.get()
+                local profile = prepareRuntimeInputs(playerObj, mpState, options)
                 return Physiology.computeSleepPenaltyContribution(
                     playerObj,
                     mpState,
                     options,
                     tonumber(args and args.dtMinutes) or 0,
                     profile,
-                    heatFactor,
-                    wetFactor,
                     tonumber(args and args.currentFatigue)
                 )
             end,
@@ -622,8 +177,8 @@ local function registerCompatProvider()
                     return { penaltyFraction = 0 }
                 end
 
-                local options = getOptions()
-                local profile = prepareRuntimeInputs(playerObj, options)
+                local options = Options.get()
+                local profile = prepareRuntimeInputs(playerObj, mpState, options)
                 return Physiology.computeSleepPlannerPenalty(
                     playerObj,
                     mpState,
@@ -645,71 +200,39 @@ end
 
 registerCompatProvider()
 
-local function normalizeActivityLabel(label)
-    local value = lower(label)
-    if value == "sprint" or value == "run" or value == "walk" or value == "combat" or value == "idle" then
-        return value
-    end
-    return nil
-end
-
-local function getActivityFactorForLabel(options, activityLabel)
-    if activityLabel == "sprint" then
-        return clamp(tonumber(options.ActivitySprint) or 1.35, 0.2, 1.8)
-    end
-    if activityLabel == "run" then
-        return clamp(tonumber(options.ActivityJog) or 1.0, 0.2, 1.8)
-    end
-    if activityLabel == "walk" then
-        return clamp(tonumber(options.ActivityWalk) or 0.75, 0.2, 1.8)
-    end
-    if activityLabel == "combat" then
-        return clamp(tonumber(options.ActivityJog) or 1.0, 0.2, 1.8)
-    end
-    return clamp(tonumber(options.ActivityIdle) or 0.35, 0.2, 1.8)
-end
-
-prepareRuntimeInputs = function(playerObj, options, sleepOnly)
-    local profile = type(LoadModel.computeArmorProfile) == "function" and LoadModel.computeArmorProfile(playerObj) or nil
-    if type(profile) ~= "table" then
-        profile = {}
-    end
+prepareRuntimeInputs = function(playerObj, mpState, options, sleepOnly)
+    local analysis = LoadModel.analyzeWornGear(playerObj)
+    local profile = analysis.profile
 
     local sleeping = sleepOnly == true
-    local drivers = sleeping and {} or collectSnapshotDrivers(playerObj)
-    local heatFactor = type(Environment.getHeatFactor) == "function" and tonumber(Environment.getHeatFactor(playerObj, options)) or 1.0
-    local wetFactor = type(Environment.getWetFactor) == "function" and tonumber(Environment.getWetFactor(playerObj, options)) or 1.0
-    local activityLabel = sleeping and "sleep"
-        or (normalizeActivityLabel(type(Environment.getActivityLabel) == "function" and Environment.getActivityLabel(playerObj) or "idle") or "idle")
-    local activityFactor = sleeping and 0 or getActivityFactorForLabel(options, activityLabel)
-    local postureLabel = sleeping and "sleep" or (type(Environment.getPostureLabel) == "function" and Environment.getPostureLabel(playerObj) or "stand")
+    local drivers = sleeping and {} or analysis.costDrivers
+    local activity = Environment.resolveActivity(playerObj, options)
+    local activityLabel = activity.label
+    local activityFactor = activity.factor
+    local postureLabel = sleeping and "sleep" or Environment.getPostureLabel(playerObj)
 
-    return profile, drivers, heatFactor or 1.0, wetFactor or 1.0, activityFactor or 1.0, tostring(activityLabel or "idle"), tostring(postureLabel or "stand")
+    return profile, drivers, activityFactor or 1.0,
+        tostring(activityLabel or "idle"), tostring(postureLabel or "stand"), analysis
 end
 
 local function buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
     local uiSnapshot = type(mpState.uiRuntimeSnapshot) == "table" and mpState.uiRuntimeSnapshot or {}
-    local hotStrain = tonumber(uiSnapshot.hotStrain) or 0
-    local coldAppropriateness = tonumber(uiSnapshot.coldAppropriateness) or 0
-
     return {
         loadNorm = tonumber(uiSnapshot.loadNorm) or 0,
         physicalLoad = tonumber(profile.physicalLoad) or 0,
-        thermalLoad = tonumber(profile.thermalLoad) or 0,
-        breathingLoad = tonumber(profile.breathingLoad) or 0,
+        thermalResistance = tonumber(uiSnapshot.thermalResistance) or 0,
+        airflowResistance = tonumber(profile.airflowResistance) or 0,
+        sealedRestriction = tonumber(profile.sealedRestriction) or 0,
         rigidityLoad = tonumber(profile.rigidityLoad) or 0,
-        armorCount = tonumber(profile.armorCount) or 0,
-        effectiveLoad = tonumber(uiSnapshot.effectiveLoad) or tonumber(profile.combinedLoad) or 0,
+        driverCount = tonumber(profile.driverCount) or 0,
+        effectiveLoad = tonumber(uiSnapshot.effectiveLoad) or tonumber(profile.physicalLoad) or 0,
         thermalContribution = tonumber(uiSnapshot.thermalContribution) or 0,
         breathingContribution = tonumber(uiSnapshot.breathingContribution) or 0,
         drivers = drivers or {},
         activityLabel = tostring(activityLabel or uiSnapshot.activityLabel or "idle"),
-        hotStrain = hotStrain,
-        coldAppropriateness = coldAppropriateness,
-        thermalHot = hotStrain > 0.24,
-        thermalCold = coldAppropriateness > 0.45,
-        thermalPressureScale = tonumber(uiSnapshot.thermalPressureScale) or 0,
-        enduranceEnvFactor = tonumber(uiSnapshot.enduranceEnvFactor) or 1,
+        hotPressure = tonumber(uiSnapshot.hotPressure) or 0,
+        coldSuitability = tonumber(uiSnapshot.coldSuitability) or 0,
+        thermalStrainScale = tonumber(uiSnapshot.thermalStrainScale) or 0,
         enduranceBeforeAms = tonumber(uiSnapshot.enduranceBeforeAms) or 0,
         enduranceAfterAms = tonumber(uiSnapshot.enduranceAfterAms) or 0,
         enduranceNaturalDelta = tonumber(uiSnapshot.enduranceNaturalDelta) or 0,
@@ -731,38 +254,6 @@ local function getMovementFlags(playerObj)
     }
 end
 
-local function getItemFullType(item)
-    local fullType = tostring(safeCall(item, "getFullType") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-    local scriptItem = safeCall(item, "getScriptItem")
-    fullType = tostring(safeCall(scriptItem, "getFullName") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-    return tostring(safeCall(item, "getType") or "unknown")
-end
-
-local function buildEquipmentSignature(playerObj)
-    local wornItems = safeCall(playerObj, "getWornItems")
-    if not wornItems then
-        return "", 0
-    end
-    local count = tonumber(safeCall(wornItems, "size")) or 0
-    local parts = {}
-    for i = 0, count - 1 do
-        local worn = safeCall(wornItems, "get", i)
-        local item = worn and safeCall(worn, "getItem")
-        if item then
-            local locationName = tostring(safeCall(worn, "getLocation") or safeCall(item, "getBodyLocation") or "unknown")
-            parts[#parts + 1] = locationName .. "=" .. tostring(getItemFullType(item))
-        end
-    end
-    table.sort(parts)
-    return table.concat(parts, ";"), #parts
-end
-
 local function buildTopDriverLabels(drivers)
     local parts = {}
     if type(drivers) ~= "table" then
@@ -780,9 +271,8 @@ local function buildTopDriverLabels(drivers)
     return parts
 end
 
-local function buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile, drivers, snapshot, activityLabel)
+local function buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile, drivers, snapshot, activityLabel, analysis)
     local uiSnapshot = type(mpState.uiRuntimeSnapshot) == "table" and mpState.uiRuntimeSnapshot or {}
-    local equipSignature, wornCount = buildEquipmentSignature(playerObj)
     local flags = getMovementFlags(playerObj)
     return {
         worldMinute = tonumber(getWorldAgeMinutes()) or 0,
@@ -803,15 +293,17 @@ local function buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile
         effectiveLoad = tonumber(snapshot.effectiveLoad) or 0,
         loadNorm = tonumber(snapshot.loadNorm) or 0,
         physicalLoad = tonumber(profile.physicalLoad) or 0,
-        thermalLoad = tonumber(profile.thermalLoad) or 0,
-        breathingLoad = tonumber(profile.breathingLoad) or 0,
+        thermalResistance = tonumber(snapshot.thermalResistance) or 0,
+        airflowResistance = tonumber(profile.airflowResistance) or 0,
+        sealedRestriction = tonumber(profile.sealedRestriction) or 0,
         rigidityLoad = tonumber(profile.rigidityLoad) or 0,
         thermalContribution = tonumber(snapshot.thermalContribution) or 0,
         breathingContribution = tonumber(snapshot.breathingContribution) or 0,
-        enduranceEnvFactor = tonumber(snapshot.enduranceEnvFactor) or 1,
-        thermalPressureScale = tonumber(snapshot.thermalPressureScale) or 0,
-        equipSignature = equipSignature,
-        wornCount = wornCount,
+        hotPressure = tonumber(snapshot.hotPressure) or 0,
+        thermalStrainScale = tonumber(snapshot.thermalStrainScale) or 0,
+        coldSuitability = tonumber(snapshot.coldSuitability) or 0,
+        equipSignature = tostring(analysis and analysis.equipmentSignature or ""),
+        wornCount = tonumber(analysis and analysis.wornCount) or 0,
         topDrivers = buildTopDriverLabels(drivers),
     }
 end
@@ -824,34 +316,11 @@ local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncident
         return
     end
 
-    local args = {
-        load_norm = tonumber(snapshot.loadNorm) or 0,
-        physical_load = tonumber(snapshot.physicalLoad) or 0,
-        thermal_load = tonumber(snapshot.thermalLoad) or 0,
-        breathing_load = tonumber(snapshot.breathingLoad) or 0,
-        rigidity_load = tonumber(snapshot.rigidityLoad) or 0,
-        armor_count = tonumber(snapshot.armorCount) or 0,
-        effective_load = tonumber(snapshot.effectiveLoad) or 0,
-        thermal_contribution = tonumber(snapshot.thermalContribution) or 0,
-        breathing_contribution = tonumber(snapshot.breathingContribution) or 0,
-        activity_label = tostring(snapshot.activityLabel or "idle"),
-        hot_strain = tonumber(snapshot.hotStrain) or 0,
-        cold_appropriateness = tonumber(snapshot.coldAppropriateness) or 0,
-        thermal_hot = snapshot.thermalHot == true,
-        thermal_cold = snapshot.thermalCold == true,
-        thermal_pressure_scale = tonumber(snapshot.thermalPressureScale) or 0,
-        endurance_env_factor = tonumber(snapshot.enduranceEnvFactor) or 1,
-        endurance_before_ams = tonumber(snapshot.enduranceBeforeAms) or 0,
-        endurance_after_ams = tonumber(snapshot.enduranceAfterAms) or 0,
-        endurance_natural_delta = tonumber(snapshot.enduranceNaturalDelta) or 0,
-        endurance_applied_delta = tonumber(snapshot.enduranceAppliedDelta) or 0,
-        last_applied_dt_minutes = tonumber(snapshot.lastAppliedDtMinutes) or 0,
-        catchup_pending_minutes = tonumber(snapshot.catchupPendingMinutes) or 0,
-        updated_minute = tonumber(snapshot.updatedMinute) or 0,
-        fatigue = tonumber(getFatigue(playerObj)) or 0,
-        server_sleeping = isPlayerAsleep(playerObj),
-        reason = tostring(reason or "tick"),
-    }
+    local args = SnapshotCodec.encode(snapshot, {
+        authoritativeFatigue = getFatigue(playerObj),
+        serverSleeping = isPlayerAsleep(playerObj),
+        reason = reason,
+    }, not lightweight)
 
     if not lightweight then
         local incidentSeq, incidentPayload = IncidentRecorder.buildSnapshotIncidentPayload(playerObj, mpState, clientIncidentSeq)
@@ -860,23 +329,8 @@ local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncident
             args.incident_trace = incidentPayload
         end
 
-        local snapshotDrivers = {}
-        if type(snapshot.drivers) == "table" then
-            for i = 1, #snapshot.drivers do
-                local row = snapshot.drivers[i]
-                if type(row) == "table" then
-                    snapshotDrivers[#snapshotDrivers + 1] = {
-                        label = tostring(row.label or "Unknown Item"),
-                        full_type = tostring(row.fullType or ""),
-                        physical = tonumber(row.physical) or 0,
-                    }
-                end
-            end
-        end
-        args.drivers = snapshotDrivers
     else
         args.incident_seq = 0
-        args.drivers = {}
     end
 
     local ok, err = pcall(sendServerCommand, playerObj, tostring(MP.NET_MODULE), tostring(MP.SNAPSHOT_COMMAND), args)
@@ -896,16 +350,14 @@ local function shouldSendSleepingSnapshot(mpState)
 end
 
 local function buildFreshSnapshot(playerObj, mpState, options, preserveEnduranceBaseline)
-    activeFormulaState = mpState
-    local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
+    local okInputs, profile, drivers, activityFactor, activityLabel, postureLabel =
+        pcall(prepareRuntimeInputs, playerObj, mpState, options)
     if not okInputs then
-        activeFormulaState = nil
         log("shared model input prep failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
         return nil
     end
-    local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, 0, profile, heatFactor, wetFactor)
+    local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, 0, profile)
     if not okSleep then
-        activeFormulaState = nil
         log("sleep model failed during snapshot refresh player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(sleepErr))
         return nil
     end
@@ -917,13 +369,10 @@ local function buildFreshSnapshot(playerObj, mpState, options, preserveEndurance
         options,
         0,
         profile,
-        heatFactor,
-        wetFactor,
         activityFactor,
         activityLabel,
         postureLabel
     )
-    activeFormulaState = nil
     if not okEndurance then
         log("endurance model failed during snapshot refresh player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(enduranceErr))
         return nil
@@ -961,28 +410,29 @@ local function updatePlayer(playerObj, reason, requestArgs)
         resetCatchupState(playerObj, mpState, nowMinute)
         IncidentRecorder.clearSession(playerObj, mpState, nowMinute)
     end
-    local lastMinute = tonumber(mpState.lastUpdateGameMinutes) or nowMinute
-    local elapsed = math.max(0, nowMinute - lastMinute)
-    mpState.lastUpdateGameMinutes = nowMinute
-    mpState.pendingCatchupMinutes = (tonumber(mpState.pendingCatchupMinutes) or 0) + elapsed
+    Simulation.accumulateElapsed(mpState, nowMinute)
 
     local sleepingNow = isPlayerAsleep(playerObj)
     if sleepingNow then
         mpState.lastWakeSyncAsleepFlag = true
-    elseif mpState.pendingCatchupMinutes > ACTIVE_ENDURANCE_CATCHUP_RESET_THRESHOLD_MINUTES then
+    end
+    local catchupCapped, pendingBeforeCap = Simulation.capActiveCatchup(
+        mpState,
+        not sleepingNow,
+        getEndurance(playerObj)
+    )
+    if catchupCapped then
         log(string.format(
             "discarding stale active endurance catchup player=%s pending=%.3f cap=%.3f",
             tostring(playerName(playerObj)),
-            tonumber(mpState.pendingCatchupMinutes) or 0,
-            ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES
+            tonumber(pendingBeforeCap) or 0,
+            Simulation.ACTIVE_CATCHUP_MAX_MINUTES
         ))
-        mpState.pendingCatchupMinutes = ACTIVE_ENDURANCE_CATCHUP_MAX_MINUTES
-        mpState.lastEnduranceObserved = tonumber(getEndurance(playerObj))
     end
 
     if mpState.pendingCatchupMinutes <= 0 then
         if normalizedReason ~= "minute" and normalizedReason ~= "tick" then
-            local options = getOptions()
+            local options = Options.get()
             local freshSnapshot = buildFreshSnapshot(playerObj, mpState, options, not isSessionBoundaryReason(normalizedReason))
             if freshSnapshot then
                 mpState.runtimeSnapshot = freshSnapshot
@@ -996,39 +446,37 @@ local function updatePlayer(playerObj, reason, requestArgs)
         return
     end
 
-    local options = getOptions()
-    local dtCap = math.max(0.01, tonumber(options.DtMaxMinutes) or 3)
-    local maxSlices = math.max(1, math.floor(tonumber(options.DtCatchupMaxSlices) or 240))
-    local processed = 0
+    local options = Options.get()
     local snapshot = nil
 
     if sleepingNow then
-        activeFormulaState = mpState
-        local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel =
-            pcall(prepareRuntimeInputs, playerObj, options, true)
+        local okInputs, profile, drivers, activityFactor, activityLabel, postureLabel =
+            pcall(prepareRuntimeInputs, playerObj, mpState, options, true)
         if not okInputs then
-            activeFormulaState = nil
             resetCatchupState(playerObj, mpState, nowMinute)
             log("sleep input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
             return
         end
 
-        while mpState.pendingCatchupMinutes > 0 and processed < maxSlices do
-            local dtMinutes = clamp(mpState.pendingCatchupMinutes, 0, dtCap)
-            if dtMinutes <= 0 then
-                break
-            end
-            mpState.pendingCatchupMinutes = math.max(0, mpState.pendingCatchupMinutes - dtMinutes)
-            processed = processed + 1
-            mpState.lastAppliedDtMinutes = dtMinutes
-
-            local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, dtMinutes, profile, heatFactor, wetFactor)
-            if not okSleep then
-                log("sleep model failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(sleepErr))
-                break
-            end
+        local result = Simulation.advance({
+            player = playerObj,
+            state = mpState,
+            options = options,
+            nowMinutes = nowMinute,
+            profile = profile,
+            activityFactor = activityFactor,
+            activityLabel = activityLabel,
+            postureLabel = postureLabel,
+            applySleepTransition = Physiology.applySleepTransition,
+        })
+        if result.failurePhase then
+            log(string.format(
+                "%s model failed player=%s err=%s",
+                tostring(result.failurePhase),
+                tostring(playerName(playerObj)),
+                tostring(result.failure)
+            ))
         end
-        activeFormulaState = nil
 
         snapshot = buildRuntimeSnapshot(mpState, profile, {}, "sleep")
         syncSleepingFatigueToClient(playerObj, mpState)
@@ -1046,63 +494,59 @@ local function updatePlayer(playerObj, reason, requestArgs)
         worldMinute = nowMinute,
     })
 
-    activeFormulaState = mpState
-    local okInputs, profile, drivers, heatFactor, wetFactor, activityFactor, activityLabel, postureLabel = pcall(prepareRuntimeInputs, playerObj, options)
+    local okInputs, profile, drivers, activityFactor, activityLabel, postureLabel, analysis =
+        pcall(prepareRuntimeInputs, playerObj, mpState, options)
     if not okInputs then
-        activeFormulaState = nil
         IncidentRecorder.finishInvocation(playerObj, mpState)
         resetCatchupState(playerObj, mpState, nowMinute)
         log("shared model input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
         return
     end
 
-    while mpState.pendingCatchupMinutes > 0 and processed < maxSlices do
-        local dtMinutes = clamp(mpState.pendingCatchupMinutes, 0, dtCap)
-        if dtMinutes <= 0 then
-            break
-        end
-
-        mpState.pendingCatchupMinutes = math.max(0, mpState.pendingCatchupMinutes - dtMinutes)
-        processed = processed + 1
-        mpState.lastAppliedDtMinutes = dtMinutes
-
-        local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, dtMinutes, profile, heatFactor, wetFactor)
-        if not okSleep then
-            log("sleep model failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(sleepErr))
-            break
-        end
-
-        local okEndurance, enduranceErr = pcall(Physiology.applyEnduranceModel,
-            playerObj,
-            mpState,
-            options,
-            dtMinutes,
-            profile,
-            heatFactor,
-            wetFactor,
-            activityFactor,
-            activityLabel,
-            postureLabel
-        )
-        if not okEndurance then
-            log("endurance model failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(enduranceErr))
-            break
-        end
-
-        snapshot = buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
-        local incidentResult = IncidentRecorder.recordSlice(
-            playerObj,
-            mpState,
-            buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile, drivers, snapshot, activityLabel)
-        )
-        if incidentResult.abortReplay then
-            mpState.pendingCatchupMinutes = 0
-            snapshot = buildFreshSnapshot(playerObj, mpState, options, false) or snapshot
-            break
-        end
-    end
-    activeFormulaState = nil
+    local result = Simulation.advance({
+        player = playerObj,
+        state = mpState,
+        options = options,
+        nowMinutes = nowMinute,
+        profile = profile,
+        activityFactor = activityFactor,
+        activityLabel = activityLabel,
+        postureLabel = postureLabel,
+        applySleepTransition = Physiology.applySleepTransition,
+        applyEnduranceModel = Physiology.applyEnduranceModel,
+        afterSlice = function(slice)
+            snapshot = buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
+            local incidentResult = IncidentRecorder.recordSlice(
+                playerObj,
+                mpState,
+                buildIncidentSlice(
+                    playerObj,
+                    reason,
+                    slice.dtMinutes,
+                    mpState,
+                    profile,
+                    drivers,
+                    snapshot,
+                    activityLabel,
+                    analysis
+                )
+            )
+            if incidentResult.abortReplay then
+                mpState.pendingCatchupMinutes = 0
+                snapshot = buildFreshSnapshot(playerObj, mpState, options, false) or snapshot
+                return { abort = true, clearPending = true }
+            end
+        end,
+    })
     IncidentRecorder.finishInvocation(playerObj, mpState)
+    if result.failurePhase then
+        log(string.format(
+            "%s model failed player=%s err=%s",
+            tostring(result.failurePhase),
+            tostring(playerName(playerObj)),
+            tostring(result.failure)
+        ))
+    end
 
     if snapshot == nil and type(mpState.runtimeSnapshot) == "table" then
         snapshot = mpState.runtimeSnapshot
@@ -1153,12 +597,8 @@ local function onClientCommand(module, command, playerObj, args)
     if tostring(module) ~= tostring(MP.NET_MODULE) then
         return
     end
-    if tostring(command) == tostring(MP.SLEEP_SESSION_COMMAND) then
-        recordSleepSession(playerObj, args)
-        return
-    end
-    if tostring(command) == tostring(MP.SLEEP_WAKE_DIAG_COMMAND) then
-        applyClientWakeFatigue(playerObj, args)
+    if tostring(command) == tostring(MP.SLEEP_BED_TYPE_COMMAND) then
+        recordSleepBedType(playerObj, args)
         return
     end
     if tostring(command) ~= tostring(MP.REQUEST_SNAPSHOT_COMMAND) then
@@ -1182,51 +622,25 @@ end
 
 local function onWeaponSwing(attacker, weapon)
     local playerObj = attacker
-    if not playerObj or not weapon then
+    if not playerObj then
         return
     end
 
-    local _, mpState = ensurePlayerState(playerObj)
-    if mpState then
-        mpState.recentCombatUntilMinute = (tonumber(getWorldAgeMinutes()) or 0) + (COMBAT_LATCH_ATTACK_SECONDS / 60.0)
-    end
-
-    local options = getOptions()
-    if not toBoolean(options.EnableMuscleStrainModel) then
+    local options = Options.get()
+    if not weapon or not toBoolean(options.EnableMuscleStrainModel) then
         return
     end
 
-    local eligible = true
-    if type(Strain.isMeleeStrainEligible) == "function" then
-        local okEligible, eligibleOrErr = pcall(Strain.isMeleeStrainEligible, playerObj, weapon, false)
-        if not okEligible then
-            log("strain eligibility check failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(eligibleOrErr))
-            return
-        end
-        eligible = toBoolean(eligibleOrErr)
-    end
-    if not eligible then
+    local okOverlay, extraOrErr = pcall(
+        Strain.applyArmorStrainOverlay,
+        playerObj,
+        weapon,
+        options
+    )
+    if not okOverlay then
+        log("strain overlay failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(extraOrErr))
         return
     end
-
-    local okProfile, profileOrErr = pcall(LoadModel.computeArmorProfile, playerObj)
-    if not okProfile or type(profileOrErr) ~= "table" then
-        log("strain profile compute failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profileOrErr))
-        return
-    end
-
-    local okExtra, extraOrErr = pcall(Strain.computeArmorStrainExtra, options, profileOrErr)
-    if not okExtra then
-        log("strain extra compute failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(extraOrErr))
-        return
-    end
-
-    local extra = tonumber(extraOrErr) or 0
-    if extra <= 0 then
-        return
-    end
-
-    safeCall(playerObj, "addCombatMuscleStrain", weapon, 1, extra)
 end
 
 local function logBootBanner(contextTag)

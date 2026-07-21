@@ -1,33 +1,24 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
+local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local Combat = require "core/ArmorMakesSense_Combat"
+local Tick = require "core/ArmorMakesSense_Tick"
+local Utils = require "ArmorMakesSense_UtilsShared"
+
 local Core = ArmorMakesSense.Core
 Core.Runtime = Core.Runtime or {}
 
 local Runtime = Core.Runtime
-local C = {}
 local startupCheckedStatic = false
-local startupCheckedPlayer = false
-
--- -----------------------------------------------------------------------------
--- Runtime lifecycle + event wiring
--- -----------------------------------------------------------------------------
-
-local function ctx(name)
-    return C[name]
-end
 
 local function hasFunction(target, name)
     return target and type(target[name]) == "function"
 end
 
-function Runtime.setContext(context)
-    C = context or {}
-end
-
-function Runtime.runStaticStartupChecks(options)
+function Runtime.runStaticStartupChecks()
     if startupCheckedStatic then
-        return not ctx("isRuntimeDisabled")()
+        return not ClientRuntime.isDisabled()
     end
     startupCheckedStatic = true
 
@@ -38,132 +29,43 @@ function Runtime.runStaticStartupChecks(options)
     if not hasFunction(_G, "getPlayer") then
         issues[#issues + 1] = "global getPlayer missing"
     end
-    if not (Events and Events.OnWeaponSwing and hasFunction(Events.OnWeaponSwing, "Add")) then
-        ctx("logOnce")("startup_no_swing", "startup check: Events.OnWeaponSwing.Add missing (swing telemetry disabled)")
-    end
     if not (Events and Events.OnPlayerUpdate and hasFunction(Events.OnPlayerUpdate, "Add")) then
-        ctx("logOnce")("startup_no_player_update", "startup check: Events.OnPlayerUpdate.Add missing (sleep realtime tick disabled)")
+        ClientRuntime.logOnce("startup_no_player_update", "startup check: Events.OnPlayerUpdate.Add missing (sleep realtime tick disabled)")
     end
 
     if #issues > 0 then
-        ctx("setRuntimeDisabled")(true)
-        ctx("logError")("startup check failed: " .. table.concat(issues, " | "))
+        ClientRuntime.setDisabled(true)
+        ClientRuntime.logError("startup check failed: " .. table.concat(issues, " | "))
         return false
     end
-
     return true
 end
 
-function Runtime.runPlayerStartupChecks(player)
-    if startupCheckedPlayer or ctx("isRuntimeDisabled")() then
-        return not ctx("isRuntimeDisabled")()
-    end
-    if not player then
-        return true
-    end
-
-    local issues = {}
-    local stats = ctx("safeMethod")(player, "getStats")
-    if not stats then
-        issues[#issues + 1] = "player:getStats unavailable"
-    else
-        local canGet = hasFunction(stats, "get")
-        local canSet = hasFunction(stats, "set")
-
-        local canReadEnd = hasFunction(stats, "getEndurance") or (CharacterStat and CharacterStat.ENDURANCE and canGet)
-        local canWriteEnd = hasFunction(stats, "setEndurance") or (CharacterStat and CharacterStat.ENDURANCE and canSet)
-        if not canReadEnd or not canWriteEnd then
-            issues[#issues + 1] = "ENDURANCE bindings missing"
-        end
-
-        local canReadFatigue = hasFunction(stats, "getFatigue") or (CharacterStat and CharacterStat.FATIGUE and canGet)
-        local canWriteFatigue = hasFunction(stats, "setFatigue") or (CharacterStat and CharacterStat.FATIGUE and canSet)
-        if not canReadFatigue or not canWriteFatigue then
-            issues[#issues + 1] = "FATIGUE bindings missing"
-        end
-    end
-
-    if #issues > 0 then
-        ctx("setRuntimeDisabled")(true)
-        ctx("logError")("startup check failed: " .. table.concat(issues, " | "))
-        return false
-    end
-
-    startupCheckedPlayer = true
-    ctx("log")(string.format("[BOOT] startup checks passed version=%s build=%s", ctx("getLoadedModVersion")(), ctx("scriptBuild")))
-    return true
-end
-
-function Runtime.enforceTestLockRealtime(player)
-    if not player then
-        return
-    end
-    local state = ctx("ensureState")(player)
-    local testLock = state.testLock
-    if not testLock or not testLock.mode then
-        return
-    end
-    local nowMinutes = ctx("getWorldAgeMinutes")()
-    if tonumber(testLock.untilMinute) and nowMinutes <= tonumber(testLock.untilMinute) then
-        if testLock.wetness ~= nil then
-            ctx("setWetness")(player, testLock.wetness)
-        end
-        if testLock.bodyTemp ~= nil then
-            ctx("setBodyTemperature")(player, testLock.bodyTemp)
-        end
-    end
-end
+Runtime.runPlayerStartupChecks = ClientRuntime.runPlayerStartupChecks
 
 function Runtime.onEveryOneMinute()
-    if ctx("isRuntimeDisabled")() then
+    if ClientRuntime.isDisabled() then
         return
     end
-
-    if ctx("isMultiplayer")() then
-        ctx("logOnce")("mp_client_read_only", "MP detected. Client gameplay mutations disabled; waiting for server-authoritative snapshots.")
-        return
+    local player = ClientRuntime.getLocalPlayer()
+    if player then
+        ClientRuntime.runGuarded("EveryOneMinute", Tick.tickPlayer, player)
     end
-
-    local player = ctx("getLocalPlayer")()
-    if not player then
-        return
-    end
-
-    ctx("runGuarded")("EveryOneMinute", ctx("tickPlayer"), player)
-    local state = ctx("ensureState")(player)
-    ctx("runGuarded")("BenchRunner", ctx("tickBenchRunner"), player, state)
 end
 
 function Runtime.onPlayerUpdate(playerObj)
-    if ctx("isRuntimeDisabled")() then
+    if ClientRuntime.isDisabled() then
         return
     end
-
-    local player = playerObj or ctx("getLocalPlayer")()
+    local player = playerObj or ClientRuntime.getLocalPlayer()
     if not player then
         return
     end
 
-    local state = ctx("ensureState")(player)
-    if ctx("isMultiplayer")() then
-        return
+    -- Sleep can advance many game minutes between real-time minute ticks.
+    if Utils.toBoolean(ClientRuntime.safeMethod(player, "isAsleep")) then
+        ClientRuntime.runGuarded("OnPlayerUpdateSleepTick", Tick.tickPlayer, player)
     end
-
-    ctx("runGuarded")("BenchRunner", ctx("tickBenchRunner"), player, state)
-
-    if not ctx("isSystemEnabledCached")() then
-        return
-    end
-
-    -- Sleep can advance many in-game minutes between real-time minute ticks.
-    -- Run the core tick path per-frame while asleep so continuous sleep effects
-    -- (e.g., fatigue counteraction) are applied during the actual sleep window.
-    local sleeping = ctx("toBoolean")(ctx("safeMethod")(player, "isAsleep"))
-    if sleeping then
-        ctx("runGuarded")("OnPlayerUpdateSleepTick", ctx("tickPlayer"), player)
-    end
-
-    Runtime.enforceTestLockRealtime(player)
 end
 
 function Runtime.registerEvents(mod)
@@ -171,9 +73,6 @@ function Runtime.registerEvents(mod)
     if handlers and type(handlers) == "table" then
         if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Remove) == "function" and handlers.onEveryOneMinute then
             pcall(Events.EveryOneMinute.Remove, handlers.onEveryOneMinute)
-        end
-        if Events and Events.OnWeaponSwing and type(Events.OnWeaponSwing.Remove) == "function" and handlers.onWeaponSwing then
-            pcall(Events.OnWeaponSwing.Remove, handlers.onWeaponSwing)
         end
         if Events and Events.OnPlayerAttackFinished and type(Events.OnPlayerAttackFinished.Remove) == "function" and handlers.onPlayerAttackFinished then
             pcall(Events.OnPlayerAttackFinished.Remove, handlers.onPlayerAttackFinished)
@@ -183,68 +82,57 @@ function Runtime.registerEvents(mod)
         end
     end
 
-    local bootOptions = ctx("getOptions")()
-    ctx("setCachedEnableSystem")(true)
-    local loadedVersion = ctx("getLoadedModVersion")()
-    ctx("log")(string.format(
-        "[BOOT] signature modVersion=%s scriptVersion=%s build=%s EnableSystem=%s",
-        loadedVersion,
-        tostring(ctx("scriptVersion")),
-        tostring(ctx("scriptBuild")),
-        tostring(ctx("isSystemEnabledCached")())
+    ClientRuntime.log(string.format(
+        "[BOOT] signature modVersion=%s scriptVersion=%s build=%s",
+        ClientRuntime.getLoadedModVersion(),
+        ClientRuntime.SCRIPT_VERSION,
+        ClientRuntime.SCRIPT_BUILD
     ))
-    ctx("log")(string.format(
-        "[BOOT_MP] side=client isClient=%s isServer=%s isMultiplayer=%s ingame=%s scriptVersion=%s build=%s",
-        tostring(ctx("isClientSide") and ctx("isClientSide")() or false),
-        tostring(ctx("isServerSide") and ctx("isServerSide")() or false),
-        tostring(ctx("isMultiplayer")()),
+    ClientRuntime.log(string.format(
+        "[BOOT_ROLE] role=singleplayer isClient=%s isServer=%s ingame=%s scriptVersion=%s build=%s",
+        tostring(Utils.isClientSide()),
+        tostring(Utils.isServerSide()),
         tostring(GameClient and GameClient.ingame or false),
-        tostring(ctx("scriptVersion")),
-        tostring(ctx("scriptBuild"))
+        ClientRuntime.SCRIPT_VERSION,
+        ClientRuntime.SCRIPT_BUILD
     ))
 
-    Runtime.runStaticStartupChecks(bootOptions)
-    if ctx("isRuntimeDisabled")() then
-        ctx("logErrorOnce")("boot_disabled", "runtime disabled by startup checks; event registration skipped")
+    Runtime.runStaticStartupChecks()
+    if ClientRuntime.isDisabled() then
+        ClientRuntime.logErrorOnce("boot_disabled", "runtime disabled by startup checks; event registration skipped")
         return false
     end
     if not Events then
-        ctx("setRuntimeDisabled")(true)
-        ctx("logError")("Events table unavailable during boot; event registration skipped")
+        ClientRuntime.setDisabled(true)
+        ClientRuntime.logError("Events table unavailable during boot; event registration skipped")
         return false
     end
 
     if Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
-        Events.EveryOneMinute.Add(ctx("onEveryOneMinute"))
+        Events.EveryOneMinute.Add(Runtime.onEveryOneMinute)
     else
-        ctx("setRuntimeDisabled")(true)
-        ctx("logError")("Events.EveryOneMinute.Add unavailable during boot; runtime disabled")
+        ClientRuntime.setDisabled(true)
+        ClientRuntime.logError("Events.EveryOneMinute.Add unavailable during boot; runtime disabled")
         return false
     end
-    if Events.OnWeaponSwing and type(Events.OnWeaponSwing.Add) == "function" then
-        Events.OnWeaponSwing.Add(ctx("onWeaponSwing"))
-    else
-        ctx("logOnce")("no_swing_event", "OnWeaponSwing event not available on this build.")
-    end
     if Events.OnPlayerAttackFinished and type(Events.OnPlayerAttackFinished.Add) == "function" then
-        Events.OnPlayerAttackFinished.Add(ctx("onPlayerAttackFinished"))
+        Events.OnPlayerAttackFinished.Add(Combat.onPlayerAttackFinished)
     else
-        ctx("logOnce")("no_attack_finished_event", "OnPlayerAttackFinished event not available; armor strain overlay disabled.")
+        ClientRuntime.logOnce("no_attack_finished_event", "OnPlayerAttackFinished event not available; armor strain overlay disabled.")
     end
     if Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
-        Events.OnPlayerUpdate.Add(ctx("onPlayerUpdate"))
-        ctx("logOnce")("per_frame_hooks_on", "OnPlayerUpdate hook enabled for realtime test-lock + sleep ticks.")
+        Events.OnPlayerUpdate.Add(Runtime.onPlayerUpdate)
+        ClientRuntime.logOnce("per_frame_hooks_on", "OnPlayerUpdate hook enabled for realtime sleep ticks.")
     else
-        ctx("logErrorOnce")("no_player_update_hook", "OnPlayerUpdate unavailable; realtime test-lock and sleep ticks disabled.")
+        ClientRuntime.logErrorOnce("no_player_update_hook", "OnPlayerUpdate unavailable; realtime sleep ticks disabled.")
     end
 
     if mod then
         mod._eventsRegistered = true
         mod._eventsRegisteredHandlers = {
-            onEveryOneMinute = ctx("onEveryOneMinute"),
-            onWeaponSwing = ctx("onWeaponSwing"),
-            onPlayerAttackFinished = ctx("onPlayerAttackFinished"),
-            onPlayerUpdate = ctx("onPlayerUpdate"),
+            onEveryOneMinute = Runtime.onEveryOneMinute,
+            onPlayerAttackFinished = Combat.onPlayerAttackFinished,
+            onPlayerUpdate = Runtime.onPlayerUpdate,
         }
     end
     return true

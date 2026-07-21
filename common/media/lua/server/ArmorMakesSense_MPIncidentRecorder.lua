@@ -1,24 +1,10 @@
 ArmorMakesSense = ArmorMakesSense or {}
 
-local okSchema, schemaOrErr = pcall(require, "ArmorMakesSense_MPIncidentSchema")
-if not okSchema or type(schemaOrErr) ~= "table" then
-    print("[ArmorMakesSense][MP][INCIDENT][SERVER][ERROR] require failed: ArmorMakesSense_MPIncidentSchema :: " .. tostring(schemaOrErr))
-    return
-end
+local Schema = require "ArmorMakesSense_MPIncidentSchema"
 
 ArmorMakesSense.MPIncidentRecorder = ArmorMakesSense.MPIncidentRecorder or {}
 
 local Recorder = ArmorMakesSense.MPIncidentRecorder
-local Schema = schemaOrErr
-local C = {}
-
-function Recorder.setContext(context)
-    C = context or {}
-end
-
-local function ctx(name)
-    return C[name]
-end
 
 local function cloneArray(rows)
     local out = {}

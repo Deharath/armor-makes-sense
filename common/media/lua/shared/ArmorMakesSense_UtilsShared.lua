@@ -3,15 +3,19 @@ ArmorMakesSense.Utils = ArmorMakesSense.Utils or {}
 
 local Utils = ArmorMakesSense.Utils
 
--- -----------------------------------------------------------------------------
--- Shared utility helpers
--- -----------------------------------------------------------------------------
-
 local function invokeSafeMethod(target, methodName, onError, ...)
     if not target then
         return nil
     end
-    local fn = target[methodName]
+    local resolved, fn = pcall(function()
+        return target[methodName]
+    end)
+    if not resolved then
+        if type(onError) == "function" then
+            onError(methodName, target, fn)
+        end
+        return nil
+    end
     if type(fn) ~= "function" then
         return nil
     end
@@ -102,6 +106,54 @@ function Utils.safeMethodFromDeps(deps, target, methodName, ...)
     end
     local onError = deps and deps.onSafeMethodError
     return invokeSafeMethod(target, methodName, onError, ...)
+end
+
+function Utils.getWorldAgeMinutes()
+    local gameTime = type(getGameTime) == "function" and getGameTime() or nil
+    local worldAgeHours = tonumber(Utils.safeMethod(gameTime, "getWorldAgeHours"))
+    return (worldAgeHours or 0) * 60.0
+end
+
+function Utils.getWallClockSeconds()
+    if type(getTimestampMs) == "function" then
+        local nowMs = tonumber(getTimestampMs())
+        if nowMs ~= nil then
+            return math.floor(nowMs / 1000)
+        end
+    end
+    if type(getTimestamp) == "function" then
+        local nowSeconds = tonumber(getTimestamp())
+        if nowSeconds ~= nil then
+            return math.floor(nowSeconds)
+        end
+    end
+    return math.floor(Utils.getWorldAgeMinutes() * 60)
+end
+
+function Utils.isClientSide()
+    return type(isClient) == "function" and isClient() == true
+end
+
+function Utils.isServerSide()
+    return type(isServer) == "function" and isServer() == true
+end
+
+function Utils.getExecutionRole()
+    if Utils.isServerSide() or (GameServer and GameServer.bServer == true) then
+        return "server"
+    end
+    if Utils.isClientSide() or (GameClient and GameClient.bClient == true) then
+        return "multiplayer_client"
+    end
+    return "standalone"
+end
+
+function Utils.isMultiplayer()
+    return Utils.isClientSide()
+        or Utils.isServerSide()
+        or (GameClient and GameClient.bClient == true)
+        or (GameServer and GameServer.bServer == true)
+        or false
 end
 
 return Utils

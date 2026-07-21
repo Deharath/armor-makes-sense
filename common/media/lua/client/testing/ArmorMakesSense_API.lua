@@ -149,42 +149,6 @@ function API.ams_ui_probe()
     return ctx("Commands").uiProbeCurrentGear()
 end
 
-function API.ams_ui_probe_suite(id)
-    if not ensure("ui probe suite", ctx("Commands"), "uiProbeSuite") then
-        return false
-    end
-    return ctx("Commands").uiProbeSuite(id)
-end
-
-function API.ams_ui_probe_set_list(id)
-    if not ensure("ui probe set list", ctx("Commands"), "uiProbeSetList") then
-        return false
-    end
-    return ctx("Commands").uiProbeSetList(id)
-end
-
-function API.ams_ui_probe_wear_set(id, setId)
-    if not ensure("ui probe wear set", ctx("Commands"), "uiProbeWearSet") then
-        return false
-    end
-    return ctx("Commands").uiProbeWearSet(id, setId)
-end
-
-function API.ams_ui_probe_wear_set_default(setId)
-    if not ensure("ui probe wear set default", ctx("Commands"), "uiProbeWearSetDefault") then
-        return false
-    end
-    return ctx("Commands").uiProbeWearSetDefault(setId)
-end
-
-function API.ams_sleep_bench(hours, tempC, wetnessPct)
-    local ok, benches = ensureCtxMethod("sleep bench", "Benches", "sleepBench")
-    if not ok then
-        return false
-    end
-    return benches.sleepBench(hours, tempC, wetnessPct)
-end
-
 function API.ams_bench_run(presetId, optsTable)
     if not ensure("bench run", ctx("Commands"), "benchRun") then
         return false
@@ -244,11 +208,6 @@ function API.bindGlobals()
     _G.ams_fitness_probe = API.ams_fitness_probe
     _G.ams_discomfort_audit = API.ams_discomfort_audit
     _G.ams_ui_probe = API.ams_ui_probe
-    _G.ams_ui_probe_suite = API.ams_ui_probe_suite
-    _G.ams_ui_probe_set_list = API.ams_ui_probe_set_list
-    _G.ams_ui_probe_wear_set = API.ams_ui_probe_wear_set
-    _G.ams_ui_probe_wear_set_default = API.ams_ui_probe_wear_set_default
-    _G.ams_sleep_bench = API.ams_sleep_bench
     _G.ams_bench_run = API.ams_bench_run
     _G.ams_bench_status = API.ams_bench_status
     _G.ams_bench_stop = API.ams_bench_stop

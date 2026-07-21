@@ -17,8 +17,11 @@ if type(MP) ~= "table" then
     return
 end
 
+local SLEEP_WAKE_DIAG_COMMAND = "sleep_wake_diag"
+
 local okLoadModel, loadModelOrErr = pcall(require, "ArmorMakesSense_LoadModelShared")
 local LoadModel = okLoadModel and type(loadModelOrErr) == "table" and loadModelOrErr or nil
+local RuntimeState = require "ArmorMakesSense_RuntimeState"
 
 local function minuteSummaryEnabled()
     return false
@@ -27,8 +30,6 @@ end
 local function sleepDiagnosticsEnabled()
     return true
 end
-
-local STATE_KEY = tostring(MP.MOD_STATE_KEY or "ArmorMakesSenseState")
 
 local function log(message)
     print("[ArmorMakesSense][MP][DIAG][SERVER] " .. tostring(message))
@@ -110,11 +111,7 @@ local function getThirst(playerObj)
 end
 
 local function getPlayerState(playerObj)
-    local modData = safeCall(playerObj, "getModData")
-    if type(modData) ~= "table" then
-        return nil, nil
-    end
-    local state = modData[STATE_KEY]
+    local state = RuntimeState.peek(playerObj, RuntimeState.ROLE_MP_SERVER)
     if type(state) ~= "table" then
         return nil, nil
     end
@@ -312,7 +309,7 @@ end
 
 local function collectDetailedItems(playerObj)
     local rows = {}
-    if not LoadModel or type(LoadModel.itemToArmorSignal) ~= "function" then
+    if not LoadModel or type(LoadModel.itemToBurdenSignal) ~= "function" then
         return rows
     end
 
@@ -324,9 +321,9 @@ local function collectDetailedItems(playerObj)
         if item then
             local wornLocation = tostring(safeCall(worn, "getLocation") or "")
             local bodyLocation = tostring(safeCall(item, "getBodyLocation") or "")
-            local signal = LoadModel.itemToArmorSignal(item, wornLocation)
+            local signal = LoadModel.itemToBurdenSignal(item, wornLocation)
             if type(signal) == "table" then
-                local reasons = type(signal.breathingReasons) == "table" and signal.breathingReasons or {}
+                local reasons = type(signal.respiratoryReasons) == "table" and signal.respiratoryReasons or {}
                 local row = {
                     idx = #rows + 1,
                     name = tostring(safeCall(item, "getDisplayName") or safeCall(item, "getName") or "Unknown Item"),
@@ -334,11 +331,11 @@ local function collectDetailedItems(playerObj)
                     worn = wornLocation,
                     body = bodyLocation,
                     phy = tonumber(signal.physicalLoad) or 0,
-                    thm = tonumber(signal.thermalLoad) or 0,
-                    br = tonumber(signal.breathingLoad) or 0,
+                    br = tonumber(signal.airflowResistance) or 0,
+                    sealed = tonumber(signal.sealedRestriction) or 0,
                     rig = tonumber(signal.rigidityLoad) or 0,
-                    br_class = tostring(signal.breathingClass or "none"),
-                    br_filter = signal.breathingHasFilter == true and "filter" or (signal.breathingHasFilter == false and "nofilter" or "na"),
+                    br_class = tostring(signal.respiratoryClass or "none"),
+                    br_filter = signal.respiratoryHasFilter == true and "filter" or (signal.respiratoryHasFilter == false and "nofilter" or "na"),
                     br_slot = tostring(reasons.slotClass or ""),
                     br_tag = tostring(reasons.tagClass or ""),
                     br_kw = tostring(reasons.keywordClass or ""),
@@ -349,8 +346,8 @@ local function collectDetailedItems(playerObj)
     end
 
     table.sort(rows, function(a, b)
-        local aScore = math.max(a.phy or 0, a.br or 0, a.thm or 0, a.rig or 0)
-        local bScore = math.max(b.phy or 0, b.br or 0, b.thm or 0, b.rig or 0)
+        local aScore = math.max(a.phy or 0, a.br or 0, a.rig or 0)
+        local bScore = math.max(b.phy or 0, b.br or 0, b.rig or 0)
         if aScore == bScore then
             return tostring(a.name) < tostring(b.name)
         end
@@ -394,22 +391,24 @@ local function buildDumpPayload(playerObj, reason)
         thirst = tonumber(getThirst(playerObj)) or -1,
         load_norm = tonumber(snapshot.loadNorm) or 0,
         physical_load = tonumber(snapshot.physicalLoad) or 0,
-        thermal_load = tonumber(snapshot.thermalLoad) or 0,
-        breathing_load = tonumber(snapshot.breathingLoad) or 0,
+        thermal_resistance = tonumber(snapshot.thermalResistance) or 0,
+        airflow_resistance = tonumber(snapshot.airflowResistance) or 0,
+        sealed_restriction = tonumber(snapshot.sealedRestriction) or 0,
         rigidity_load = tonumber(snapshot.rigidityLoad) or 0,
-        armor_count = tonumber(snapshot.armorCount) or 0,
+        driver_count = tonumber(snapshot.driverCount) or 0,
         effective_load = tonumber(snapshot.effectiveLoad) or 0,
         breathing_contribution = tonumber(uiSnapshot.breathingContribution) or 0,
         thermal_contribution = tonumber(uiSnapshot.thermalContribution) or 0,
-        thermal_pressure_scale = tonumber(uiSnapshot.thermalPressureScale) or 0,
-        endurance_env_factor = tonumber(uiSnapshot.enduranceEnvFactor) or 1,
+        hot_pressure = tonumber(uiSnapshot.hotPressure) or 0,
+        cold_suitability = tonumber(uiSnapshot.coldSuitability) or 0,
+        thermal_strain_scale = tonumber(uiSnapshot.thermalStrainScale) or 0,
         endurance_before_ams = tonumber(uiSnapshot.enduranceBeforeAms),
         endurance_after_ams = tonumber(uiSnapshot.enduranceAfterAms),
         endurance_natural_delta = tonumber(uiSnapshot.enduranceNaturalDelta),
         endurance_applied_delta = tonumber(uiSnapshot.enduranceAppliedDelta),
         activity_label = tostring(snapshot.activityLabel or "idle"),
-        thermal_hot = snapshot.thermalHot == true,
-        thermal_cold = snapshot.thermalCold == true,
+        thermal_hot = (tonumber(uiSnapshot.thermalStrainScale) or 0) >= 0.15,
+        thermal_cold = (tonumber(uiSnapshot.coldSuitability) or 0) > 0.45,
         updated_minute = tonumber(snapshot.updatedMinute) or worldMinute,
         pending_catchup = tonumber(mpState and mpState.pendingCatchupMinutes) or 0,
         drivers = type(snapshot.drivers) == "table" and snapshot.drivers or {},
@@ -424,7 +423,7 @@ end
 local function emitMinuteSummary(playerObj)
     local payload = buildDumpPayload(playerObj, "minute")
     log(string.format(
-        "[MIN] user=%s id=%d end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f eff=%.2f physical=%.2f breathing=%.2f rigidity=%.2f envF=%.3f thermContrib=%.3f breathContrib=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d activity=%s hot=%s cold=%s pending=%.3f",
+        "[MIN] user=%s id=%d end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f eff=%.2f physical=%.2f resistance=%.3f breathing=%.2f rigidity=%.2f heat=%.3f thermContrib=%.3f breathContrib=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d activity=%s hot=%s cold=%s pending=%.3f",
         tostring(payload.player),
         tonumber(payload.online_id) or -1,
         tonumber(payload.endurance) or -1,
@@ -433,9 +432,10 @@ local function emitMinuteSummary(playerObj)
         tonumber(payload.load_norm) or 0,
         tonumber(payload.effective_load) or 0,
         tonumber(payload.physical_load) or 0,
-        tonumber(payload.breathing_load) or 0,
+        tonumber(payload.thermal_resistance) or 0,
+        tonumber(payload.airflow_resistance) or 0,
         tonumber(payload.rigidity_load) or 0,
-        tonumber(payload.endurance_env_factor) or 1,
+        tonumber(payload.thermal_strain_scale) or 0,
         tonumber(payload.thermal_contribution) or 0,
         tonumber(payload.breathing_contribution) or 0,
         payload.endurance_before_ams ~= nil and string.format("%.4f", payload.endurance_before_ams) or "na",
@@ -470,7 +470,7 @@ local function sendDiagDump(playerObj, reason)
     end
 
     log(string.format(
-        "[DUMP] sent user=%s id=%d reason=%s version=%s build=%s loadNorm=%.3f physical=%.2f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f envF=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
+        "[DUMP] sent user=%s id=%d reason=%s version=%s build=%s loadNorm=%.3f physical=%.2f resistance=%.3f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f heat=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
         tostring(payload.player),
         tonumber(payload.online_id) or -1,
         tostring(payload.reason),
@@ -478,12 +478,13 @@ local function sendDiagDump(playerObj, reason)
         tostring(payload.script_build or "unknown"),
         tonumber(payload.load_norm) or 0,
         tonumber(payload.physical_load) or 0,
-        tonumber(payload.breathing_load) or 0,
+        tonumber(payload.thermal_resistance) or 0,
+        tonumber(payload.airflow_resistance) or 0,
         tonumber(payload.rigidity_load) or 0,
         tonumber(payload.effective_load) or 0,
         tonumber(payload.breathing_contribution) or 0,
         tonumber(payload.thermal_contribution) or 0,
-        tonumber(payload.endurance_env_factor) or 1,
+        tonumber(payload.thermal_strain_scale) or 0,
         payload.endurance_before_ams ~= nil and string.format("%.4f", payload.endurance_before_ams) or "na",
         payload.endurance_after_ams ~= nil and string.format("%.4f", payload.endurance_after_ams) or "na",
         payload.endurance_natural_delta ~= nil and string.format("%.4f", payload.endurance_natural_delta) or "na",
@@ -501,7 +502,7 @@ local function sendDiagDump(playerObj, reason)
         local row = items[i]
         if type(row) == "table" then
             log(string.format(
-                "[DUMP_ITEM] reason=%s id=%d idx=%d type=%s worn=%s body=%s phy=%.2f thm=%.2f br=%.2f rig=%.2f class=%s filter=%s slot=%s tag=%s kw=%s name=%s",
+                "[DUMP_ITEM] reason=%s id=%d idx=%d type=%s worn=%s body=%s phy=%.2f br=%.2f rig=%.2f class=%s filter=%s slot=%s tag=%s kw=%s name=%s",
                 tostring(payload.reason),
                 tonumber(payload.online_id) or -1,
                 tonumber(row.idx) or i,
@@ -509,7 +510,6 @@ local function sendDiagDump(playerObj, reason)
                 tostring(row.worn or ""),
                 tostring(row.body or ""),
                 tonumber(row.phy) or 0,
-                tonumber(row.thm) or 0,
                 tonumber(row.br) or 0,
                 tonumber(row.rig) or 0,
                 tostring(row.br_class or "none"),
@@ -532,7 +532,7 @@ local function onClientCommand(module, command, playerObj, args)
         sendDiagDump(playerObj, args and args.reason or "client_request")
         return
     end
-    if tostring(command) == tostring(MP.SLEEP_WAKE_DIAG_COMMAND) then
+    if tostring(command) == SLEEP_WAKE_DIAG_COMMAND then
         handleSleepWakeDiag(playerObj, args)
         return
     end

@@ -1,21 +1,23 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.SleepHooks = ArmorMakesSense.SleepHooks or {}
 
-pcall(require, "ArmorMakesSense_MPCompat")
+require "ArmorMakesSense_MPCompat"
+local Utils = require "ArmorMakesSense_UtilsShared"
 
 local SleepHooks = ArmorMakesSense.SleepHooks
 local MP = ArmorMakesSense.MP or {}
 
-local function log(msg)
-    print("[ArmorMakesSense] " .. tostring(msg))
+local function log(message)
+    print("[ArmorMakesSense] " .. tostring(message))
 end
+
+local safeMethod = Utils.safeMethod
 
 local function getCompat()
     local compat = ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
-    if type(compat) ~= "table" then
-        return nil
-    end
-    if type(compat.getCallback) ~= "function" or type(compat.computePlannerExtraHours) ~= "function" then
+    if type(compat) ~= "table"
+        or type(compat.getCallback) ~= "function"
+        or type(compat.computePlannerExtraHours) ~= "function" then
         return nil
     end
     return compat
@@ -23,133 +25,100 @@ end
 
 local function cmsOwnsPlanner()
     local compat = getCompat()
-    return type(compat) == "table"
+    return compat
         and type(compat.hasCapability) == "function"
         and compat:hasCapability("CaffeineMakesSense", "sleep_planner_coordinator")
 end
 
 local function getPlayerFromIndex(playerIndex)
     if type(getSpecificPlayer) == "function" then
-        local ok, playerObj = pcall(getSpecificPlayer, playerIndex)
-        if ok and playerObj then
-            return playerObj
+        local ok, player = pcall(getSpecificPlayer, playerIndex)
+        if ok and player then
+            return player
         end
     end
     if type(getPlayer) == "function" then
-        local ok, playerObj = pcall(getPlayer)
-        if ok and playerObj then
-            return playerObj
+        local ok, player = pcall(getPlayer)
+        if ok then
+            return player
         end
     end
     return nil
 end
 
-local function stringContains(value, needle)
-    local text = tostring(value or "")
-    if type(text.contains) == "function" then
-        return text:contains(needle)
-    end
-    return string.find(text, needle, 1, true) ~= nil
-end
-
-local function getWorldAgeMinutes()
-    if type(getGameTime) ~= "function" then
-        return nil
-    end
-    local gameTime = getGameTime()
-    if gameTime and type(gameTime.getWorldAgeHours) == "function" then
-        return (tonumber(gameTime:getWorldAgeHours()) or 0) * 60.0
-    end
-    return nil
-end
-
-local function sendSleepSession(playerObj, bedType, sleepFor, wakeHour)
+local function sendSleepBedType(bedType)
     if type(isClient) ~= "function" or isClient() ~= true or type(sendClientCommand) ~= "function" then
         return
     end
-
-    local stats = playerObj and type(playerObj.getStats) == "function" and playerObj:getStats() or nil
-    local fatigue = stats and tonumber(stats:get(CharacterStat.FATIGUE)) or nil
-    local payload = {
+    pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.SLEEP_BED_TYPE_COMMAND), {
         bed_type = tostring(bedType or ""),
-        sleep_for = tonumber(sleepFor) or 0,
-        wake_hour = tonumber(wakeHour),
-        world_minute = getWorldAgeMinutes(),
-        fatigue = fatigue,
-        source = "sleep_hooks",
-    }
-    pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.SLEEP_SESSION_COMMAND), payload)
+    })
 end
 
-local function collectPenaltyFractions(playerObj, baseHours)
+local function collectPenaltyFractions(player, baseHours)
     local compat = getCompat()
     if not compat then
         return nil, {}
     end
-
     local penalties = {}
-    local callbacks = {
-        compat:getCallback("CaffeineMakesSense", "estimateSleepPlannerPenalty"),
-        compat:getCallback("ArmorMakesSense", "estimateSleepPlannerPenalty"),
-    }
-
-    for i = 1, #callbacks do
-        local callback = callbacks[i]
+    local providers = { "CaffeineMakesSense", "ArmorMakesSense" }
+    for i = 1, #providers do
+        local callback = compat:getCallback(providers[i], "estimateSleepPlannerPenalty")
         if type(callback) == "function" then
-            local ok, result = pcall(callback, playerObj, { baseHours = baseHours })
-            if ok and type(result) == "table" then
-                local penalty = tonumber(result.penaltyFraction) or 0
-                if penalty > 0 then
-                    penalties[#penalties + 1] = penalty
-                end
+            local ok, result = pcall(callback, player, { baseHours = baseHours })
+            local penalty = ok and type(result) == "table" and tonumber(result.penaltyFraction) or 0
+            if penalty and penalty > 0 then
+                penalties[#penalties + 1] = penalty
             end
         end
     end
-
     return compat, penalties
 end
 
-local function computeAdjustedHours(playerObj, baseHours)
-    local base = tonumber(baseHours) or 0
-    local compat, penalties = collectPenaltyFractions(playerObj, base)
+local function computeAdjustedHours(player, baseHours)
+    local base = math.max(0, tonumber(baseHours) or 0)
+    local compat, penalties = collectPenaltyFractions(player, base)
     if not compat or #penalties == 0 then
         return base
     end
+    local combined = compat.combinePenaltyFractions(penalties)
+    return base + compat.computePlannerExtraHours(base, combined)
+end
 
-    local combinedPenalty = compat.combinePenaltyFractions(penalties)
-    local extraHours = compat.computePlannerExtraHours(base, combinedPenalty)
-    return base + extraHours
+local function usesServerSleepFlow()
+    if type(isClient) ~= "function" or isClient() ~= true then
+        return false
+    end
+    if type(getServerOptions) ~= "function" then
+        return false
+    end
+    local serverOptions = getServerOptions()
+    return safeMethod(serverOptions, "getBoolean", "SleepAllowed") == true
 end
 
 local function wrapSleepDialog()
     if ArmorMakesSense._sleepDialogPlannerWrapped then
         return
     end
-
     pcall(require, "ISUI/ISSleepDialog")
     if type(ISSleepDialog) ~= "table" or type(ISSleepDialog.initialise) ~= "function" then
         return
     end
-
-    local originalInitialise = ISSleepDialog.initialise
+    local original = ISSleepDialog.initialise
     ISSleepDialog.initialise = function(self)
-        originalInitialise(self)
-
-        local playerObj = self and self.player or nil
-        local spinBox = self and self.spinBox or nil
-        local baseHours = tonumber(spinBox and spinBox.selected) or nil
-        if not playerObj or not spinBox or baseHours == nil or baseHours <= 0 then
+        original(self)
+        local player = self and self.player
+        local spinBox = self and self.spinBox
+        local baseHours = tonumber(spinBox and spinBox.selected)
+        if not player or not spinBox or not baseHours or baseHours <= 0 then
             return
         end
-
-        local adjustedHours = computeAdjustedHours(playerObj, baseHours)
-        local roundedHours = math.max(baseHours, math.floor(adjustedHours + 0.5))
-        for hour = baseHours + 1, roundedHours do
+        local adjusted = math.max(baseHours, math.floor(computeAdjustedHours(player, baseHours) + 0.5))
+        for hour = baseHours + 1, adjusted do
             spinBox:addOption(getText("IGUI_Sleep_NHours", hour))
         end
-        spinBox.selected = roundedHours
+        spinBox.selected = adjusted
     end
-
     ArmorMakesSense._sleepDialogPlannerWrapped = true
 end
 
@@ -157,132 +126,60 @@ local function wrapAutoSleep()
     if ArmorMakesSense._autoSleepPlannerWrapped then
         return
     end
-
     pcall(require, "ISUI/ISWorldObjectContextMenu")
-    if type(ISWorldObjectContextMenu) ~= "table" or type(ISWorldObjectContextMenu.onSleepWalkToComplete) ~= "function" then
+    if type(ISWorldObjectContextMenu) ~= "table"
+        or type(ISWorldObjectContextMenu.onSleepWalkToComplete) ~= "function" then
         return
     end
 
-    local originalOnSleepWalkToComplete = ISWorldObjectContextMenu.onSleepWalkToComplete
+    local original = ISWorldObjectContextMenu.onSleepWalkToComplete
     ISWorldObjectContextMenu.onSleepWalkToComplete = function(playerIndex, bed)
-        local playerObj = getPlayerFromIndex(playerIndex)
-        if not playerObj then
-            return originalOnSleepWalkToComplete(playerIndex, bed)
+        local result = original(playerIndex, bed)
+        local player = getPlayerFromIndex(playerIndex)
+        if not player or safeMethod(player, "isAsleep") ~= true then
+            return result
         end
 
-        local stats = type(playerObj.getStats) == "function" and playerObj:getStats() or nil
-        local moodles = type(playerObj.getMoodles) == "function" and playerObj:getMoodles() or nil
-        local isZombies = stats and (
-            (tonumber(stats:getNumVisibleZombies()) or 0) > 0
-            or (tonumber(stats:getNumChasingZombies()) or 0) > 0
-            or (tonumber(stats:getNumVeryCloseZombies()) or 0) > 0
-        ) or false
-        if isZombies then
-            HaloTextHelper.addBadText(playerObj, getText("IGUI_Sleep_NotSafe"))
-            return
+        local gameTime = nil
+        if GameTime and type(GameTime.getInstance) == "function" then
+            local ok, instance = pcall(GameTime.getInstance)
+            gameTime = ok and instance or nil
         end
+        local timeOfDay = tonumber(gameTime and safeMethod(gameTime, "getTimeOfDay"))
+        local wakeHour = tonumber(safeMethod(player, "getForceWakeUpTime"))
+        if timeOfDay == nil or wakeHour == nil then
+            return result
+        end
+        local baseHours = (wakeHour - timeOfDay) % 24
+        local adjustedHours = computeAdjustedHours(player, baseHours)
+        local adjustedWakeHour = (timeOfDay + adjustedHours) % 24
+        safeMethod(player, "setForceWakeUpTime", adjustedWakeHour)
 
-        if (tonumber(playerObj:getSleepingTabletEffect()) or 0) < 2000 then
-            local fatigue = stats and stats:get(CharacterStat.FATIGUE) or 0
-            if moodles and moodles:getMoodleLevel(MoodleType.PAIN) >= 2 and fatigue <= 0.85 then
-                HaloTextHelper.addBadText(playerObj, getText("ContextMenu_PainNoSleep"))
-                return
-            end
-            if moodles and moodles:getMoodleLevel(MoodleType.PANIC) >= 1 then
-                HaloTextHelper.addBadText(playerObj, getText("ContextMenu_PanicNoSleep"))
-                return
-            end
+        -- Vanilla delegates this branch to the server and deliberately skips
+        -- SleepingEvent setup on the multiplayer client.
+        if not usesServerSleepFlow() then
+            local sleepingEvent = type(getSleepingEvent) == "function" and getSleepingEvent() or nil
+            safeMethod(sleepingEvent, "setPlayerFallAsleep", player, adjustedHours)
         end
-
-        if playerObj:getVariableBoolean("ExerciseEnded") == false then
-            return
-        end
-
-        ISTimedActionQueue.clear(playerObj)
-
-        local fatigue = tonumber(stats and stats:get(CharacterStat.FATIGUE)) or 0
-        local sleepFor = ZombRand(fatigue * 10, fatigue * 13) + 1
-        local bedType = ISWorldObjectContextMenu.getBedQuality(playerObj, bed)
-        if bedType == "goodBed" or stringContains(bedType, "goodBedPillow") then
-            sleepFor = sleepFor - 1
-        end
-        if bedType == "badBed" or stringContains(bedType, "badBedPillow") then
-            sleepFor = sleepFor + 1
-        end
-        if bedType == "floor" or stringContains(bedType, "floorPillow") then
-            sleepFor = sleepFor * 0.7
-        end
-        if playerObj:hasTrait(CharacterTrait.INSOMNIAC) then
-            sleepFor = sleepFor * 0.5
-        end
-        if playerObj:hasTrait(CharacterTrait.NEEDS_LESS_SLEEP) then
-            sleepFor = sleepFor * 0.75
-        end
-        if playerObj:hasTrait(CharacterTrait.NEEDS_MORE_SLEEP) then
-            sleepFor = sleepFor * 1.18
-        end
-        if sleepFor > 16 then
-            sleepFor = 16
-        end
-        if sleepFor < 3 then
-            sleepFor = 3
-        end
-
-        sleepFor = computeAdjustedHours(playerObj, sleepFor)
-
-        local gameTime = GameTime.getInstance()
-        local sleepHours = sleepFor + gameTime:getTimeOfDay()
-        if sleepHours >= 24 then
-            sleepHours = sleepHours - 24
-        end
-
-        playerObj:setBed(bed)
-        playerObj:setBedType(bedType)
-        playerObj:setForceWakeUpTime(tonumber(sleepHours))
-        playerObj:setAsleepTime(0.0)
-        sendSleepSession(playerObj, bedType, sleepFor, sleepHours)
-        playerObj:setAsleep(true)
-
-        if playerObj:getVehicle() then
-            playerObj:playSound("VehicleGoToSleep")
-        end
-
-        if isClient() and getServerOptions():getBoolean("SleepAllowed") then
-            UIManager.setFadeBeforeUI(playerIndex, true)
-            UIManager.FadeOut(playerIndex, 1)
-            if playerObj:getVehicle() then
-                sendClientCommand(playerObj, "player", "onVehicleSleep", { id = playerObj:getOnlineID(), isAsleep = true })
-            end
-            return
-        end
-
-        getSleepingEvent():setPlayerFallAsleep(playerObj, sleepFor)
-        UIManager.setFadeBeforeUI(playerObj:getPlayerNum(), true)
-        UIManager.FadeOut(playerObj:getPlayerNum(), 1)
-
-        if IsoPlayer.allPlayersAsleep() then
-            UIManager.getSpeedControls():SetCurrentGameSpeed(3)
-            save(true)
-        end
+        sendSleepBedType(safeMethod(player, "getBedType"))
+        return result
     end
-
     ArmorMakesSense._autoSleepPlannerWrapped = true
 end
 
 function SleepHooks.wrapSleepPlanning()
     if cmsOwnsPlanner() then
-        if ArmorMakesSense._sleepPlannerHooksLogged ~= true then
+        if not ArmorMakesSense._sleepPlannerHooksLogged then
             ArmorMakesSense._sleepPlannerHooksLogged = true
             log("sleep planner hooks delegated to CMS coordinator")
         end
         return false
     end
-
     wrapSleepDialog()
     wrapAutoSleep()
-    if ArmorMakesSense._sleepPlannerHooksLogged ~= true then
+    if not ArmorMakesSense._sleepPlannerHooksLogged then
         ArmorMakesSense._sleepPlannerHooksLogged = true
-        log("wrapped sleep planner hooks")
+        log("wrapped sleep duration hooks")
     end
     return true
 end

@@ -7,26 +7,55 @@ Core.Bootstrap = Core.Bootstrap or {}
 local Bootstrap = Core.Bootstrap
 
 -- -----------------------------------------------------------------------------
--- Bootstrap wiring
+-- Client runtime selection
 -- -----------------------------------------------------------------------------
 
-function Bootstrap.bindApi(api, context)
-    if not api or type(api) ~= "table" then
-        return
+local function readGlobalBool(name)
+    local fn = _G[name]
+    if type(fn) ~= "function" then
+        return nil
     end
-    if type(api.setContext) == "function" then
-        api.setContext(context or {})
+    local ok, value = pcall(fn)
+    if not ok then
+        return nil
     end
-    if type(api.bindGlobals) == "function" then
-        api.bindGlobals()
-    end
+    return value == true
 end
 
-function Bootstrap.registerRuntimeEvents(mod, runtime)
-    if not mod or not runtime or type(runtime.registerEvents) ~= "function" then
-        return
+function Bootstrap.resolveClientRole()
+    local multiplayer = readGlobalBool("isClient")
+    if multiplayer == nil then
+        return nil
     end
-    runtime.registerEvents(mod)
+    if multiplayer then
+        return "multiplayer"
+    end
+    return "singleplayer"
+end
+
+function Bootstrap.registerClientRuntime(mod, singleplayerRuntime, multiplayerRuntime)
+    if not mod then
+        return false, "missing_mod"
+    end
+    if mod._activeClientRuntimeRole then
+        return true, mod._activeClientRuntimeRole
+    end
+
+    local role = Bootstrap.resolveClientRole()
+    if not role then
+        return false, "unknown_role"
+    end
+    local runtime = role == "multiplayer" and multiplayerRuntime or singleplayerRuntime
+    if not runtime or type(runtime.registerEvents) ~= "function" then
+        return false, role
+    end
+
+    local registered = runtime.registerEvents(mod)
+    if registered == false then
+        return false, role
+    end
+    mod._activeClientRuntimeRole = role
+    return true, role
 end
 
 return Bootstrap

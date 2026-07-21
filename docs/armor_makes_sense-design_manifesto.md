@@ -1,136 +1,85 @@
-# Armor Makes Sense – Design North Star
+# Armor Makes Sense - Design Principles
 
-## Core Principle
+## Purpose
 
-Armor is a **physical tradeoff**, not a psychological penalty.
+AMS makes protective equipment a physical tradeoff. Protection should affect
+movement capacity, heat regulation, breathing, melee strain, and recovery. It
+should not impose an unrelated psychological penalty.
 
-It protects the body.
-Its cost must also live in the body.
+## Core Principles
 
-Armor should tax energy, heat regulation, and recovery — not sanity.
+### Use Existing Character Systems
 
----
+AMS expresses equipment cost through Project Zomboid systems that already
+represent physical condition:
 
-## Design Goal
+- endurance
+- fatigue recovery
+- thermoregulation
+- muscle strain
+- movement and combat speed modifiers
 
-Wearing armor should feel:
+AMS does not add a separate burden moodle or custom character resource.
 
-* Safer in short engagements
-* More draining in prolonged activity
-* Riskier in hot environments
-* Suboptimal for constant, all-day wear
+### Scale Cost With Activity
 
-The player should think:
+Equipment should have limited impact at rest and greater impact during sustained
+activity. Walking remains inexpensive under ordinary conditions. Running,
+sprinting, heat strain, restrictive breathing equipment, and repeated melee
+attacks expose the load more clearly.
 
-“I’m protected, but I’ll gas out if this drags on.”
+### Preserve Useful Protection
 
-Not:
+Armor should remain valuable in dangerous situations. AMS is intended to make
+equipment choice contextual, not to make protection categorically inefficient.
 
-“My moodle is ruining my combat stats.”
+### Preserve Vanilla Ownership
 
----
+AMS supplements rather than replaces the following vanilla behaviors:
 
-## What Armor Should Affect
+- melee stamina cost
+- non-clothing discomfort
+- thermoregulation
+- bed quality and sleep traits
+- base muscle strain
 
-Armor should plug into existing physical systems:
+## System Responsibilities
 
-### 1. Endurance (Short-Term Capacity)
+| System | AMS responsibility |
+|---|---|
+| Endurance | Increase movement drain and reduce regeneration according to load and environment |
+| Thermal pressure | Convert sustained heat strain into additional exertion cost and recognize useful cold insulation |
+| Breathing | Scale respiratory restriction with ventilation demand |
+| Muscle strain | Add load from equipment worn on the melee swing chain |
+| Sleep | Reduce fatigue recovery according to rigidity and vanilla sleep recovery rate |
+| Speed | Apply curated regional run-speed and combat-speed modifiers |
+| Equipment slots | Remove selected layering conflicts without allowing incompatible combinations |
 
-Armor increases energy cost of movement and combat.
+## Discomfort Policy
 
-Effects:
+AMS sets `DiscomfortModifier` to zero on wearable script items and caches the
+original value for its own load calculations. It does not clamp the live
+`DISCOMFORT` character stat.
 
-* Slightly higher endurance usage during physical actions
-* Slightly slower endurance regeneration while worn
-* Greater impact during prolonged activity
+Non-clothing discomfort sources remain active, including poor sleep surfaces,
+wetness, temperature effects, corpse dragging, and vehicle over-encumbrance.
 
-Result:
-You fatigue sooner in extended fights, but you’re still protected.
+## Non-Goals
 
----
+AMS does not:
 
-### 2. Heat
+- add stress, panic, or unhappiness as an armor cost
+- add arbitrary accuracy or damage penalties
+- apply continuous timed endurance drain to melee combat
+- guarantee curated balance for every third-party item
+- replace vanilla temperature, fatigue, or muscle-strain systems
 
-Armor reduces cooling efficiency.
+## Balance Target
 
-Effects:
+The intended equipment curve is:
 
-* Increased heat retention
-* Faster progression toward overheating in hot conditions
-* Higher endurance cost in hot weather
-
-Result:
-Armor becomes a meaningful risk in summer or during heavy exertion.
-
----
-
-### 3. Muscle Fatigue
-
-Armor amplifies mechanical load on limbs and torso.
-
-Effects:
-
-* Slight increase in muscle strain accumulation
-* More noticeable during heavy weapons or repeated swings
-
-Result:
-Long sessions feel physically taxing without being instantly crippling.
-
----
-
-### 4. Sleep Recovery
-
-Sleeping in rigid or restrictive armor reduces recovery quality.
-
-Effects:
-
-* Lower endurance recovery overnight
-* Slight increase in next-day fatigue
-* Worse outcome in hot conditions
-
-Result:
-Sleeping armored is an emergency choice, not a default.
-
----
-
-## What Armor Should NOT Do
-
-Armor should not:
-
-* Apply stress or unhappiness as a cost of wearing gear
-* Apply arbitrary combat accuracy or damage penalties
-* Interact with panic or mood systems
-
-Vanilla PZ uses DiscomfortModifier on armor to induce stress (B42.14+; earlier builds used unhappiness). AMS zeroes DiscomfortModifier on wearable items at boot, so armor no longer feeds vanilla psychological discomfort. Non-clothing discomfort sources such as poor sleep surfaces, wetness, temperature, dragging corpses, and vehicle over-encumbrance remain vanilla behavior.
-
----
-
-## System Philosophy
-
-No new emotional meters.
-No artificial punishments.
-No discomfort tax -- vanilla DiscomfortModifier is zeroed, not rebalanced.
-
-Armor cost emerges naturally from:
-
-Weight
-Heat retention
-Breathing restriction
-Activity duration
-
-The game already simulates endurance, fatigue, muscle strain, and hyperthermia.
-
-AMS integrates into those systems -- it does not bypass them or invent new ones.
-
----
-
-## Desired Player Experience
-
-Armor becomes a strategic choice:
-
-* Wear it for dangerous operations.
-* Remove it to recover efficiency.
-* Respect the heat.
-* Avoid sleeping in it unless necessary.
-
-The tradeoff feels physical, systemic, and believable.
+- negligible impact for light clothing
+- modest sustained cost for practical protective gear
+- clear endurance and recovery cost for heavy or restrictive loadouts
+- strong situational pressure from heat, sprinting, sealed breathing equipment,
+  and sleeping in rigid armor

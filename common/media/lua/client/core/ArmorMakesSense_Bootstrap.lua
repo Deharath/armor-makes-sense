@@ -37,7 +37,10 @@ function Bootstrap.registerClientRuntime(mod, singleplayerRuntime, multiplayerRu
     if not mod then
         return false, "missing_mod"
     end
-    if mod._activeClientRuntimeRole then
+    if mod._activeClientRuntimeRole
+        and mod._activeClientRuntime == (mod._activeClientRuntimeRole == "multiplayer" and multiplayerRuntime or singleplayerRuntime)
+        and mod._activeClientRegisterEvents == (mod._activeClientRuntime and mod._activeClientRuntime.registerEvents)
+    then
         return true, mod._activeClientRuntimeRole
     end
 
@@ -55,6 +58,8 @@ function Bootstrap.registerClientRuntime(mod, singleplayerRuntime, multiplayerRu
         return false, role
     end
     mod._activeClientRuntimeRole = role
+    mod._activeClientRuntime = runtime
+    mod._activeClientRegisterEvents = runtime.registerEvents
     return true, role
 end
 

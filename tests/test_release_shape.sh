@@ -272,6 +272,15 @@ if ! rg -q 'function UITooltip\.install' "${tooltip_module}"; then
   echo "tooltip integration entrypoint missing" >&2
   exit 1
 fi
+if rg -n 'function Stats\.set(Thirst|Discomfort|Wetness|BodyTemperature)' \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_StatsShared.lua"; then
+  echo "development-only body-state setters leaked into production StatsShared" >&2
+  exit 1
+fi
+if [[ ! -f "${ROOT_DIR}/common/media/lua/client/testing/ArmorMakesSense_TestStats.lua" ]]; then
+  echo "development body-state setter module missing" >&2
+  exit 1
+fi
 
 PACKAGING_PATHS=(
   "${ROOT_DIR}/../tools/mod_sync/sync_local_mod.sh"

@@ -6,6 +6,7 @@ Testing.Reset = Testing.Reset or {}
 
 local Reset = Testing.Reset
 local Stats = ArmorMakesSense.Core.Stats
+local TestStats = ArmorMakesSense.Testing.TestStats
 local C = {}
 
 local function ctx(name)
@@ -126,7 +127,7 @@ function Reset.resetCharacterToEquilibrium(player)
     if stats then
         Stats.setEndurance(player, 1.0)
         Stats.setFatigue(player, 0.0)
-        Stats.setThirst(player, 0.0)
+        TestStats.setThirst(player, 0.0)
         setStatIfPresent(stats, CharacterStat and CharacterStat.HUNGER, "setHunger", 0.0)
         setStatIfPresent(stats, CharacterStat and CharacterStat.STRESS, "setStress", 0.0)
         setStatIfPresent(stats, CharacterStat and CharacterStat.PANIC, "setPanic", 0.0)
@@ -136,11 +137,11 @@ function Reset.resetCharacterToEquilibrium(player)
         setStatIfPresent(stats, CharacterStat and CharacterStat.PAIN, "setPain", 0.0)
     end
 
-    Stats.setWetness(player, 0.0)
+    TestStats.setWetness(player, 0.0)
     resetBodyDamageState(player)
     resetThermoregulatorState(player)
-    Stats.setBodyTemperature(player, 37.0)
-    Stats.setDiscomfort(player, 0.0)
+    TestStats.setBodyTemperature(player, 37.0)
+    TestStats.setDiscomfort(player, 0.0)
     ctx("safeMethod")(player, "setRunning", false)
     ctx("safeMethod")(player, "setSprinting", false)
     return Reset.resetMuscleStrain(player)

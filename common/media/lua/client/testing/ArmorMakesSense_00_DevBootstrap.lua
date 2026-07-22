@@ -24,6 +24,7 @@ end
 DevBootstrap._eventHandlers = {}
 
 local TEST_MODULES = {
+    "testing/ArmorMakesSense_TestStats",
     "testing/ArmorMakesSense_Gear",
     "testing/ArmorMakesSense_Reset",
     "testing/ArmorMakesSense_Commands",
@@ -153,6 +154,7 @@ end
 local function buildContext(modules)
     local Utils = modules.Utils
     local Stats = modules.Stats
+    local TestStats = modules.TestStats
     local Gear = modules.Gear
     local gearDeps = {
         safeMethod = Utils.safeMethod,
@@ -204,8 +206,8 @@ local function buildContext(modules)
         getWetness = Stats.getWetness,
         getBodyTemperature = Stats.getBodyTemperature,
         setFatigue = Stats.setFatigue,
-        setWetness = Stats.setWetness,
-        setBodyTemperature = Stats.setBodyTemperature,
+        setWetness = TestStats.setWetness,
+        setBodyTemperature = TestStats.setBodyTemperature,
         resetCharacterToEquilibrium = modules.Reset.resetCharacterToEquilibrium,
         snapshotWornItems = function(player)
             return Gear.snapshotWornItems(player, gearDeps)
@@ -255,19 +257,19 @@ local function enforceTestLock(modules, player, state)
     local nowMinutes = getWorldAgeMinutes(modules.Utils)
     if tonumber(testLock.untilMinute) and nowMinutes <= tonumber(testLock.untilMinute) then
         if testLock.wetness ~= nil then
-            modules.Stats.setWetness(player, testLock.wetness)
+            modules.TestStats.setWetness(player, testLock.wetness)
         end
         if testLock.bodyTemp ~= nil then
-            modules.Stats.setBodyTemperature(player, testLock.bodyTemp)
+            modules.TestStats.setBodyTemperature(player, testLock.bodyTemp)
         end
         return
     end
 
     if testLock.wetness ~= nil then
-        modules.Stats.setWetness(player, 0.0)
+        modules.TestStats.setWetness(player, 0.0)
     end
     if testLock.bodyTemp ~= nil then
-        modules.Stats.setBodyTemperature(player, 37.0)
+        modules.TestStats.setBodyTemperature(player, 37.0)
     end
     state.testLock = {
         mode = nil,
@@ -331,6 +333,7 @@ function DevBootstrap.initialize()
         ClientRuntime = ArmorMakesSense.Core.ClientRuntime,
         SupportReport = ArmorMakesSense.Core.SupportReport,
         Stats = ArmorMakesSense.Core.Stats,
+        TestStats = ArmorMakesSense.Testing.TestStats,
         LoadModel = ArmorMakesSense.Core.LoadModel,
         Strain = ArmorMakesSense.Core.Strain,
         Physiology = ArmorMakesSense.Models.Physiology,

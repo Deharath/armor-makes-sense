@@ -10,10 +10,6 @@ local Utils = require "ArmorMakesSense_UtilsShared"
 
 local UITooltip = Core.UITooltip
 
-local hookInstalled = false
-local renderPatched = false
-local originalISToolTipInvRender = nil
-
 local TOOLTIP_DISPLAY_THRESHOLD = 1.5
 local TOOLTIP_BAR_MAX = 28
 local TT_LABEL_DEFAULT = { 1.0, 1.0, 0.8, 1.0 }
@@ -85,15 +81,6 @@ local function getBodyLocation(item)
     return tostring(ClientRuntime.safeMethod(item, "getBodyLocation") or "")
 end
 
-local function isShoulderpadFamilyItem(item, location)
-    local loc = Utils.lower(location or getBodyLocation(item))
-    if string.find(loc, "shoulderpad", 1, true) then
-        return true
-    end
-    local fullType = tostring(ClientRuntime.safeMethod(item, "getFullType") or "")
-    return string.find(Utils.lower(fullType), "shoulderpad", 1, true) ~= nil
-end
-
 local function stripAmsPrefix(text)
     return string.gsub(tostring(text or ""), "^%s*AMS%s+", "")
 end
@@ -109,43 +96,21 @@ local function isTooltipWearable(item)
     return tostring(ClientRuntime.safeMethod(scriptItem, "getBodyLocation") or "") ~= ""
 end
 
-local function getTooltipPadding(tooltip)
-    local padLeft = tonumber(tooltip and tooltip.padLeft)
-    local padRight = tonumber(tooltip and tooltip.padRight)
-    local padTop = tonumber(tooltip and tooltip.padTop)
-    local padBottom = tonumber(tooltip and tooltip.padBottom)
-    if padLeft and padRight and padTop and padBottom then
-        return padLeft, padRight, padTop, padBottom
-    end
-
-    local font = tooltip and ClientRuntime.safeMethod(tooltip, "getFont") or nil
-    local tm = _G.TextManager and _G.TextManager.instance or nil
-    local charWidth = tonumber(tm and font and ClientRuntime.safeMethod(tm, "MeasureStringX", font, "1")) or 5
-    if charWidth < 1 then
-        charWidth = 5
-    end
-    charWidth = charWidth + 2
-    local verticalPad = math.floor(charWidth / 2)
-    if verticalPad < 1 then
-        verticalPad = 2
-    end
-    return charWidth + 1, charWidth, verticalPad, verticalPad
-end
-
 local function injectTooltipRowsWithLayout(layout, item)
     if not layout or not item or not isTooltipWearable(item) then
-        return
+        return 0
     end
     local signal = LoadModel.itemToBurdenSignal(item, getBodyLocation(item))
     if not signal then
-        return
+        return 0
     end
     local hasPhysical = (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD
     local hasBreathing = (tonumber(signal.airflowResistance) or 0) >= 0.80
     if not hasPhysical and not hasBreathing then
-        return
+        return 0
     end
 
+    local rowCount = 0
     if hasPhysical then
         addLayoutRow(layout, {
             label = stripAmsPrefix(tr("UI_AMS_Label_Burden", "Burden")) .. ":",
@@ -153,6 +118,7 @@ local function injectTooltipRowsWithLayout(layout, item)
             progress = burdenBarFraction(signal.physicalLoad),
             barColor = TT_BAR_BURDEN,
         })
+        rowCount = rowCount + 1
     end
 
     local breathingTier = breathingTierFromResistance(signal.airflowResistance, signal.sealedRestriction)
@@ -164,151 +130,139 @@ local function injectTooltipRowsWithLayout(layout, item)
             valueColor = (tonumber(signal.sealedRestriction) or 0) > 0
                 and TT_VALUE_BREATHING_HEAVY or TT_VALUE_BREATHING,
         })
+        rowCount = rowCount + 1
     end
+    return rowCount
 end
 
-local function renderTooltipLayoutForItem(item, tooltip)
-    if not item or not tooltip then
+local function buildProviderRows(item)
+    if not isTooltipWearable(item) then
+        return nil
+    end
+    local signal = LoadModel.itemToBurdenSignal(item, getBodyLocation(item))
+    if not signal then
+        return nil
+    end
+
+    local rows = {}
+    if (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD then
+        rows[#rows + 1] = {
+            label = stripAmsPrefix(tr("UI_AMS_Label_Burden", "Burden")) .. ":",
+            value = string.format("%.0f%%", burdenBarFraction(signal.physicalLoad) * 100),
+            labelR = TT_LABEL_ACCENT[1],
+            labelG = TT_LABEL_ACCENT[2],
+            labelB = TT_LABEL_ACCENT[3],
+        }
+    end
+    local breathingTier = breathingTierFromResistance(signal.airflowResistance, signal.sealedRestriction)
+    if breathingTier then
+        rows[#rows + 1] = {
+            label = stripAmsPrefix(tr("UI_AMS_Label_Breathing", "Breathing")) .. ":",
+            value = breathingTier,
+        }
+    end
+    return #rows > 0 and rows or nil
+end
+
+local function registerProvider()
+    local controller = rawget(_G, "EuryTooltipController")
+    if type(controller) ~= "table" or type(controller.registerProvider) ~= "function" then
         return false
     end
 
-    local layout = ClientRuntime.safeMethod(tooltip, "beginLayout")
-    if not layout then
-        return false
+    UITooltip._provider = UITooltip._provider or {
+        priority = 90,
+        getRows = function(_, ctx)
+            return buildProviderRows(ctx and ctx.item)
+        end,
+    }
+    local ok = pcall(controller.registerProvider, controller, "ArmorMakesSense", UITooltip._provider)
+    if ok then
+        UITooltip._registeredController = controller
+        ClientRuntime.logOnce("ui_tooltip_provider_installed", "[UI] AMS tooltip rows registered with the shared tooltip controller.")
+    end
+    return ok
+end
+
+local function providerOwnsRows()
+    local controller = rawget(_G, "EuryTooltipController")
+    return controller ~= nil
+        and controller.installed == true
+        and UITooltip._registeredController == controller
+        and type(controller.providers) == "table"
+        and controller.providers.ArmorMakesSense == UITooltip._provider
+end
+
+local function renderWithLayoutExtension(panel, originalRender)
+    local item = panel and panel.item
+    local tooltip = panel and panel.tooltip
+    if not item or not tooltip or not isTooltipWearable(item) then
+        return originalRender(panel)
     end
 
-    local ok = pcall(function()
-        ClientRuntime.safeMethod(layout, "setMinLabelWidth", 80)
-        ClientRuntime.safeMethod(layout, "setMinValueWidth", 80)
-        item:DoTooltipEmbedded(tooltip, layout, 0)
-        injectTooltipRowsWithLayout(layout, item)
+    local okMetatable, metatable = pcall(getmetatable, tooltip)
+    local methods = okMetatable and type(metatable) == "table" and metatable.__index or nil
+    local originalEndLayout = type(methods) == "table" and methods.endLayout or nil
+    if type(originalEndLayout) ~= "function" then
+        return originalRender(panel)
+    end
 
-        local padLeft, padRight, padTop, padBottom = getTooltipPadding(tooltip)
-        local lineSpacing = tonumber(ClientRuntime.safeMethod(tooltip, "getLineSpacing")) or 14
-        local top = padTop + lineSpacing + 5
-        local height = tonumber(ClientRuntime.safeMethod(layout, "render", padLeft, top, tooltip)) or top
-        ClientRuntime.safeMethod(tooltip, "endLayout", layout)
-
-        local width = tonumber(ClientRuntime.safeMethod(tooltip, "getWidth")) or 0
-        if width < 150 then
-            width = 150
+    local endLayoutExtension = function(target, layout, ...)
+        if target == tooltip then
+            injectTooltipRowsWithLayout(layout, item)
         end
-
-        if instanceof(item, "InventoryContainer") then
-            if width < 160 then
-                width = 160
-            end
-            local container = ClientRuntime.safeMethod(item, "getItemContainer")
-            local items = container and ClientRuntime.safeMethod(container, "getItems")
-            local maxX = width - padRight
-            if items and not ClientRuntime.safeMethod(items, "isEmpty") then
-                local seenItems = {}
-                local xOffset = padLeft
-                height = height + 4
-                local itemCount = tonumber(ClientRuntime.safeMethod(items, "size")) or 0
-                for i = itemCount - 1, 0, -1 do
-                    local containerItem = ClientRuntime.safeMethod(items, "get", i)
-                    local name = containerItem and tostring(ClientRuntime.safeMethod(containerItem, "getName") or "")
-                    if not seenItems[name] then
-                        seenItems[name] = true
-                        local tex = containerItem and ClientRuntime.safeMethod(containerItem, "getTex")
-                        if tex then
-                            ClientRuntime.safeMethod(tooltip, "DrawTextureScaledAspect", tex, xOffset, height, 16, 16, 1, 1, 1, 1)
-                        end
-                        xOffset = xOffset + 17
-                        if xOffset + 16 > maxX then
-                            break
-                        end
-                    end
-                end
-                height = height + 16
-            end
-        end
-
-        ClientRuntime.safeMethod(tooltip, "setHeight", math.floor(height + padBottom))
-        ClientRuntime.safeMethod(tooltip, "setWidth", math.floor(width))
-    end)
-
+        return originalEndLayout(target, layout, ...)
+    end
+    methods.endLayout = endLayoutExtension
+    local ok, result = pcall(originalRender, panel)
+    if methods.endLayout == endLayoutExtension then
+        methods.endLayout = originalEndLayout
+    end
     if not ok then
-        pcall(function()
-            ClientRuntime.safeMethod(tooltip, "endLayout", layout)
-        end)
-        return false
+        error(result)
     end
-
-    return true
+    return result
 end
 
 local function installRenderPatch()
-    if renderPatched then
-        return true
-    end
     if not ISToolTipInv or type(ISToolTipInv.render) ~= "function" then
         return false
     end
+    if ISToolTipInv.render == ISToolTipInv._amsTooltipRenderWrapper then
+        return true
+    end
 
-    originalISToolTipInvRender = originalISToolTipInvRender or ISToolTipInv.render
-    ISToolTipInv.render = function(self)
-        local item = self and self.item
-        if not item or instanceof(item, "FluidContainer") or not isTooltipWearable(item) then
-            return originalISToolTipInvRender(self)
+    local originalRender = ISToolTipInv.render
+    local wrapper = function(self)
+        local nested = self and self._amsTooltipRenderActive == true
+        if nested or providerOwnsRows() then
+            return originalRender(self)
         end
-
-        local itemMt = nil
-        local mtOk, mtValue = pcall(getmetatable, item)
-        if mtOk and type(mtValue) == "table" then
-            itemMt = mtValue
-        end
-        local itemIndex = itemMt and type(itemMt.__index) == "table" and itemMt.__index or nil
-        local originalDoTooltip = itemIndex and itemIndex.DoTooltip or nil
-        if type(originalDoTooltip) ~= "function" then
-            return originalISToolTipInvRender(self)
-        end
-
-        local restoreTooltip = nil
-        if isShoulderpadFamilyItem(item) then
-            local tooltipKey = tostring(ClientRuntime.safeMethod(item, "getTooltip") or "")
-            if tooltipKey ~= "" then
-                restoreTooltip = tooltipKey
-                pcall(function()
-                    item:setTooltip(nil)
-                end)
-            end
-        end
-
-        itemIndex.DoTooltip = function(overriddenItem, tooltip)
-            if not renderTooltipLayoutForItem(overriddenItem, tooltip) then
-                return originalDoTooltip(overriddenItem, tooltip)
-            end
-        end
-
-        local ok, result = pcall(originalISToolTipInvRender, self)
-        itemIndex.DoTooltip = originalDoTooltip
-        if restoreTooltip ~= nil then
-            pcall(function()
-                item:setTooltip(restoreTooltip)
-            end)
-        end
+        self._amsTooltipRenderActive = true
+        local ok, result = pcall(renderWithLayoutExtension, self, originalRender)
+        self._amsTooltipRenderActive = nil
         if not ok then
             error(result)
         end
         return result
     end
 
-    renderPatched = true
-    ClientRuntime.logOnce("ui_tooltip_patch_installed", "[UI] AMS tooltip rows registered via pre-render ISToolTipInv patch.")
+    ISToolTipInv._amsTooltipRenderWrapper = wrapper
+    ISToolTipInv.render = wrapper
+    ClientRuntime.logOnce("ui_tooltip_patch_installed", "[UI] AMS tooltip rows registered as a compositional layout extension.")
     return true
 end
 
 function UITooltip.install()
-    if hookInstalled then
-        return
+    registerProvider()
+    if providerOwnsRows() then
+        return true
     end
     if not installRenderPatch() then
         ClientRuntime.logOnce("ui_tooltip_patch_deferred", "[UI] ISToolTipInv not ready; AMS tooltip installation deferred.")
-        return
+        return false
     end
-    hookInstalled = true
+    return true
 end
 
 return UITooltip

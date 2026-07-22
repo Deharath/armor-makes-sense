@@ -14,12 +14,24 @@ local Utils = require "ArmorMakesSense_UtilsShared"
 
 local UI = Core.UI
 
-local clothingUpdateHookInstalled = false
 local tabHookInstalled = false
 local tabHookFailed = false
 local fallbackWindow = nil
 local helpWindow = nil
 local pendingUiRefresh = true
+local previousUiHandlers = UI._eventHandlers or {}
+UI._eventHandlers = {}
+
+local function removeEventHandler(eventName, handler)
+    local event = Events and Events[eventName] or nil
+    if event and type(event.Remove) == "function" and type(handler) == "function" then
+        pcall(event.Remove, handler)
+    end
+end
+
+for eventName, handler in pairs(previousUiHandlers) do
+    removeEventHandler(eventName, handler)
+end
 
 local function tr(key, fallback)
     if not getText then
@@ -129,17 +141,18 @@ local function markUiDirty()
 end
 
 local function installClothingUpdateHook()
-    if clothingUpdateHookInstalled then
+    if UI._eventHandlers.OnClothingUpdated then
         return
     end
     if not (Events and Events.OnClothingUpdated and type(Events.OnClothingUpdated.Add) == "function") then
         return
     end
 
-    Events.OnClothingUpdated.Add(function()
+    local handler = function()
         markUiDirty()
-    end)
-    clothingUpdateHookInstalled = true
+    end
+    Events.OnClothingUpdated.Add(handler)
+    UI._eventHandlers.OnClothingUpdated = handler
 end
 
 -- -----------------------------------------------------------------------------
@@ -975,6 +988,12 @@ local function ensureFallbackWindow(showNow)
     end
 end
 
+local function hideFallbackWindow()
+    if fallbackWindow and type(fallbackWindow.setVisible) == "function" then
+        fallbackWindow:setVisible(false)
+    end
+end
+
 local function attachBurdenTabToScreen(screen)
     ensurePanelClasses()
     if not AMSBurdenPanel then
@@ -1067,6 +1086,25 @@ local function installCharacterTabHook()
     if not (screenClass and type(screenClass.createChildren) == "function") then
         return
     end
+    screenClass._amsAttachBurdenTab = function(screen)
+        local ok, attached = pcall(function()
+            local attachedOk = attachBurdenTabToScreen(screen)
+            return attachedOk
+        end)
+        if not ok or not attached then
+            tabHookFailed = true
+            ClientRuntime.logOnce("ui_burden_tab_fallback", "[UI] Burden tab injection failed; enabling standalone fallback window.")
+            ensureFallbackWindow(true)
+            return false
+        end
+        tabHookFailed = false
+        hideFallbackWindow()
+        if screen._amsBurdenPanel and type(screen._amsBurdenPanel.markDirty) == "function" then
+            screen._amsBurdenPanel:markDirty()
+        end
+        return true
+    end
+
     if screenClass._amsBurdenTabPatched then
         tabHookInstalled = true
         return
@@ -1075,18 +1113,9 @@ local function installCharacterTabHook()
     local originalCreateChildren = screenClass.createChildren
     screenClass.createChildren = function(self, ...)
         local result = originalCreateChildren(self, ...)
-        if not tabHookFailed then
-            local ok, attached = pcall(function()
-                local attachedOk, attachReason = attachBurdenTabToScreen(self)
-                return attachedOk, attachReason
-            end)
-            if not ok or not attached then
-                tabHookFailed = true
-                ClientRuntime.logOnce("ui_burden_tab_fallback", "[UI] Burden tab injection failed; enabling standalone fallback window.")
-                ensureFallbackWindow(true)
-            elseif self._amsBurdenPanel and type(self._amsBurdenPanel.markDirty) == "function" then
-                self._amsBurdenPanel:markDirty()
-            end
+        local attach = screenClass._amsAttachBurdenTab
+        if type(attach) == "function" then
+            attach(self)
         end
         return result
     end
@@ -1100,7 +1129,7 @@ local function installCharacterTabHook()
     pcall(function()
         local existing = screenClass.instance
         if existing and not existing._amsBurdenAttached and existing.panel and type(existing.panel.addView) == "function" then
-            attachBurdenTabToScreen(existing)
+            screenClass._amsAttachBurdenTab(existing)
         end
     end)
 end
@@ -1121,7 +1150,12 @@ function UI.update(player, profile, options)
     installCharacterTabHook()
 
     if tabHookFailed then
-        ensureFallbackWindow(true)
+        local screenClass = _G.ISCharacterInfoWindow
+        local existing = screenClass and screenClass.instance or nil
+        local attach = screenClass and screenClass._amsAttachBurdenTab or nil
+        if not existing or type(attach) ~= "function" or not attach(existing) then
+            ensureFallbackWindow(true)
+        end
     end
 
     if pendingUiRefresh then

@@ -4,13 +4,13 @@
 -- overrides RunSpeedModifier / CombatSpeedModifier for known protective gear.
 --
 -- Why zero discomfort globally:
---   Vanilla discomfort is an abstract accumulating stat that penalizes wearing
---   any gear over time. AMS replaces it entirely with a physics-based load
+--   Vanilla clothing discomfort is an accumulating equipment cost. AMS
+--   supersedes that clothing contribution with a physics-based load
 --   model (endurance drain, thermal pressure, breathing restriction, muscle
 --   strain, sleep recovery). Leaving vanilla discomfort active would double-
 --   count the cost of armor and create confusing interactions where players
 --   see both a "discomfort" moodle and AMS-driven endurance effects.
---   Zeroing it ensures AMS is the single source of truth for armor tradeoffs.
+--   Other vanilla discomfort sources remain active.
 --
 -- Why override speed modifiers per-item:
 --   Vanilla speed penalties on crafted/found armor are often inconsistent —
@@ -20,12 +20,8 @@
 --   and light pads impose no penalty at all.
 
 ArmorMakesSense = ArmorMakesSense or {}
-
--- Module load guard.
-if ArmorMakesSense._speedRebalanceLoaded then
-    return
-end
-ArmorMakesSense._speedRebalanceLoaded = true
+ArmorMakesSense.SpeedRebalance = ArmorMakesSense.SpeedRebalance or {}
+local SpeedRebalance = ArmorMakesSense.SpeedRebalance
 require "ArmorMakesSense_SlotCompat"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
@@ -540,14 +536,16 @@ local function applySlotReslots(sm)
             local item = sm:getItem(fullType)
             if item then
                 cacheOriginalWearableStats(item)
-                safeDoParam(item, "BodyLocation = " .. def.slot)
-                safeDoParam(item, "DiscomfortModifier = 0.00")
+                local itemChanged = safeDoParam(item, "BodyLocation = " .. def.slot)
+                itemChanged = safeDoParam(item, "DiscomfortModifier = 0.00") or itemChanged
                 -- Vanilla shoulderpads carry Tooltip_item_NoBackpack. After AMS slot
                 -- compatibility changes this becomes misleading, so clear it.
                 if isShoulderpadSlot then
-                    safeSetTooltip(item, nil)
+                    itemChanged = safeSetTooltip(item, nil) or itemChanged
                 end
-                changed = changed + 1
+                if itemChanged then
+                    changed = changed + 1
+                end
             else
                 missing = missing + 1
             end
@@ -567,15 +565,18 @@ local function applySpeedRebalance()
         local item = sm:getItem(fullType)
         if item then
             cacheOriginalWearableStats(item)
+            local itemChanged = false
             if values.run then
-                safeDoParam(item, string.format('RunSpeedModifier = %.2f', values.run))
+                itemChanged = safeDoParam(item, string.format('RunSpeedModifier = %.2f', values.run)) or itemChanged
             end
             if values.combat then
-                safeDoParam(item, string.format('CombatSpeedModifier = %.2f', values.combat))
+                itemChanged = safeDoParam(item, string.format('CombatSpeedModifier = %.2f', values.combat)) or itemChanged
             end
             -- Remove vanilla discomfort accumulation source on known protective gear.
-            safeDoParam(item, 'DiscomfortModifier = 0.00')
-            changed = changed + 1
+            itemChanged = safeDoParam(item, 'DiscomfortModifier = 0.00') or itemChanged
+            if itemChanged then
+                changed = changed + 1
+            end
         else
             missing = missing + 1
         end
@@ -596,8 +597,9 @@ local function applySpeedRebalance()
                 local canEquip = safeScriptString(it, "canBeEquipped")
                 if bodyLoc ~= "" or canEquip ~= "" then
                     cacheOriginalWearableStats(it)
-                    safeDoParam(it, 'DiscomfortModifier = 0.00')
-                    discomfortZeroed = discomfortZeroed + 1
+                    if safeDoParam(it, 'DiscomfortModifier = 0.00') then
+                        discomfortZeroed = discomfortZeroed + 1
+                    end
                 end
             end
         end
@@ -612,13 +614,33 @@ local function applySpeedRebalance()
     ))
 end
 
--- Lifecycle hooks.
-if Events and Events.OnGameBoot and type(Events.OnGameBoot.Add) == "function" then
-    Events.OnGameBoot.Add(applySpeedRebalance)
+SpeedRebalance.apply = applySpeedRebalance
+
+function SpeedRebalance.registerEvents()
+    for eventName, handler in pairs(SpeedRebalance._eventHandlers or {}) do
+        local event = Events and Events[eventName] or nil
+        if event and type(event.Remove) == "function" then
+            pcall(event.Remove, handler)
+        end
+    end
+
+    local handlers = {}
+    local registeredCount = 0
+    local eventNames = { "OnGameBoot", "OnMainMenuEnter", "OnGameStart" }
+    for i = 1, #eventNames do
+        local eventName = eventNames[i]
+        local event = Events and Events[eventName] or nil
+        if event and type(event.Add) == "function" then
+            event.Add(applySpeedRebalance)
+            handlers[eventName] = applySpeedRebalance
+            registeredCount = registeredCount + 1
+        end
+    end
+    SpeedRebalance._eventHandlers = handlers
+    ArmorMakesSense._speedRebalanceLoaded = registeredCount > 0
+    return ArmorMakesSense._speedRebalanceLoaded
 end
-if Events and Events.OnMainMenuEnter and type(Events.OnMainMenuEnter.Add) == "function" then
-    Events.OnMainMenuEnter.Add(applySpeedRebalance)
-end
-if Events and Events.OnGameStart and type(Events.OnGameStart.Add) == "function" then
-    Events.OnGameStart.Add(applySpeedRebalance)
-end
+
+SpeedRebalance.registerEvents()
+
+return SpeedRebalance

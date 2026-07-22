@@ -1,10 +1,11 @@
 ArmorMakesSense = ArmorMakesSense or {}
+ArmorMakesSense.SlotCompat = ArmorMakesSense.SlotCompat or {}
+local SlotCompat = ArmorMakesSense.SlotCompat
 
 -- Module load guard.
 if ArmorMakesSense._slotCompatLoaded then
-    return
+    return SlotCompat
 end
-ArmorMakesSense._slotCompatLoaded = true
 
 local function log(msg)
     print('[ArmorMakesSense] ' .. tostring(msg))
@@ -50,13 +51,14 @@ end
 local function registerCustomLocations()
     if not BodyLocations or not ItemBodyLocation or not ResourceLocation then
         log("SlotCompat skipped: BodyLocations/ItemBodyLocation/ResourceLocation unavailable")
-        return
+        return false
     end
 
-    local group = BodyLocations.getGroup and BodyLocations.getGroup("Human")
+    local okGroup, group = pcall(BodyLocations.getGroup, "Human")
+    group = okGroup and group or nil
     if not group then
         log("SlotCompat skipped: Human BodyLocationGroup unavailable")
-        return
+        return false
     end
 
     -- Stable id map for AMS custom body locations.
@@ -239,7 +241,27 @@ local function registerCustomLocations()
             resolvedCount = resolvedCount + 1
         end
     end
-    log(string.format("SlotCompat initialized: register attempts=%d, resolved locations=%d", registeredCount, resolvedCount))
+    local complete = resolvedCount == 8
+    log(string.format(
+        "SlotCompat %s: register attempts=%d, resolved locations=%d/8",
+        complete and "initialized" or "incomplete",
+        registeredCount,
+        resolvedCount
+    ))
+    return complete
 end
 
-registerCustomLocations()
+function SlotCompat.initialize()
+    if ArmorMakesSense._slotCompatLoaded then
+        return true
+    end
+    if not registerCustomLocations() then
+        return false
+    end
+    ArmorMakesSense._slotCompatLoaded = true
+    return true
+end
+
+SlotCompat.initialize()
+
+return SlotCompat

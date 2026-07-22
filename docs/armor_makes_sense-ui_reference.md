@@ -2,9 +2,11 @@
 
 ## Tooltip Integration
 
-`client/core/ArmorMakesSense_UITooltip.lua` patches `ISToolTipInv.render` and
-only intercepts wearable-item tooltips. It builds rows through the vanilla
-`ObjectTooltip` layout returned by `InventoryItem:DoTooltipEmbedded(...)`.
+`client/core/ArmorMakesSense_UITooltip.lua` extends `ISToolTipInv.render` without
+replacing an item's `DoTooltip` implementation. AMS lets the current tooltip
+owner build its normal layout and contributes wearable rows immediately before
+that layout is finalized. When `EuryTooltipController` is installed, AMS
+registers as a row provider instead of wrapping layout finalization.
 If the vanilla tooltip class is not ready during the first UI update, AMS
 defers installation and retries on a later update.
 
@@ -13,7 +15,9 @@ defers installation and retries on a later update.
 | Burden | `physicalLoad >= 1.5` |
 | Breathing | `airflowResistance >= 0.8` |
 
-The burden bar uses a per-item maximum of `28`.
+The standalone extension uses a burden bar with a per-item maximum of `28`.
+The shared-controller provider expresses the same fraction as a percentage
+because that controller's row contract is text-based.
 
 Breathing labels:
 
@@ -23,8 +27,8 @@ Breathing labels:
 | `airflowResistance >= 2.0` and unsealed | Restricted |
 | `sealedRestriction > 0` | Heavily Restricted |
 
-Tooltip cleanup removes vanilla backpack-conflict rows from reslotted shoulder
-pads.
+Shoulder-pad backpack-conflict text is cleared from the reslotted script item by
+the speed and slot rebalance pass, outside tooltip rendering.
 
 ## Burden Panel
 

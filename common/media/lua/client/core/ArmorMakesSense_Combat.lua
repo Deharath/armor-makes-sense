@@ -14,8 +14,7 @@ function Combat.onPlayerAttackFinished(attacker, weapon)
     if ClientRuntime.isDisabled() or not attacker then
         return
     end
-    local player = ClientRuntime.getLocalPlayer()
-    if not player or attacker ~= player then
+    if not ClientRuntime.isLocalPlayer(attacker) then
         return
     end
 
@@ -24,7 +23,7 @@ function Combat.onPlayerAttackFinished(attacker, weapon)
         return
     end
 
-    Strain.applyArmorStrainOverlay(player, weapon, options)
+    Strain.applyArmorStrainOverlay(attacker, weapon, options)
 end
 
 return Combat

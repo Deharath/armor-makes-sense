@@ -40,11 +40,11 @@ local function getPlayerFromIndex(playerIndex)
     return nil
 end
 
-local function sendSleepBedType(bedType)
+local function sendSleepBedType(player, bedType)
     if type(isClient) ~= "function" or isClient() ~= true or type(sendClientCommand) ~= "function" then
         return
     end
-    pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.SLEEP_BED_TYPE_COMMAND), {
+    pcall(sendClientCommand, player, tostring(MP.NET_MODULE), tostring(MP.SLEEP_BED_TYPE_COMMAND), {
         bed_type = tostring(bedType or ""),
     })
 end
@@ -81,11 +81,11 @@ end
 
 local function wrapSleepDialog()
     if ArmorMakesSense._sleepDialogPlannerWrapped then
-        return
+        return true
     end
     pcall(require, "ISUI/ISSleepDialog")
     if type(ISSleepDialog) ~= "table" or type(ISSleepDialog.initialise) ~= "function" then
-        return
+        return false
     end
     local original = ISSleepDialog.initialise
     ISSleepDialog.initialise = function(self)
@@ -103,16 +103,17 @@ local function wrapSleepDialog()
         spinBox.selected = adjusted
     end
     ArmorMakesSense._sleepDialogPlannerWrapped = true
+    return true
 end
 
 local function wrapAutoSleep()
     if ArmorMakesSense._autoSleepPlannerWrapped then
-        return
+        return true
     end
     pcall(require, "ISUI/ISWorldObjectContextMenu")
     if type(ISWorldObjectContextMenu) ~= "table"
         or type(ISWorldObjectContextMenu.onSleepWalkToComplete) ~= "function" then
-        return
+        return false
     end
 
     local original = ISWorldObjectContextMenu.onSleepWalkToComplete
@@ -139,11 +140,12 @@ local function wrapAutoSleep()
             safeMethod(player, "setForceWakeUpTime", (timeOfDay + adjustedHours) % 24)
         end
         if hasSleepPenalty then
-            sendSleepBedType(safeMethod(player, "getBedType"))
+            sendSleepBedType(player, safeMethod(player, "getBedType"))
         end
         return result
     end
     ArmorMakesSense._autoSleepPlannerWrapped = true
+    return true
 end
 
 function SleepHooks.wrapSleepPlanning()
@@ -154,8 +156,11 @@ function SleepHooks.wrapSleepPlanning()
         end
         return false
     end
-    wrapSleepDialog()
-    wrapAutoSleep()
+    local dialogInstalled = wrapSleepDialog()
+    local autoSleepInstalled = wrapAutoSleep()
+    if not dialogInstalled or not autoSleepInstalled then
+        return nil
+    end
     if not ArmorMakesSense._sleepPlannerHooksLogged then
         ArmorMakesSense._sleepPlannerHooksLogged = true
         log("wrapped sleep duration hooks")

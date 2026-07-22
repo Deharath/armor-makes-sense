@@ -16,9 +16,12 @@ tests=(
   test_runtime_state.lua
   test_options.lua
   test_stats_authority.lua
+  test_local_player_ownership.lua
   test_simulation.lua
   test_ui_tooltip.lua
   test_sleep_hooks.lua
+  test_slot_compat.lua
+  test_speed_rebalance_lifecycle.lua
   test_tick_coordinator.lua
   test_client_bootstrap.lua
   test_dev_panel.lua

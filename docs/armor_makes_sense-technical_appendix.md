@@ -28,9 +28,9 @@ compatibility provider, and asks `ArmorMakesSense_Bootstrap.lua` to select
 exactly one client role. Production modules require their collaborators
 directly. `ArmorMakesSense_ClientRuntime.lua` owns client lifecycle state,
 logging, version reporting, and role-aware player-state access. In singleplayer,
-`EveryOneMinute` advances the gameplay model,
-`OnPlayerUpdate` handles sleep-time updates, and combat events apply the local
-muscle-strain overlay. Sleeping advances fatigue recovery penalties but pauses
+`EveryOneMinute` advances the gameplay model for every active local player,
+`OnPlayerUpdate` handles sleep-time updates, and combat events apply the
+attacking local player's muscle-strain overlay. Sleeping advances fatigue recovery penalties but pauses
 the endurance pipeline. The SP runtime registers only
 handlers with active behavior; its former no-op weapon-swing subscription was
 removed.
@@ -47,10 +47,11 @@ and benchmark speed restoration uses PZ's configured `getTrueMultiplier` value.
 `ArmorMakesSense_MPServerRuntime.lua` owns endurance, sleep fatigue, wake
 correction, and melee strain. Its weapon-swing handler delegates eligibility,
 vanilla-option gating, magnitude, and stat application to the same shared
-strain policy used in SP. Clients request snapshots at session boundaries,
+strain policy used in SP. Clients request player-addressed snapshots at session boundaries,
 after local clothing changes, or when cached state is missing or stale. Normal
-updates are pushed by the server. Requests carry only their reason and the
-client's latest incident sequence. Responses transport numeric thermal signals;
+updates are pushed by the server. Requests carry their local player identity,
+reason, and latest incident sequence. Responses transport the addressed online
+player id and numeric thermal signals;
 the client derives hot/cold presentation from those values.
 
 The MP client runtime is inert when loaded. The production bootstrap calls its
@@ -181,8 +182,9 @@ not duplicate `common/media`.
   sleep hooks, and script-item rebalance code
 - `ArmorMakesSense_Options.lua`: canonical typed sandbox-option resolution for
   SP and MP authority
-- `ArmorMakesSense_StatsShared.lua`: character stat, body-state, and metabolic
-  telemetry IO with MP client writes blocked at the authority boundary
+- `ArmorMakesSense_StatsShared.lua`: production endurance/fatigue authority plus
+  read-only body-state and metabolic telemetry; MP client writes are blocked at
+  the authority boundary
 - `ArmorMakesSense_ArmorClassifier.lua`: canonical armor signals and classification
 - `ArmorMakesSense_BreathingClassifier.lua`: canonical respiratory equipment signals
 - `ArmorMakesSense_LoadModelShared.lua`: per-item signals and canonical worn-gear analysis for gameplay, UI, MP snapshots, and reports
@@ -222,8 +224,8 @@ not duplicate `common/media`.
 - `ArmorMakesSense_Combat.lua`: singleplayer combat event handling
 - `ArmorMakesSense_UI.lua`: Burden panel, character-tab integration, help, and
   support export
-- `ArmorMakesSense_UITooltip.lua`: wearable-item tooltip patching and AMS
-  burden and breathing rows
+- `ArmorMakesSense_UITooltip.lua`: compositional wearable tooltip extension and
+  optional shared-controller provider for AMS burden and breathing rows
 - `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
 - `ArmorMakesSense_IncidentTrace.lua`: mirrored MP incident storage and report
   formatting
@@ -246,6 +248,8 @@ is to run controlled substitutions and scenarios rather than game runtime.
   conversion to avoid Kahlua treating extra return slots as a numeric base
 - `client/testing/ArmorMakesSense_Reset.lua`: destructive equilibrium and body
   reset helpers used by controlled tests
+- `client/testing/ArmorMakesSense_TestStats.lua`: development-only thirst,
+  discomfort, wetness, and body-temperature setters
 - benchmark catalogs and scenarios are validated before execution; unknown
   blocks or activities, missing production runtime telemetry, and incomplete
   parser inputs fail closed instead of producing zero-filled measurements

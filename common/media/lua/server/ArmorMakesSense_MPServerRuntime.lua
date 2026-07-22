@@ -323,6 +323,7 @@ local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncident
         serverSleeping = isPlayerAsleep(playerObj),
         reason = reason,
     }, not lightweight)
+    args.player_online_id = tonumber(safeCall(playerObj, "getOnlineID")) or -1
 
     if not lightweight then
         local incidentSeq, incidentPayload = IncidentRecorder.buildSnapshotIncidentPayload(playerObj, mpState, clientIncidentSeq)
@@ -660,42 +661,54 @@ local function logBootBanner(contextTag)
     ))
 end
 
+local function onGameBoot()
+    logBootBanner("OnGameBoot")
+end
+
 local function registerEvents()
-    if ArmorMakesSense._mpServerRuntimeRegistered then
-        return
+    local requiredHandlers = {
+        OnClientCommand = onClientCommand,
+        EveryOneMinute = onEveryOneMinute,
+    }
+    local optionalHandlers = {
+        OnWeaponSwing = onWeaponSwing,
+        OnPlayerUpdate = onPlayerUpdate,
+        OnGameBoot = onGameBoot,
+    }
+    for eventName in pairs(requiredHandlers) do
+        local event = Events and Events[eventName] or nil
+        if not event or type(event.Add) ~= "function" then
+            ArmorMakesSense._mpServerRuntimeRegistered = false
+            log("runtime registration deferred: Events." .. eventName .. ".Add unavailable")
+            return false
+        end
     end
+
+    for eventName, handler in pairs(ArmorMakesSense._mpServerRuntimeHandlers or {}) do
+        local event = Events[eventName]
+        if event and type(event.Remove) == "function" then
+            pcall(event.Remove, handler)
+        end
+    end
+    local handlers = {}
+    for eventName, handler in pairs(requiredHandlers) do
+        handlers[eventName] = handler
+    end
+    for eventName, handler in pairs(optionalHandlers) do
+        local event = Events and Events[eventName] or nil
+        if event and type(event.Add) == "function" then
+            handlers[eventName] = handler
+        else
+            log("optional runtime hook unavailable: Events." .. eventName .. ".Add")
+        end
+    end
+    for eventName, handler in pairs(handlers) do
+        Events[eventName].Add(handler)
+    end
+    ArmorMakesSense._mpServerRuntimeHandlers = handlers
     ArmorMakesSense._mpServerRuntimeRegistered = true
-
-    if Events and Events.OnClientCommand and type(Events.OnClientCommand.Add) == "function" then
-        Events.OnClientCommand.Add(onClientCommand)
-        log("OnClientCommand runtime handler registered")
-    else
-        log("OnClientCommand.Add unavailable; MP runtime command channel inactive")
-    end
-
-    if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
-        Events.EveryOneMinute.Add(onEveryOneMinute)
-    else
-        log("Events.EveryOneMinute.Add unavailable; server warm tick disabled")
-    end
-
-    if Events and Events.OnWeaponSwing and type(Events.OnWeaponSwing.Add) == "function" then
-        Events.OnWeaponSwing.Add(onWeaponSwing)
-    else
-        log("Events.OnWeaponSwing.Add unavailable; server strain overlay disabled")
-    end
-
-    if Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
-        Events.OnPlayerUpdate.Add(onPlayerUpdate)
-    else
-        log("Events.OnPlayerUpdate.Add unavailable; wake-edge authority disabled")
-    end
-
-    if Events and Events.OnGameBoot and type(Events.OnGameBoot.Add) == "function" then
-        Events.OnGameBoot.Add(function()
-            logBootBanner("OnGameBoot")
-        end)
-    end
+    log("authoritative runtime handlers registered")
+    return true
 end
 
 registerEvents()

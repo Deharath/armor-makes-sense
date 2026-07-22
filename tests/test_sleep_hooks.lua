@@ -68,7 +68,7 @@ end
 
 package.loaded["ArmorMakesSense_SleepHooks"] = nil
 local SleepHooks = require "ArmorMakesSense_SleepHooks"
-Support.assertTrue(SleepHooks.wrapSleepPlanning(), "sleep hook installation")
+Support.assertEqual(SleepHooks.wrapSleepPlanning(), nil, "partial sleep hook installation remains retryable")
 ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
 
 Support.assertEqual(originalCalls, 1, "vanilla sleep workflow called exactly once")
@@ -100,14 +100,15 @@ getServerOptions = function()
     return { getBoolean = function(_, option) return option == "SleepAllowed" end }
 end
 local sentSleepCommand = nil
-sendClientCommand = function(module, command, args)
-    sentSleepCommand = { module = module, command = command, args = args }
+sendClientCommand = function(commandPlayer, module, command, args)
+    sentSleepCommand = { player = commandPlayer, module = module, command = command, args = args }
 end
 ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
 Support.assertClose(wakeHour, 10, 1e-9, "MP sleep duration still adjusts")
 Support.assertEqual(sleepingEventHours, nil, "MP server sleep flow skips local sleeping-event setup")
 Support.assertEqual(sleepingEventCalls, 0, "AMS does not create a client sleeping event in MP")
 Support.assertEqual(sentSleepCommand.command, "sleep_bed_type", "MP sends narrow sleep context command")
+Support.assertEqual(sentSleepCommand.player, player, "MP addresses sleep context to the sleeping player")
 Support.assertEqual(sentSleepCommand.args.bed_type, "averageBed", "MP sends bed type")
 local sleepArgCount = 0
 for _ in pairs(sentSleepCommand.args) do

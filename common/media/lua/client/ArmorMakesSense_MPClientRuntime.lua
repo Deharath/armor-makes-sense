@@ -17,7 +17,6 @@ local UI = require "core/ArmorMakesSense_UI"
 
 local SNAPSHOT_INTERVAL_SECONDS = math.max(1, math.floor(tonumber(MP.SNAPSHOT_FALLBACK_SECONDS) or 2))
 local SNAPSHOT_STALE_SECONDS = math.max(10, SNAPSHOT_INTERVAL_SECONDS * 4)
-local firstSnapshotLogged = false
 local uiHooksEnsured = false
 local markUiDirty
 local SLEEP_FATIGUE_CORRECTION_EPSILON = 0.002
@@ -57,7 +56,7 @@ local function clearSnapshotState(playerObj, resetLogLatch)
     state.mpServerSnapshot = nil
     mpClient.lastSnapshotWallSecond = 0
     if resetLogLatch then
-        firstSnapshotLogged = false
+        mpClient.firstSnapshotLogged = false
     end
     if hadSnapshot then
         markUiDirty()
@@ -253,7 +252,13 @@ local function sendSnapshotRequest(playerObj, reason)
         incident_seq = tonumber(IncidentTrace.getSeq()) or 0,
     }
 
-    local ok, err = pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.REQUEST_SNAPSHOT_COMMAND), args)
+    local ok, err = pcall(
+        sendClientCommand,
+        playerObj,
+        tostring(MP.NET_MODULE),
+        tostring(MP.REQUEST_SNAPSHOT_COMMAND),
+        args
+    )
     if not ok then
         log("snapshot request send failed: " .. tostring(err))
         return false
@@ -263,13 +268,27 @@ local function sendSnapshotRequest(playerObj, reason)
     return true
 end
 
+local function resolveSnapshotPlayer(args)
+    local expectedOnlineId = tonumber(args and args.player_online_id)
+    local fallback = nil
+    local matched = nil
+    ClientRuntime.forEachLocalPlayer(function(playerObj)
+        fallback = fallback or playerObj
+        local onlineId = tonumber(Utils.safeMethod(playerObj, "getOnlineID"))
+        if expectedOnlineId ~= nil and onlineId == expectedOnlineId then
+            matched = playerObj
+        end
+    end)
+    return matched or fallback
+end
+
 local function onServerCommand(module, command, args)
     if tostring(module) ~= tostring(MP.NET_MODULE) then
         return
     end
 
     if tostring(command) == tostring(MP.SNAPSHOT_COMMAND) then
-        local playerObj = ClientRuntime.getLocalPlayer()
+        local playerObj = resolveSnapshotPlayer(args)
         local state, mpClient = ensureState(playerObj)
         if not state or not mpClient then
             return
@@ -288,8 +307,8 @@ local function onServerCommand(module, command, args)
         if type(args.incident_trace) == "table" then
             IncidentTrace.applyServerIncident(args.incident_trace)
         end
-        if not firstSnapshotLogged then
-            firstSnapshotLogged = true
+        if not mpClient.firstSnapshotLogged then
+            mpClient.firstSnapshotLogged = true
             log(string.format(
                 "received first snapshot load_norm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f",
                 tonumber(snapshot.loadNorm) or 0,
@@ -307,11 +326,12 @@ local function onServerCommand(module, command, args)
 end
 
 local function onConnected()
-    local player = ClientRuntime.getLocalPlayer()
-    clearSnapshotState(player, true)
     IncidentTrace.clear()
-    ensureMpUiHooks(player)
-    sendSnapshotRequest(player, "OnConnected")
+    ClientRuntime.forEachLocalPlayer(function(player)
+        clearSnapshotState(player, true)
+        ensureMpUiHooks(player)
+        sendSnapshotRequest(player, "OnConnected")
+    end)
 end
 
 function ams_mp_snapshot_status()
@@ -349,22 +369,29 @@ local function onCreatePlayer(_playerIndex, playerObj)
 end
 
 local function onClothingUpdated(changedPlayer)
-    local player = ClientRuntime.getLocalPlayer()
-    if changedPlayer and changedPlayer ~= player then
+    if changedPlayer and not ClientRuntime.isLocalPlayer(changedPlayer) then
         return
     end
-    expireStaleSnapshot(player)
-    sendSnapshotRequest(player, "OnClothingUpdated")
+    if changedPlayer then
+        expireStaleSnapshot(changedPlayer)
+        sendSnapshotRequest(changedPlayer, "OnClothingUpdated")
+        return
+    end
+    ClientRuntime.forEachLocalPlayer(function(player)
+        expireStaleSnapshot(player)
+        sendSnapshotRequest(player, "OnClothingUpdated")
+    end)
 end
 
 local function onEveryOneMinute()
-    local player = ClientRuntime.getLocalPlayer()
-    local expired = expireStaleSnapshot(player)
-    ensureMpUiHooks(player)
-    local state = player and ensureState(player) or nil
-    if expired or not (state and type(state.mpServerSnapshot) == "table") then
-        sendSnapshotRequest(player, "SnapshotRecovery")
-    end
+    ClientRuntime.forEachLocalPlayer(function(player)
+        local expired = expireStaleSnapshot(player)
+        ensureMpUiHooks(player)
+        local state = ensureState(player)
+        if expired or not (state and type(state.mpServerSnapshot) == "table") then
+            sendSnapshotRequest(player, "SnapshotRecovery")
+        end
+    end)
 end
 
 local function logBootBanner(contextTag)
@@ -379,10 +406,7 @@ local function logBootBanner(contextTag)
     ))
 end
 
-function MPClientRuntime.registerEvents(_mod)
-    if ArmorMakesSense._mpClientRuntimeRegistered then
-        return true
-    end
+function MPClientRuntime.registerEvents(mod)
     local requiredEvents = {
         "OnServerCommand",
         "OnConnected",
@@ -398,15 +422,46 @@ function MPClientRuntime.registerEvents(_mod)
         end
     end
 
+    local previousHandlers = mod and mod._mpClientRuntimeHandlers or nil
+    for eventName, handler in pairs(previousHandlers or {}) do
+        local event = Events[eventName]
+        if event and type(event.Remove) == "function" then
+            pcall(event.Remove, handler)
+        end
+    end
+
+    local handlers = {
+        OnServerCommand = onServerCommand,
+        OnConnected = onConnected,
+        OnCreatePlayer = onCreatePlayer,
+        OnClothingUpdated = onClothingUpdated,
+        EveryOneMinute = onEveryOneMinute,
+    }
+    local added = {}
+    for eventName, handler in pairs(handlers) do
+        local ok, failure = pcall(Events[eventName].Add, handler)
+        if not ok then
+            for addedEventName, addedHandler in pairs(added) do
+                local event = Events[addedEventName]
+                if event and type(event.Remove) == "function" then
+                    pcall(event.Remove, addedHandler)
+                end
+            end
+            ArmorMakesSense._mpClientRuntimeRegistered = false
+            log("runtime registration failed: Events." .. eventName .. ".Add raised " .. tostring(failure))
+            return false
+        end
+        added[eventName] = handler
+    end
     ArmorMakesSense._mpClientRuntimeRegistered = true
-    Events.OnServerCommand.Add(onServerCommand)
-    Events.OnConnected.Add(onConnected)
-    Events.OnCreatePlayer.Add(onCreatePlayer)
-    Events.OnClothingUpdated.Add(onClothingUpdated)
-    Events.EveryOneMinute.Add(onEveryOneMinute)
+    if mod then
+        mod._mpClientRuntimeHandlers = handlers
+    end
     logBootBanner("load")
-    clearSnapshotState(ClientRuntime.getLocalPlayer(), true)
-    sendSnapshotRequest(ClientRuntime.getLocalPlayer(), "load")
+    ClientRuntime.forEachLocalPlayer(function(player)
+        clearSnapshotState(player, true)
+        sendSnapshotRequest(player, "load")
+    end)
     return true
 end
 

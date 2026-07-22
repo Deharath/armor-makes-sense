@@ -47,10 +47,9 @@ function Runtime.onEveryOneMinute()
     if ClientRuntime.isDisabled() then
         return
     end
-    local player = ClientRuntime.getLocalPlayer()
-    if player then
+    ClientRuntime.forEachLocalPlayer(function(player)
         ClientRuntime.runGuarded("EveryOneMinute", Tick.tickPlayer, player)
-    end
+    end)
 end
 
 function Runtime.onPlayerUpdate(playerObj)
@@ -58,7 +57,7 @@ function Runtime.onPlayerUpdate(playerObj)
         return
     end
     local player = playerObj or ClientRuntime.getLocalPlayer()
-    if not player then
+    if not ClientRuntime.isLocalPlayer(player) then
         return
     end
 

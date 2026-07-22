@@ -3,7 +3,8 @@ ArmorMakesSense = ArmorMakesSense or {}
 require "ArmorMakesSense_Config"
 require "ArmorMakesSense_Compat"
 require "ArmorMakesSense_ArmorClassifier"
-require "ArmorMakesSense_SlotCompat"
+local SlotCompat = require "ArmorMakesSense_SlotCompat"
+local SpeedRebalance = require "ArmorMakesSense_SpeedRebalance"
 
 local Bootstrap = require "core/ArmorMakesSense_Bootstrap"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
@@ -16,7 +17,20 @@ local Runtime = require "core/ArmorMakesSense_Runtime"
 local UI = require "core/ArmorMakesSense_UI"
 
 local Mod = ArmorMakesSense
-local sleepHooksInstallResolved = false
+local previousMainHandlers = Mod._mainEventHandlers or {}
+Mod._mainEventHandlers = {}
+
+local function removeEventHandler(eventName, handler)
+    local event = Events and Events[eventName] or nil
+    if event and type(event.Remove) == "function" and type(handler) == "function" then
+        pcall(event.Remove, handler)
+    end
+end
+
+for eventName, handler in pairs(previousMainHandlers) do
+    removeEventHandler(eventName, handler)
+end
+Mod._sleepHooksInstallResolved = false
 
 local function registerCompatProvider()
     local compat = ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
@@ -87,32 +101,35 @@ local function ensureClientUi(player)
 end
 
 local function isEligibleLocalPlayer(playerObj)
-    if not playerObj then
-        return false
-    end
-    if type(playerObj.isLocalPlayer) == "function" then
-        local ok, isLocal = pcall(playerObj.isLocalPlayer, playerObj)
-        if ok and not isLocal then
-            return false
-        end
-    end
-    return true
+    return ClientRuntime.isLocalPlayer(playerObj)
 end
 
 local function tryInstallSleepHooks(playerObj)
-    if sleepHooksInstallResolved or not isEligibleLocalPlayer(playerObj) then
-        return
+    if Mod._sleepHooksInstallResolved or not isEligibleLocalPlayer(playerObj) then
+        return Mod._sleepHooksInstallResolved
     end
     local loaded, SleepHooks = pcall(require, "ArmorMakesSense_SleepHooks")
-    if loaded and type(SleepHooks) == "table" and type(SleepHooks.wrapSleepPlanning) == "function" then
-        local installed = SleepHooks.wrapSleepPlanning()
-        if installed == false then
-            ClientRuntime.log("sleep planner hooks delegated to CMS coordinator after confirmed local player creation")
-        else
-            ClientRuntime.log("sleep planner hooks installed after confirmed local player creation")
-        end
+    if not loaded then
+        ClientRuntime.logErrorOnce("sleep_hooks_require_failed", "sleep planner module unavailable: " .. tostring(SleepHooks))
+        return false
     end
-    sleepHooksInstallResolved = true
+    if type(SleepHooks) ~= "table" or type(SleepHooks.wrapSleepPlanning) ~= "function" then
+        ClientRuntime.logErrorOnce("sleep_hooks_invalid", "sleep planner module did not expose wrapSleepPlanning")
+        return false
+    end
+
+    local installed = SleepHooks.wrapSleepPlanning()
+    if installed == nil then
+        ClientRuntime.logOnce("sleep_hooks_deferred", "sleep planner dependencies not ready; installation deferred")
+        return false
+    end
+    Mod._sleepHooksInstallResolved = true
+    if installed == false then
+        ClientRuntime.log("sleep planner hooks delegated to CMS coordinator after confirmed local player creation")
+    else
+        ClientRuntime.log("sleep planner hooks installed after confirmed local player creation")
+    end
+    return true
 end
 
 local function onCreatePlayer(_playerIndex, playerObj)
@@ -121,7 +138,23 @@ local function onCreatePlayer(_playerIndex, playerObj)
         return
     end
     ensureClientUi(player)
+    if SlotCompat and type(SlotCompat.initialize) == "function" then
+        SlotCompat.initialize()
+    end
+    if SpeedRebalance and type(SpeedRebalance.registerEvents) == "function"
+        and not ArmorMakesSense._speedRebalanceLoaded then
+        SpeedRebalance.registerEvents()
+    end
     tryInstallSleepHooks(player)
+end
+
+local function onPlayerUpdate(playerObj)
+    if Mod._sleepHooksInstallResolved then
+        removeEventHandler("OnPlayerUpdate", Mod._mainEventHandlers.OnPlayerUpdate)
+        Mod._mainEventHandlers.OnPlayerUpdate = nil
+        return
+    end
+    tryInstallSleepHooks(playerObj)
 end
 
 registerCompatProvider()
@@ -134,6 +167,11 @@ end
 
 if Events and Events.OnCreatePlayer and type(Events.OnCreatePlayer.Add) == "function" then
     Events.OnCreatePlayer.Add(onCreatePlayer)
+    Mod._mainEventHandlers.OnCreatePlayer = onCreatePlayer
+end
+if Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
+    Events.OnPlayerUpdate.Add(onPlayerUpdate)
+    Mod._mainEventHandlers.OnPlayerUpdate = onPlayerUpdate
 end
 
 return Mod

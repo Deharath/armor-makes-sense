@@ -13,7 +13,7 @@ local ClientRuntime = Core.ClientRuntime
 local warned = {}
 local errorKeys = {}
 local runtimeDisabled = false
-local startupCheckedPlayer = false
+local startupCheckedPlayers = setmetatable({}, { __mode = "k" })
 
 ClientRuntime.SCRIPT_VERSION = tostring(MP.SCRIPT_VERSION)
 ClientRuntime.SCRIPT_BUILD = tostring(MP.SCRIPT_BUILD)
@@ -68,6 +68,62 @@ function ClientRuntime.getLocalPlayer()
     return player
 end
 
+function ClientRuntime.forEachLocalPlayer(callback)
+    if type(callback) ~= "function" then
+        return 0
+    end
+
+    local visited = {}
+    local count = 0
+    local activeCount = nil
+    if type(_G.getNumActivePlayers) == "function" then
+        local ok, value = pcall(_G.getNumActivePlayers)
+        if ok then
+            activeCount = math.max(0, math.floor(tonumber(value) or 0))
+        end
+    end
+
+    if activeCount and type(_G.getSpecificPlayer) == "function" then
+        for playerIndex = 0, activeCount - 1 do
+            local ok, player = pcall(_G.getSpecificPlayer, playerIndex)
+            if ok and player and not visited[player] then
+                visited[player] = true
+                count = count + 1
+                callback(player, playerIndex)
+            end
+        end
+    end
+
+    if count == 0 then
+        local player = ClientRuntime.getLocalPlayer()
+        if player then
+            callback(player, 0)
+            count = 1
+        end
+    end
+    return count
+end
+
+function ClientRuntime.isLocalPlayer(playerObj)
+    if not playerObj then
+        return false
+    end
+    if type(playerObj.isLocalPlayer) == "function" then
+        local ok, localPlayer = pcall(playerObj.isLocalPlayer, playerObj)
+        if ok then
+            return localPlayer == true
+        end
+    end
+
+    local matched = false
+    ClientRuntime.forEachLocalPlayer(function(candidate)
+        if candidate == playerObj then
+            matched = true
+        end
+    end)
+    return matched
+end
+
 function ClientRuntime.getLoadedModVersion()
     local info = type(getModInfoByID) == "function" and getModInfoByID("ArmorMakesSense") or nil
     local version = ClientRuntime.safeMethod(info, "getVersion") or ClientRuntime.safeMethod(info, "getModVersion")
@@ -118,7 +174,7 @@ local function hasFunction(target, name)
 end
 
 function ClientRuntime.runPlayerStartupChecks(player)
-    if startupCheckedPlayer or runtimeDisabled then
+    if runtimeDisabled or (player and startupCheckedPlayers[player]) then
         return not runtimeDisabled
     end
     if not player then
@@ -150,7 +206,7 @@ function ClientRuntime.runPlayerStartupChecks(player)
         return false
     end
 
-    startupCheckedPlayer = true
+    startupCheckedPlayers[player] = true
     ClientRuntime.log(string.format(
         "[BOOT] startup checks passed version=%s build=%s",
         ClientRuntime.getLoadedModVersion(),

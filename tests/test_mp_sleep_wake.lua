@@ -57,6 +57,11 @@ package.loaded["core/ArmorMakesSense_IncidentTrace"] = {
 }
 package.loaded["core/ArmorMakesSense_ClientRuntime"] = {
     getLocalPlayer = function() return player end,
+    forEachLocalPlayer = function(callback)
+        callback(player, 0)
+        return 1
+    end,
+    isLocalPlayer = function(candidate) return candidate == player end,
 }
 package.loaded["ArmorMakesSense_Options"] = {
     get = function() return { EnableSleepPenaltyModel = sleepEnabled } end,
@@ -70,7 +75,10 @@ GameClient = { bClient = true, ingame = true }
 CharacterStat = nil
 isClient = function() return true end
 isServer = function() return false end
-sendClientCommand = function() end
+local snapshotRequestPlayer = nil
+sendClientCommand = function(commandPlayer)
+    snapshotRequestPlayer = commandPlayer
+end
 getTimestampMs = function() return 1000 end
 getSleepingEvent = function()
     return {
@@ -102,6 +110,7 @@ Events = {
 package.loaded["ArmorMakesSense_MPClientRuntime"] = nil
 local MPClientRuntime = require "ArmorMakesSense_MPClientRuntime"
 Support.assertTrue(MPClientRuntime.registerEvents(), "MP client runtime registration")
+Support.assertEqual(snapshotRequestPlayer, player, "MP snapshot request addresses the local player")
 
 handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
     serverSleeping = false,

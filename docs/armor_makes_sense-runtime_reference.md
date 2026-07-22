@@ -17,13 +17,20 @@ production role has been selected.
 - `Events.OnMainMenuEnter`
 - `Events.OnGameStart`
 
+The module retains those handlers and replaces them on Lua reload. Its loaded
+state means that at least one lifecycle hook was actually registered; a client
+creation retry is available when the event table was not ready on first load.
+
 Each run:
 - applies per-item speed overrides
 - zeroes script discomfort on known gear
 - zeroes discomfort globally for wearable script items
 - applies AMS body-location reslots
 
-`ArmorMakesSense_SlotCompat.lua` registers custom body locations and compatibility rules at module load.
+`ArmorMakesSense_SlotCompat.lua` attempts to register custom body locations at
+module load and retries after local-player creation if the Java location APIs
+were not ready. It marks initialization complete only after all eight custom
+locations resolve.
 
 The singleplayer `Runtime.registerEvents` path:
 - requires `Events.EveryOneMinute.Add`
@@ -39,7 +46,8 @@ shared client UI and options modules directly for installation and invalidation.
 ## Per-Minute and Per-Frame Loops
 
 `EveryOneMinute` path:
-- `tickPlayer(player)`
+- enumerates every active local player
+- calls `tickPlayer(player)` once for each player
 
 `OnPlayerUpdate` path:
 - sleep-time per-frame `tickPlayer`
@@ -47,6 +55,10 @@ shared client UI and options modules directly for installation and invalidation.
 Development builds register separate benchmark and environment-lock handlers
 from `client/testing/ArmorMakesSense_00_DevBootstrap.lua`. Production runtime
 handlers do not inspect or mutate development state.
+
+MP snapshot requests use PZ's player-aware `sendClientCommand` overload. Server
+responses include the addressed online player id so a split-screen client stores
+each snapshot against the correct local runtime state.
 
 ## Tick Pipeline (`Tick.tickPlayer`)
 

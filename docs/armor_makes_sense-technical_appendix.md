@@ -67,10 +67,25 @@ Both coordinators omit the endurance callback during sleep.
 ### Vanilla Runtime Contracts
 
 The model integrations were checked against the installed Project Zomboid
-42.19.0 runtime. AMS preserves the server-delegated multiplayer sleep branch:
-when vanilla allows client sleep through `SleepAllowed`, the client adjusts the
-wake duration and sends only a bed-type hint without initializing a second
-local `SleepingEvent`.
+42.19.0 runtime. Vanilla alone initializes `SleepingEvent`; AMS never calls
+`setPlayerFallAsleep` after vanilla has started sleep because that API resets
+sleep-event state and reapplies the delay-to-sleep timer. When a planner penalty
+is active, AMS only extends vanilla's existing wake time. With the penalty
+disabled, it leaves the planned wake time untouched. Active multiplayer sleep
+clients send only a bed-type hint and preserve the server-delegated
+`SleepAllowed` branch.
+The server applies that hint to the vanilla player so continuous bed recovery
+matches the client, while AMS retains only the bounded wake reconciliation
+needed when the server does not observe vanilla's client-side wake adjustment.
+Authoritative MP wake reconciliation calls vanilla `SleepingEvent:wakeUp` with
+packet echo suppressed instead of directly editing player sleep fields. AMS
+does not claim this authority when its sleep model is disabled or CMS owns
+fatigue coordination.
+
+All AMS/CMS sleep handoffs resolve through
+`ArmorMakesSense_SleepOwnership.lua`. Planner, continuous-fatigue, and
+wake-adjustment ownership are separate capabilities; gameplay coordinators do
+not duplicate compatibility probes or capability names.
 
 Thermoregulator node samples are weighted by vanilla `ThermalNode` skin
 surface. Equal weighting is used only when `getSkinSurface()` is unavailable.

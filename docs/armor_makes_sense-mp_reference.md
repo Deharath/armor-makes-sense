@@ -128,15 +128,28 @@ The server tracks the sleep edge independently from general runtime sleep state.
   FATIGUE synchronization with mask `16`.
 - Sleeping and wake-transition snapshots may update client fatigue.
 - Awake snapshots with other reasons do not lower client fatigue.
-- A server-declared wake clears local `asleep`, `asleepTime`, and
-  `forceWakeUpTime` state.
+- A server-declared wake runs vanilla `SleepingEvent:wakeUp(player, true)`,
+  preserving fade-in, event cleanup, bed effects, and sleep bookkeeping without
+  echoing another wake packet.
+- The client bed-type hint is applied to the server player, allowing vanilla's
+  continuous sleep recovery to use the same bed multiplier on both sides.
 
 These limits are wall-clock based, so accelerated co-op sleep does not multiply
 network traffic.
 
 Wake fatigue is derived and synchronized by the server. Released runtime does
 not accept a client-supplied fatigue correction; the development-only sleep
-diagnostic command is handled only by the excluded diagnostics modules.
+diagnostic command is handled only by the excluded diagnostics modules. When
+the server did not observe a native bed wake adjustment, it synthesizes the
+versioned mean adjustment without mistaking ordinary final recovery for it.
+When the AMS sleep model is disabled, or CMS advertises fatigue coordination,
+AMS sends no sleep fatigue synchronization and performs no client wake or
+fatigue reconciliation.
+
+The shared `ArmorMakesSense_SleepOwnership.lua` module owns this handoff. CMS
+planner and wake-adjustment capabilities remain independent from continuous
+fatigue authority; an unrelated capability cannot accidentally disable AMS MP
+fatigue synchronization.
 
 ## Multiplayer Transient State
 
@@ -210,6 +223,7 @@ development references and does not rewrite runtime source files.
 - `server/ArmorMakesSense_MPServerRuntime.lua`: gameplay authority
 - `server/ArmorMakesSense_MPIncidentRecorder.lua`: bounded incident capture
 - `shared/ArmorMakesSense_MPCompat.lua`: protocol constants
+- `shared/ArmorMakesSense_SleepOwnership.lua`: AMS/CMS sleep authority policy
 - `shared/ArmorMakesSense_MPSnapshotCodec.lua`: versioned snapshot wire codec
 - `shared/ArmorMakesSense_MPIncidentSchema.lua`: trace schema and thresholds
 - `client/core/ArmorMakesSense_IncidentTrace.lua`: client trace cache and report

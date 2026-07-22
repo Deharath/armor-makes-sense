@@ -2,6 +2,7 @@ local Support = dofile((os.getenv("AMS_ROOT") or ".") .. "/tests/support.lua")
 
 ArmorMakesSense = {}
 local defaults = dofile(Support.SHARED_LUA .. "/ArmorMakesSense_Config.lua")
+dofile(Support.SHARED_LUA .. "/ArmorMakesSense_Compat.lua")
 local Physiology = dofile(Support.SHARED_LUA .. "/ArmorMakesSense_PhysiologyShared.lua")
 
 GameClient = nil
@@ -52,10 +53,17 @@ local planner = Physiology.computeSleepPlannerPenalty(player, sleepState, defaul
 Support.assertClose(planner.penaltyFraction, 0.012857142857, 1e-9, "average-bed sleep penalty")
 Support.assertClose(sleepState.lastSleepPenaltyFraction, planner.penaltyFraction, 1e-12, "stored planner penalty")
 
+player.bedType = "goodBed"
+planner = Physiology.computeSleepPlannerPenalty(player, {}, defaults, { rigidityLoad = 80 }, fatigue)
+Support.assertClose(planner.penaltyFraction, 0.011688311688, 1e-9, "planner uses current bed quality")
+player.bedType = "averageBed"
+
 local sleepDisabled = Support.copyTable(defaults)
 sleepDisabled.EnableSleepPenaltyModel = false
-planner = Physiology.computeSleepPlannerPenalty(player, {}, sleepDisabled, { rigidityLoad = 80 }, fatigue)
+local disabledState = { lastSleepPenaltyFraction = 0.5 }
+planner = Physiology.computeSleepPlannerPenalty(player, disabledState, sleepDisabled, { rigidityLoad = 80 }, fatigue)
 Support.assertClose(planner.penaltyFraction, 0, 1e-9, "disabled sleep penalty")
+Support.assertClose(disabledState.lastSleepPenaltyFraction, 0, 1e-9, "disabled planner clears stale penalty state")
 
 player.asleep = true
 sleepState = { wasSleeping = false }
@@ -90,6 +98,68 @@ player.asleep = true
 Physiology.applySleepTransition(player, { wasSleeping = false }, defaults, 1, { rigidityLoad = 80 })
 Support.assertClose(fatigue, 0.90, 1e-9, "sleep penalty never lowers high fatigue")
 player.asleep = false
+fatigue = 0.60
+
+isServer = function() return true end
+GameServer = { bServer = true }
+fatigue = 0.19
+local serverWakeState = {
+    wasSleeping = true,
+    sleepSnapshot = {
+        bedType = "goodBed",
+        startMinute = 20,
+        lastFatigue = 0.20,
+        rigidityLoad = 80,
+    },
+}
+Physiology.computeSleepPenaltyContribution(player, serverWakeState, defaults, 0, {}, fatigue)
+Support.assertClose(fatigue, 0.105, 1e-9, "small final recovery does not masquerade as a good-bed wake bonus")
+Support.assertClose(serverWakeState.lastSleepWakeAdjustment, -0.085, 1e-9, "server synthesizes missing good-bed wake bonus")
+
+fatigue = 0.155
+serverWakeState = {
+    wasSleeping = true,
+    sleepSnapshot = {
+        bedType = "goodBed",
+        startMinute = 20,
+        lastFatigue = 0.20,
+        rigidityLoad = 80,
+    },
+}
+Physiology.computeSleepPenaltyContribution(player, serverWakeState, defaults, 0, {}, fatigue)
+Support.assertClose(fatigue, 0.07, 1e-9, "sub-vanilla wake delta is treated as final recovery")
+Support.assertClose(serverWakeState.lastSleepWakeAdjustment, -0.085, 1e-9, "sub-vanilla delta receives wake bonus")
+
+fatigue = 0.13
+serverWakeState = {
+    wasSleeping = true,
+    sleepSnapshot = {
+        bedType = "goodBed",
+        startMinute = 20,
+        lastFatigue = 0.20,
+        rigidityLoad = 80,
+    },
+}
+Physiology.computeSleepPenaltyContribution(player, serverWakeState, defaults, 0, {}, fatigue)
+Support.assertClose(fatigue, 0.13, 1e-9, "credible native wake bonus is preserved")
+Support.assertClose(serverWakeState.lastSleepWakeAdjustment, -0.07, 1e-9, "native wake bonus remains observable")
+
+fatigue = 0.19
+serverWakeState = {
+    wasSleeping = true,
+    lastSleepWakeAdjustment = -0.5,
+    sleepSnapshot = {
+        bedType = "goodBed",
+        startMinute = 20,
+        lastFatigue = 0.20,
+        rigidityLoad = 80,
+    },
+}
+Physiology.computeSleepPenaltyContribution(player, serverWakeState, sleepDisabled, 0, {}, fatigue)
+Support.assertClose(fatigue, 0.19, 1e-9, "disabled sleep model performs no wake correction")
+Support.assertClose(serverWakeState.lastSleepWakeAdjustment, 0, 1e-9, "disabled sleep model clears wake telemetry")
+GameServer = nil
+isServer = nil
 fatigue = 0.60
 
 local enduranceOptions = Support.copyTable(defaults)

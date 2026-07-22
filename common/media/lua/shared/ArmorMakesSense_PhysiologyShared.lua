@@ -9,8 +9,10 @@ local Stats = require "ArmorMakesSense_StatsShared"
 local BreathingModel = require "ArmorMakesSense_BreathingModel"
 local EnduranceModel = require "ArmorMakesSense_EnduranceModel"
 local SleepModel = require "ArmorMakesSense_SleepModel"
+local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 local ThermalModel = require "ArmorMakesSense_ThermalModel"
 local Physiology = Models.Physiology
+local NATIVE_WAKE_ADJUSTMENT_MIN_RATIO = 0.58
 
 -- -----------------------------------------------------------------------------
 -- Physiological load + recovery model
@@ -18,13 +20,6 @@ local Physiology = Models.Physiology
 
 local function getCompat()
     return ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
-end
-
-local function isCmsFatigueCompatActive()
-    local compat = getCompat()
-    return type(compat) == "table"
-        and type(compat.hasCapability) == "function"
-        and compat:hasCapability("CaffeineMakesSense", "fatigue_coordinator")
 end
 
 local function isMultiplayerClientSession()
@@ -37,13 +32,6 @@ end
 local function isMultiplayerServerSession()
     return ((type(isServer) == "function" and isServer() == true)
         or (GameServer and GameServer.bServer == true))
-end
-
-local function isCmsWakeAdjustmentCompatActive()
-    local compat = getCompat()
-    return type(compat) == "table"
-        and type(compat.hasCapability) == "function"
-        and compat:hasCapability("CaffeineMakesSense", "sleep_wake_adjustment_coordinator")
 end
 
 local function clampValue(value, minimum, maximum)
@@ -157,8 +145,26 @@ local function getSleepRigidityPenaltyFraction(player, options, snapshot, curren
     return result.penaltyFraction
 end
 
+local function observedWakeAdjustmentIsCredible(observedAdjustment, expectedWakeAdjustment)
+    local observed = tonumber(observedAdjustment) or 0
+    local expected = tonumber(expectedWakeAdjustment) or 0
+    if math.abs(observed) <= 0.002 then
+        return false
+    end
+    if expected == 0 then
+        return true
+    end
+    if (observed < 0) ~= (expected < 0) then
+        return false
+    end
+
+    -- Vanilla's smallest random bed adjustment is at least 58% of its mean.
+    -- A lower ratio is ordinary final recovery, not evidence of a native wake.
+    return math.abs(observed) >= (math.abs(expected) * NATIVE_WAKE_ADJUSTMENT_MIN_RATIO)
+end
+
 local function applySleepWakeFatigueAdjustment(player, state, currentFatigue)
-    if isCmsWakeAdjustmentCompatActive() then
+    if SleepOwnership.cmsOwnsWakeAdjustment() then
         if type(state) == "table" then
             state.lastSleepWakeAdjustment = 0
         end
@@ -204,11 +210,8 @@ local function applySleepWakeFatigueAdjustment(player, state, currentFatigue)
     if fatigue ~= nil and referenceFatigue ~= nil then
         local observedAdjustment = clampValue(fatigue, 0, 1) - referenceFatigue
         if math.abs(observedAdjustment) > 0.002 then
-            local trustObserved = true
-            if isMultiplayerServerSession() and expectedWakeAdjustment ~= 0 then
-                trustObserved = (observedAdjustment < 0 and expectedWakeAdjustment < 0)
-                    or (observedAdjustment > 0 and expectedWakeAdjustment > 0)
-            end
+            local trustObserved = not isMultiplayerServerSession()
+                or observedWakeAdjustmentIsCredible(observedAdjustment, expectedWakeAdjustment)
             if trustObserved then
                 state.lastSleepWakeAdjustment = observedAdjustment
                 return observedAdjustment
@@ -228,11 +231,12 @@ local function applySleepWakeFatigueAdjustment(player, state, currentFatigue)
         return 0
     end
 
-    if referenceFatigue == nil then
+    local baselineFatigue = fatigue or referenceFatigue
+    if baselineFatigue == nil then
         return wakeAdjustment
     end
 
-    Stats.setFatigue(player, clampValue(referenceFatigue + wakeAdjustment, 0, 1))
+    Stats.setFatigue(player, clampValue(baselineFatigue + wakeAdjustment, 0, 1))
 
     return wakeAdjustment
 end
@@ -249,7 +253,7 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
     result.extraFatigue = 0
     result.wroteFatigue = false
 
-    if isCmsFatigueCompatActive() or isMultiplayerClientSession() then
+    if SleepOwnership.cmsOwnsFatigue() or isMultiplayerClientSession() then
         return result
     end
 
@@ -282,7 +286,9 @@ function Physiology.applySleepTransition(player, state, options, dtMinutes, prof
 end
 
 function Physiology.computeSleepPlannerPenalty(player, state, options, profile, currentFatigue)
+    local resolvedState = type(state) == "table" and state or {}
     if not options.EnableSleepPenaltyModel then
+        resolvedState.lastSleepPenaltyFraction = 0
         return {
             penaltyFraction = 0,
             sleeping = false,
@@ -290,9 +296,9 @@ function Physiology.computeSleepPlannerPenalty(player, state, options, profile, 
     end
 
     local resolvedProfile = type(profile) == "table" and profile or {}
-    local resolvedState = type(state) == "table" and state or {}
     local snapshot = {
         rigidityLoad = tonumber(resolvedProfile.rigidityLoad) or 0,
+        bedType = resolveSleepBedType(player, resolvedState),
     }
     local penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
     resolvedState.lastSleepPenaltyFraction = penaltyFraction
@@ -349,7 +355,11 @@ function Physiology.computeSleepPenaltyContribution(player, state, options, dtMi
     end
 
     if (not sleeping) and wasSleeping and state.sleepSnapshot then
-        applySleepWakeFatigueAdjustment(player, state, currentFatigue)
+        if options.EnableSleepPenaltyModel then
+            applySleepWakeFatigueAdjustment(player, state, currentFatigue)
+        else
+            state.lastSleepWakeAdjustment = 0
+        end
         state.sleepSnapshot = nil
         state.pendingSleepBedType = nil
     end

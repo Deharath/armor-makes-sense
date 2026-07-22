@@ -3,6 +3,7 @@ ArmorMakesSense.SleepHooks = ArmorMakesSense.SleepHooks or {}
 
 require "ArmorMakesSense_MPCompat"
 local Utils = require "ArmorMakesSense_UtilsShared"
+local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 
 local SleepHooks = ArmorMakesSense.SleepHooks
 local MP = ArmorMakesSense.MP or {}
@@ -21,13 +22,6 @@ local function getCompat()
         return nil
     end
     return compat
-end
-
-local function cmsOwnsPlanner()
-    local compat = getCompat()
-    return compat
-        and type(compat.hasCapability) == "function"
-        and compat:hasCapability("CaffeineMakesSense", "sleep_planner_coordinator")
 end
 
 local function getPlayerFromIndex(playerIndex)
@@ -79,21 +73,10 @@ local function computeAdjustedHours(player, baseHours)
     local base = math.max(0, tonumber(baseHours) or 0)
     local compat, penalties = collectPenaltyFractions(player, base)
     if not compat or #penalties == 0 then
-        return base
+        return base, false
     end
     local combined = compat.combinePenaltyFractions(penalties)
-    return base + compat.computePlannerExtraHours(base, combined)
-end
-
-local function usesServerSleepFlow()
-    if type(isClient) ~= "function" or isClient() ~= true then
-        return false
-    end
-    if type(getServerOptions) ~= "function" then
-        return false
-    end
-    local serverOptions = getServerOptions()
-    return safeMethod(serverOptions, "getBoolean", "SleepAllowed") == true
+    return math.min(16, base + compat.computePlannerExtraHours(base, combined)), true
 end
 
 local function wrapSleepDialog()
@@ -151,24 +134,20 @@ local function wrapAutoSleep()
             return result
         end
         local baseHours = (wakeHour - timeOfDay) % 24
-        local adjustedHours = computeAdjustedHours(player, baseHours)
-        local adjustedWakeHour = (timeOfDay + adjustedHours) % 24
-        safeMethod(player, "setForceWakeUpTime", adjustedWakeHour)
-
-        -- Vanilla delegates this branch to the server and deliberately skips
-        -- SleepingEvent setup on the multiplayer client.
-        if not usesServerSleepFlow() then
-            local sleepingEvent = type(getSleepingEvent) == "function" and getSleepingEvent() or nil
-            safeMethod(sleepingEvent, "setPlayerFallAsleep", player, adjustedHours)
+        local adjustedHours, hasSleepPenalty = computeAdjustedHours(player, baseHours)
+        if adjustedHours > baseHours then
+            safeMethod(player, "setForceWakeUpTime", (timeOfDay + adjustedHours) % 24)
         end
-        sendSleepBedType(safeMethod(player, "getBedType"))
+        if hasSleepPenalty then
+            sendSleepBedType(safeMethod(player, "getBedType"))
+        end
         return result
     end
     ArmorMakesSense._autoSleepPlannerWrapped = true
 end
 
 function SleepHooks.wrapSleepPlanning()
-    if cmsOwnsPlanner() then
+    if SleepOwnership.cmsOwnsPlanner() then
         if not ArmorMakesSense._sleepPlannerHooksLogged then
             ArmorMakesSense._sleepPlannerHooksLogged = true
             log("sleep planner hooks delegated to CMS coordinator")

@@ -8,6 +8,7 @@ end
 local MP = require "ArmorMakesSense_MPCompat"
 require "ArmorMakesSense_Compat"
 local Options = require "ArmorMakesSense_Options"
+local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local Stats = require "ArmorMakesSense_StatsShared"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
@@ -89,6 +90,7 @@ local function recordSleepBedType(playerObj, args)
     end
 
     mpState.pendingSleepBedType = bedType
+    safeCall(playerObj, "setBedType", bedType)
 
     if type(mpState.sleepSnapshot) == "table"
         and tostring(mpState.sleepSnapshot.bedType or "") == "" then
@@ -479,7 +481,9 @@ local function updatePlayer(playerObj, reason, requestArgs)
         end
 
         snapshot = buildRuntimeSnapshot(mpState, profile, {}, "sleep")
-        syncSleepingFatigueToClient(playerObj, mpState)
+        if SleepOwnership.amsOwnsFatigue(options) then
+            syncSleepingFatigueToClient(playerObj, mpState)
+        end
         if snapshot then
             mpState.runtimeSnapshot = snapshot
             if shouldSendSleepingSnapshot(mpState) then
@@ -575,7 +579,9 @@ local function onPlayerUpdate(playerObj)
 
     if wasSleeping == true and sleepingNow == false then
         updatePlayer(playerObj, "WakeTransition")
-        syncWakeFatigueToClient(playerObj)
+        if SleepOwnership.amsOwnsFatigue(Options.get()) then
+            syncWakeFatigueToClient(playerObj)
+        end
         return
     end
 

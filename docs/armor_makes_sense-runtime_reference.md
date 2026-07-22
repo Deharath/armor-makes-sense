@@ -434,7 +434,13 @@ extraFatigue = vanillaRecoveredFatigue * penaltyFraction
 Night Owl, Needs Less Sleep, and Needs More Sleep. Standalone AMS writes the
 extra fatigue during sleep. When CMS owns fatigue coordination or the code is
 running on an MP client, AMS returns the penalty fraction without writing the
-stat locally.
+stat locally. Planning resolves the same current or pending bed type as active
+sleep, so the displayed duration and runtime penalty use the same recovery rate.
+
+`ArmorMakesSense_SleepOwnership.lua` is the single compatibility policy for
+this subsystem. It resolves CMS planner, continuous-fatigue, and wake-adjustment
+capabilities separately. Sleep hooks, shared physiology, and both MP runtimes do
+not inspect CMS capability strings directly.
 
 The standalone fatigue write is monotonic: the `0.85` armor-penalty cap never
 lowers a player whose current fatigue is already at or above that value.
@@ -443,10 +449,16 @@ The sleep hook wraps vanilla planning rather than copying
 `onSleepWalkToComplete`. Vanilla owns safety checks, actions, sounds, fades, and
 sleep startup; AMS adjusts only the resulting wake duration and MP session
 metadata. When vanilla delegates an allowed multiplayer sleep to the server,
-AMS also skips local `SleepingEvent` initialization.
+AMS also skips local `SleepingEvent` initialization. Adjusted duration is capped
+at vanilla's hard sixteen-hour wake limit. With the sleep model disabled, AMS
+does not adjust planning or send multiplayer bed context.
 
-Wake processing clears `sleepSnapshot`. The MP server also reconciles bed-based
-wake adjustment when required by the shared compatibility contract.
+Wake processing clears `sleepSnapshot`. The MP server applies the client's
+bed-type hint to the vanilla player before recovery and reconciles a missing
+bed-based wake adjustment when required by the shared compatibility contract.
+Small final recovery deltas are not treated as proof that vanilla already
+applied the wake adjustment. Disabled sleep and CMS-coordinated fatigue skip AMS
+wake correction and fatigue authority entirely.
 
 ## Activity and Posture Sampling (`Environment`)
 

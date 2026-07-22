@@ -9,8 +9,10 @@ tests=(
   test_environment_strain.lua
   test_thermal_model.lua
   test_physiology.lua
+  test_sleep_ownership.lua
   test_calculation_models.lua
   test_mp_snapshot_codec.lua
+  test_mp_sleep_wake.lua
   test_runtime_state.lua
   test_options.lua
   test_stats_authority.lua

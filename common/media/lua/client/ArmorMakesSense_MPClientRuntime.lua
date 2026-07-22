@@ -1,7 +1,9 @@
 ArmorMakesSense = ArmorMakesSense or {}
 
 local MP = require "ArmorMakesSense_MPCompat"
+require "ArmorMakesSense_Compat"
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
+local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local MPClientRuntime = {}
 ArmorMakesSense.MPClientRuntime = MPClientRuntime
@@ -159,19 +161,38 @@ local function reconcileAuthoritativeWakeState(playerObj, snapshot)
     if snapshot.serverSleeping ~= false then
         return false
     end
+    if not SleepOwnership.amsOwnsFatigue(Options.get()) then
+        return false
+    end
     if not Utils.toBoolean(Utils.safeMethod(playerObj, "isAsleep")) then
         return false
     end
 
-    Utils.safeMethod(playerObj, "setAsleep", false)
-    Utils.safeMethod(playerObj, "setAsleepTime", 0.0)
-    Utils.safeMethod(playerObj, "setForceWakeUpTime", -1.0)
+    if type(getSleepingEvent) ~= "function" then
+        log("authoritative wake could not resolve vanilla SleepingEvent")
+        return false
+    end
+    local okEvent, sleepingEvent = pcall(getSleepingEvent)
+    if not okEvent or not sleepingEvent then
+        log("authoritative wake could not resolve vanilla SleepingEvent")
+        return false
+    end
+    local okWake, wakeFailure = pcall(function()
+        sleepingEvent:wakeUp(playerObj, true)
+    end)
+    if not okWake then
+        log("authoritative vanilla wake failed: " .. tostring(wakeFailure))
+        return false
+    end
     log("reconciled local wake state from authoritative server snapshot")
     return true
 end
 
 local function applyAuthoritativeFatigue(playerObj, snapshot)
     if not playerObj or type(snapshot) ~= "table" then
+        return false
+    end
+    if not SleepOwnership.amsOwnsFatigue(Options.get()) then
         return false
     end
     local serverSleeping = snapshot.serverSleeping == true

@@ -28,6 +28,14 @@ if ! rg -q 'function MPClientRuntime\.registerEvents' "${mp_runtime}"; then
   echo "MP client runtime registration entrypoint missing" >&2
   exit 1
 fi
+if rg -n 'setAsleep|setAsleepTime|setForceWakeUpTime' "${mp_runtime}"; then
+  echo "MP wake reconciliation still bypasses vanilla SleepingEvent cleanup" >&2
+  exit 1
+fi
+if ! rg -q 'sleepingEvent:wakeUp\(playerObj, true\)' "${mp_runtime}"; then
+  echo "MP wake reconciliation does not use vanilla's authoritative wake path" >&2
+  exit 1
+fi
 
 legacy_state_key='ArmorMakesSenseState'
 if rg -n "${legacy_state_key}" \
@@ -109,6 +117,12 @@ if rg -n 'pendingSleepSession|SLEEP_SESSION_COMMAND|sleep_for|wake_hour|clientWo
   echo "released runtime still carries unused sleep-session metadata" >&2
     exit 1
 fi
+
+if ! rg -q 'safeCall\(playerObj, "setBedType", bedType\)' \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
+  echo "MP sleep bed hint is not applied to vanilla server recovery" >&2
+  exit 1
+fi
 if rg -n 'getClientActivityLabel|world_minute|activity_label|script_version|script_build' \
   "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua"; then
   echo "MP snapshot requests still carry server-ignored client metadata" >&2
@@ -160,6 +174,14 @@ fi
 if rg -n 'ZombRand|HaloTextHelper|ISTimedActionQueue|IsoPlayer\.allPlayersAsleep|save\(true\)' \
   "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_SleepHooks.lua"; then
   echo "AMS sleep hook still owns copied vanilla workflow" >&2
+  exit 1
+fi
+if rg -n 'sleep_planner_coordinator|fatigue_coordinator|sleep_wake_adjustment_coordinator' \
+  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_SleepHooks.lua" \
+  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua" \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua"; then
+  echo "sleep gameplay modules bypass shared ownership policy" >&2
   exit 1
 fi
 for model in BreathingModel EnduranceModel SleepModel; do

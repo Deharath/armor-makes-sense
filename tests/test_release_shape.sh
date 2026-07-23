@@ -349,7 +349,7 @@ fi
 
 PACKAGING_PATHS=(
   "${ROOT_DIR}/../tools/mod_sync/sync_local_mod.sh"
-  "${ROOT_DIR}/../tools/armor_makes_sense/scripts/workshop_publish_common.ps1"
+  "${ROOT_DIR}/../tools/workshop_publish/core.py"
 )
 rewrite_pattern='WriteAllLines\(\$mainLua|sed -i .+testing|stripped testing requires from Main'
 if rg -n "${rewrite_pattern}" "${PACKAGING_PATHS[@]}"; then

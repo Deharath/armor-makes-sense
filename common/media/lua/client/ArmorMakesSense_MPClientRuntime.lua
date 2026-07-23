@@ -157,7 +157,7 @@ local function reconcileAuthoritativeWakeState(playerObj, snapshot)
     if not playerObj or type(snapshot) ~= "table" then
         return false
     end
-    if snapshot.serverSleeping ~= false then
+    if snapshot.serverSleeping ~= false or tostring(snapshot.reason or "") ~= "WakeTransition" then
         return false
     end
     if not SleepOwnership.amsOwnsFatigue(Options.get()) then
@@ -205,9 +205,6 @@ local function applyAuthoritativeFatigue(playerObj, snapshot)
     end
     local current = getFatigue(playerObj)
     if current ~= nil and math.abs(current - authoritative) <= SLEEP_FATIGUE_CORRECTION_EPSILON then
-        return false
-    end
-    if not serverSleeping and current ~= nil and current > authoritative then
         return false
     end
     local applied = setFatigue(playerObj, authoritative)

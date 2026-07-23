@@ -58,22 +58,17 @@ snapshot.
 ### Breathing, Sleep, and Drivers
 
 - Breathing uses the same airflow and sealed-restriction rules as tooltips.
-- Sleep impact appears at `rigidityLoad >= 10` and displays an approximate
-  recovery increase derived from rigidity.
+- Sleep impact appears at `rigidityLoad >= 10` and displays `Slower recovery`.
+  Exact duration is not shown because the runtime result also depends on
+  fatigue, bed quality, traits, and sandbox settings.
 - Cost drivers include worn items with `physicalLoad >= 1.5`, sorted by physical
   load descending.
 - MP clients use server-supplied driver rows and resolve local display names by
   full item type when possible.
 
-The displayed sleep percentage is a UI estimate:
-
-```lua
-rigidityNorm = rigidityLoad / (rigidityLoad + 80.0) * 2.0
-sleepPct = floor(rigidityNorm * 6.75 + 0.5)
-```
-
-The runtime sleep model also accounts for fatigue, bed quality, and sleep
-traits; the UI estimate is not a direct prediction of the final fatigue value.
+Burden, breathing, and sleep visibility thresholds come from
+`ArmorMakesSense_PresentationPolicy.lua`, which is shared by the panel,
+tooltips, and support-report formatting.
 
 ## Refresh Behavior
 

@@ -98,7 +98,8 @@ function EnduranceModel.calculate(options, rawInput)
         controlled = controlled - input.nmsDrain
     end
 
-    if canApply and input.previous ~= nil and input.isIdle and input.naturalDelta > 0 then
+    if canApply and input.previous ~= nil and input.isIdle and input.naturalDelta > 0
+        and input.nmsDrain <= 0 then
         controlled = math.max(input.previous, math.min(input.current, controlled))
     end
     controlled = Utils.clamp(controlled, 0, 1)

@@ -86,6 +86,17 @@ local endurance = EnduranceModel.calculate(options, {
 Support.assertClose(endurance.amsDrainApplied, 0.0025795, 1e-9, "pure endurance drain")
 Support.assertClose(endurance.enduranceDelta, -0.0025795, 1e-9, "pure endurance result")
 
+local nmsIdleDrain = EnduranceModel.calculate(options, {
+    previous = 0.8,
+    current = 0.81,
+    naturalDelta = 0.01,
+    loadNorm = 0,
+    activityLabel = "idle",
+    nmsDrain = 0.02,
+    dtMinutes = 1,
+})
+Support.assertClose(nmsIdleDrain.controlledEndurance, 0.79, 1e-9, "idle floor preserves explicit NMS drain")
+
 local vanillaRate = SleepModel.vanillaRecoveryRatePerHour({ fatigue = 0.6, bedType = "averageBed" })
 Support.assertClose(
     vanillaRate,

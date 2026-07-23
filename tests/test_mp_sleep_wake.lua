@@ -124,6 +124,29 @@ Support.assertTrue(wakeSuppressPacket, "authoritative wake suppresses packet ech
 Support.assertFalse(asleep, "vanilla wake clears asleep state")
 Support.assertClose(fatigue, 0.30, 1e-9, "wake snapshot applies authoritative fatigue")
 
+asleep = true
+fatigue = 0.30
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+    serverSleeping = false,
+    reason = "minute",
+    authoritativeFatigue = 0.20,
+    drivers = {},
+})
+Support.assertEqual(wakeCalls, 1, "ordinary awake snapshot cannot cancel a locally-started sleep")
+Support.assertTrue(asleep, "ordinary awake snapshot preserves local sleep transition")
+Support.assertClose(fatigue, 0.30, 1e-9, "ordinary awake snapshot does not apply wake fatigue")
+
+asleep = true
+fatigue = 0.45
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+    serverSleeping = false,
+    reason = "WakeTransition",
+    authoritativeFatigue = 0.30,
+    drivers = {},
+})
+Support.assertEqual(wakeCalls, 2, "wake correction handles a more-rested server state")
+Support.assertClose(fatigue, 0.30, 1e-9, "wake snapshot may lower stale client fatigue")
+
 sleepEnabled = false
 asleep = true
 fatigue = 0.20
@@ -133,7 +156,7 @@ handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
     authoritativeFatigue = 0.30,
     drivers = {},
 })
-Support.assertEqual(wakeCalls, 1, "disabled sleep model does not reconcile wake")
+Support.assertEqual(wakeCalls, 2, "disabled sleep model does not reconcile wake")
 Support.assertTrue(asleep, "disabled sleep model leaves vanilla state untouched")
 Support.assertClose(fatigue, 0.20, 1e-9, "disabled sleep model does not apply fatigue")
 
@@ -145,7 +168,7 @@ handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
     authoritativeFatigue = 0.30,
     drivers = {},
 })
-Support.assertEqual(wakeCalls, 1, "CMS-owned sleep does not use AMS wake reconciliation")
+Support.assertEqual(wakeCalls, 2, "CMS-owned sleep does not use AMS wake reconciliation")
 Support.assertTrue(asleep, "CMS-owned sleep leaves wake state to CMS")
 Support.assertClose(fatigue, 0.20, 1e-9, "CMS-owned sleep ignores AMS fatigue authority")
 

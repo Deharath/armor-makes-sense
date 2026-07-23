@@ -495,6 +495,7 @@ local slotReslots = {
     {
         slot = "ams:cuirass",
         fullTypes = {
+            "Base.Cuirass_BasicBone",
             "Base.Cuirass_Bone",
             "Base.Cuirass_CoatOfPlates",
             "Base.Cuirass_Magazine",

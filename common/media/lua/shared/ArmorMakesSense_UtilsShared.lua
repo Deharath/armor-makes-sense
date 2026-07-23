@@ -145,7 +145,7 @@ function Utils.getExecutionRole()
     if Utils.isClientSide() or (GameClient and GameClient.bClient == true) then
         return "multiplayer_client"
     end
-    return "standalone"
+    return "singleplayer"
 end
 
 function Utils.isMultiplayer()

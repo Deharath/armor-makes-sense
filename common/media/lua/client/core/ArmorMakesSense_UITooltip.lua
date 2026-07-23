@@ -6,6 +6,7 @@ Core.UITooltip = Core.UITooltip or {}
 
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
+local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
 local UITooltip = Core.UITooltip
@@ -43,17 +44,14 @@ local function burdenBarFraction(physicalLoad)
 end
 
 local function breathingTierFromResistance(resistance, sealedRestriction)
-    local value = tonumber(resistance) or 0
-    if value < 0.80 then
-        return nil
-    end
-    if (tonumber(sealedRestriction) or 0) > 0 then
-        return tr("UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted")
-    end
-    if value < 2.00 then
-        return tr("UI_AMS_Label_BreathingMild", "Mild")
-    end
-    return tr("UI_AMS_Label_BreathingRestricted", "Restricted")
+    local tier = PresentationPolicy.breathingTier(resistance, sealedRestriction)
+    local labels = {
+        mild = { "UI_AMS_Label_BreathingMild", "Mild" },
+        restricted = { "UI_AMS_Label_BreathingRestricted", "Restricted" },
+        heavy = { "UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted" },
+    }
+    local label = tier and labels[tier] or nil
+    return label and tr(label[1], label[2]) or nil
 end
 
 local function addLayoutRow(layout, payload)
@@ -105,7 +103,10 @@ local function injectTooltipRowsWithLayout(layout, item)
         return 0
     end
     local hasPhysical = (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD
-    local hasBreathing = (tonumber(signal.airflowResistance) or 0) >= 0.80
+    local hasBreathing = PresentationPolicy.breathingTier(
+        signal.airflowResistance,
+        signal.sealedRestriction
+    ) ~= nil
     if not hasPhysical and not hasBreathing then
         return 0
     end

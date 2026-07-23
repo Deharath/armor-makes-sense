@@ -74,14 +74,6 @@ local function breathingTreadmillScenario(id, runSeconds, activity)
 end
 
 local SCENARIOS = {
-    snapshot = {
-        id = "snapshot",
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "sample_once", tag = "snapshot" },
-        },
-    },
     sleep_real_neutral_v1 = {
         id = "sleep_real_neutral_v1",
         blocks = {
@@ -233,10 +225,7 @@ local SCENARIOS = {
 }
 
 local ASYNC_MODES = {
-    idle_window = true,
     real_sleep = true,
-    native_warmup = true,
-    native_move = true,
     native_treadmill_simple = true,
     native_combat_air = true,
 }
@@ -244,23 +233,17 @@ local ASYNC_MODES = {
 local BLOCK_KINDS = {
     prepare_state = true,
     equip_set = true,
-    lock_env_start = true,
-    lock_env_end = true,
     lock_weather_start = true,
     lock_weather_end = true,
     set_fatigue = true,
     sample_once = true,
-    sample_series = true,
     run_activity = true,
     await_runtime_tick = true,
     wait_window = true,
 }
 
 local ACTIVITY_MODES = {
-    idle_window = true,
     real_sleep = true,
-    native_warmup = true,
-    native_move = true,
     native_treadmill_simple = true,
     native_combat_air = true,
 }

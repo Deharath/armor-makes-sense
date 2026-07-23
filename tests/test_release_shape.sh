@@ -184,13 +184,20 @@ if rg -n 'sleep_planner_coordinator|fatigue_coordinator|sleep_wake_adjustment_co
   echo "sleep gameplay modules bypass shared ownership policy" >&2
   exit 1
 fi
-for model in BreathingModel EnduranceModel SleepModel; do
+for model in BreathingModel EnduranceModel; do
   if ! rg -q "require \"ArmorMakesSense_${model}\"" \
     "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua"; then
     echo "physiology does not compose required calculation model: ${model}" >&2
     exit 1
   fi
 done
+if ! rg -q 'require "ArmorMakesSense_SleepPhysiology"' \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua" \
+  || ! rg -q 'require "ArmorMakesSense_SleepModel"' \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_SleepPhysiology.lua"; then
+  echo "sleep physiology ownership is not composed through the dedicated module" >&2
+  exit 1
+fi
 
 shared_models=(
   "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_LoadModelShared.lua"
@@ -255,6 +262,64 @@ if rg -n 'local function getWallClockSeconds' \
   "${ROOT_DIR}/common/media/lua/server" \
   -g '*.lua'; then
   echo "runtime duplicates the shared wall-clock resolver" >&2
+  exit 1
+fi
+
+if rg -n 'rigidityNorm \* 6\.75|UI_AMS_Label_SleepLonger' \
+  "${ROOT_DIR}/common/media/lua/client" \
+  "${ROOT_DIR}/common/media/lua/shared" \
+  -g '*.lua' -g '*.json'; then
+  echo "presentation still contains the disconnected sleep estimate" >&2
+  exit 1
+fi
+if ! rg -q 'exportFn\(self:resolvePlayer\(\)\)' \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
+  echo "support export does not preserve split-screen player identity" >&2
+  exit 1
+fi
+for presenter in \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua" \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UITooltip.lua" \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_SupportReport.lua"; do
+  if ! rg -q 'require "ArmorMakesSense_PresentationPolicy"' "${presenter}"; then
+    echo "presentation surface bypasses shared threshold policy: ${presenter}" >&2
+    exit 1
+  fi
+done
+
+if ! rg -q 'require "ArmorMakesSense_MPSnapshotBuilder"' \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
+  || ! rg -q 'require "ArmorMakesSense_MPRequestPolicy"' \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
+  echo "MP server does not use extracted snapshot and request policies" >&2
+  exit 1
+fi
+
+diagnostic_clients=(
+  "${ROOT_DIR}/common/media/lua/client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua"
+  "${ROOT_DIR}/common/media/lua/client/diagnostics/ArmorMakesSense_MPClientHarness.lua"
+)
+if rg -n -U 'pcall\(\s*sendClientCommand,\s*tostring' "${diagnostic_clients[@]}"; then
+  echo "development diagnostics still use the obsolete client-command overload" >&2
+  exit 1
+fi
+if rg -n 'minuteSummaryEnabled|emitMinuteSummary|ams_enable_mp_diag_minute_summary' \
+  "${ROOT_DIR}/common/media/lua/server/diagnostics" \
+  "${ROOT_DIR}/docs"; then
+  echo "dormant MP minute-summary capability remains" >&2
+  exit 1
+fi
+
+basic_bone_count="$(rg -c 'Base\.Cuirass_BasicBone' \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_SpeedRebalance.lua")"
+if [[ "${basic_bone_count}" -ne 2 ]]; then
+  echo "basic bone cuirass is not present in both speed and reslot policy" >&2
+  exit 1
+fi
+
+dead_bench='idle_window|native_warmup|native_move([^m]|$)|lock_env_start|lock_env_end|sample_series|muscleContribution|recoveryContribution'
+if rg -n "${dead_bench}" "${ROOT_DIR}/common/media/lua/client/testing" -g '*.lua'; then
+  echo "development runner still contains dormant benchmark capability" >&2
   exit 1
 fi
 

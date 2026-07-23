@@ -3,6 +3,6 @@ id=ArmorMakesSense
 poster=../poster.png
 icon=../ams_icon.png
 author=Deharath
-modversion=1.3.2
+modversion=1.3.3
 versionMin=42.19.0
 description=Build 42 mod that makes armor tradeoffs physical: endurance drain, muscle strain, breathing restriction, and sleep recovery penalties.

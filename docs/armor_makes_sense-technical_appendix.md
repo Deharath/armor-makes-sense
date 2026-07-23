@@ -53,6 +53,8 @@ updates are pushed by the server. Requests carry their local player identity,
 reason, and latest incident sequence. Responses transport the addressed online
 player id and numeric thermal signals;
 the client derives hot/cold presentation from those values.
+Client and server request throttles are independent. The server accepts at most
+one request-triggered snapshot per player every two wall-clock seconds.
 
 The MP client runtime is inert when loaded. The production bootstrap calls its
 explicit registration entrypoint only when `isClient()` identifies a
@@ -70,7 +72,12 @@ Both coordinators omit the endurance callback during sleep.
 The model integrations were checked against the installed Project Zomboid
 42.19.0 runtime. Vanilla alone initializes `SleepingEvent`; AMS never calls
 `setPlayerFallAsleep` after vanilla has started sleep because that API resets
-sleep-event state and reapplies the delay-to-sleep timer. When a planner penalty
+sleep-event state and reapplies the delay-to-sleep timer. MP wake reconciliation
+only accepts an explicit server `WakeTransition`; an older ordinary snapshot
+cannot cancel a sleep that has just started locally. The automatic sleep hook
+also repairs a missing or near-zero wake interval before applying the planner
+penalty, preventing a broken schedule from immediately waking the player and
+consuming the sleep attempt. When a planner penalty
 is active, AMS only extends vanilla's existing wake time. With the penalty
 disabled, it leaves the planned wake time untouched. Active multiplayer sleep
 clients send only a bed-type hint and preserve the server-delegated
@@ -78,6 +85,8 @@ clients send only a bed-type hint and preserve the server-delegated
 The server applies that hint to the vanilla player so continuous bed recovery
 matches the client, while AMS retains only the bounded wake reconciliation
 needed when the server does not observe vanilla's client-side wake adjustment.
+Both the automatic sleep path and the normal sleep dialog send this hint after
+vanilla has placed the player to sleep.
 Authoritative MP wake reconciliation calls vanilla `SleepingEvent:wakeUp` with
 packet echo suppressed instead of directly editing player sleep fields. AMS
 does not claim this authority when its sleep model is disabled or CMS owns
@@ -194,8 +203,10 @@ not duplicate `common/media`.
 - `ArmorMakesSense_BreathingModel.lua`: pure metabolic-effort and respiratory contribution result
 - `ArmorMakesSense_EnduranceModel.lua`: pure regeneration and drain composition result
 - `ArmorMakesSense_SleepModel.lua`: pure vanilla-recovery and rigidity-penalty result
+- `ArmorMakesSense_SleepPhysiology.lua`: sleep-session snapshots, planner
+  contribution, fatigue application, and wake reconciliation
 - `ArmorMakesSense_PhysiologyShared.lua`: PZ sampling, model composition,
-  compatibility coordination, result application, and runtime snapshots
+  endurance compatibility, result application, and runtime snapshots
 - `ArmorMakesSense_Simulation.lua`: elapsed-time accumulation, active catch-up
   policy, bounded slicing, and shared sleep/endurance advancement
 - `ArmorMakesSense_StrainShared.lua`: melee strain eligibility and magnitude
@@ -208,6 +219,10 @@ not duplicate `common/media`.
   MP-server state stores
 - `ArmorMakesSense_MPSnapshotCodec.lua`: versioned server snapshot wire codec
 - `ArmorMakesSense_MPIncidentSchema.lua`: incident trace schema and thresholds
+- `server/ArmorMakesSense_MPSnapshotBuilder.lua`: server runtime snapshot
+  shaping, including detailed breathing telemetry
+- `server/ArmorMakesSense_MPRequestPolicy.lua`: request-triggered snapshot
+  throttling
 - `client/testing/ArmorMakesSense_BenchRunnerSnapshot.lua`: streamed benchmark
   artifact writer with compact snapshot fallback; successful streams are finalized
   in place so transient samples and probes remain available to parsers
@@ -224,6 +239,8 @@ not duplicate `common/media`.
 - `ArmorMakesSense_Combat.lua`: singleplayer combat event handling
 - `ArmorMakesSense_UI.lua`: Burden panel, character-tab integration, help, and
   support export
+- `ArmorMakesSense_PresentationPolicy.lua`: shared burden, breathing, and sleep
+  presentation thresholds used by UI and reports
 - `ArmorMakesSense_UITooltip.lua`: compositional wearable tooltip extension and
   optional shared-controller provider for AMS burden and breathing rows
 - `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
@@ -253,6 +270,8 @@ is to run controlled substitutions and scenarios rather than game runtime.
 - benchmark catalogs and scenarios are validated before execution; unknown
   blocks or activities, missing production runtime telemetry, and incomplete
   parser inputs fail closed instead of producing zero-filled measurements
+- the scenario language contains only block and activity modes used by shipped
+  presets; removed prototype modes are not retained as dormant capability
 - real-sleep benchmarks accept only fatigue-threshold recovery; external wakes,
   failed entry, and safety timeouts are invalid measurements
 - native benchmark movement is explicitly cancelled before path state is

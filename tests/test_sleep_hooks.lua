@@ -135,4 +135,46 @@ ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
 Support.assertClose(wakeHour, 22, 1e-9, "adjusted duration respects vanilla sixteen-hour wake ceiling")
 Support.assertClose(sleepingEventHours, 15, 1e-9, "wake ceiling does not reinitialize the sleeping event")
 
+plannerPenalty = 0.25
+isClient = function() return true end
+vanillaSleepHours = 0
+asleep = false
+wakeHour = 8
+wakeWrites = 0
+sentSleepCommand = nil
+ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
+Support.assertClose(wakeHour, 12, 1e-9, "zero-hour vanilla schedule is repaired before sleep can instantly end")
+Support.assertEqual(wakeWrites, 2, "invalid vanilla schedule receives one corrective wake-time write")
+
+plannerPenalty = 0.25
+isClient = function() return true end
+sentSleepCommand = nil
+local dialogOptionCount = 0
+getText = function(_, hours) return tostring(hours or "") end
+ISSleepDialog = {
+    initialise = function(self)
+        self.spinBox = {
+            selected = 2,
+            addOption = function()
+                dialogOptionCount = dialogOptionCount + 1
+            end,
+        }
+    end,
+    onClick = function(self, button)
+        if button.internal == "YES" then
+            asleep = true
+        end
+    end,
+}
+
+Support.assertTrue(SleepHooks.wrapSleepPlanning(), "dialog hook installs when vanilla class becomes available")
+local dialog = { player = player }
+ISSleepDialog.initialise(dialog)
+Support.assertEqual(dialog.spinBox.selected, 4, "dialog planner extends selected sleep duration")
+Support.assertEqual(dialogOptionCount, 2, "dialog planner adds extended hour choices")
+ISSleepDialog.onClick(dialog, { internal = "YES" })
+Support.assertEqual(sentSleepCommand.command, "sleep_bed_type", "dialog sleep sends bed context")
+Support.assertEqual(sentSleepCommand.player, player, "dialog sleep addresses the correct player")
+Support.assertEqual(sentSleepCommand.args.bed_type, "averageBed", "dialog sleep sends bed type")
+
 print("ams narrow sleep hook checks passed")

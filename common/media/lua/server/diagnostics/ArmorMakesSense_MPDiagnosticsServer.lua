@@ -23,10 +23,6 @@ local okLoadModel, loadModelOrErr = pcall(require, "ArmorMakesSense_LoadModelSha
 local LoadModel = okLoadModel and type(loadModelOrErr) == "table" and loadModelOrErr or nil
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
 
-local function minuteSummaryEnabled()
-    return false
-end
-
 local function sleepDiagnosticsEnabled()
     return true
 end
@@ -420,36 +416,6 @@ local function buildDumpPayload(playerObj, reason)
     return payload
 end
 
-local function emitMinuteSummary(playerObj)
-    local payload = buildDumpPayload(playerObj, "minute")
-    log(string.format(
-        "[MIN] user=%s id=%d end=%.3f fat=%.3f thirst=%.3f loadNorm=%.3f eff=%.2f physical=%.2f resistance=%.3f breathing=%.2f rigidity=%.2f heat=%.3f thermContrib=%.3f breathContrib=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d activity=%s hot=%s cold=%s pending=%.3f",
-        tostring(payload.player),
-        tonumber(payload.online_id) or -1,
-        tonumber(payload.endurance) or -1,
-        tonumber(payload.fatigue) or -1,
-        tonumber(payload.thirst) or -1,
-        tonumber(payload.load_norm) or 0,
-        tonumber(payload.effective_load) or 0,
-        tonumber(payload.physical_load) or 0,
-        tonumber(payload.thermal_resistance) or 0,
-        tonumber(payload.airflow_resistance) or 0,
-        tonumber(payload.rigidity_load) or 0,
-        tonumber(payload.thermal_strain_scale) or 0,
-        tonumber(payload.thermal_contribution) or 0,
-        tonumber(payload.breathing_contribution) or 0,
-        payload.endurance_before_ams ~= nil and string.format("%.4f", payload.endurance_before_ams) or "na",
-        payload.endurance_after_ams ~= nil and string.format("%.4f", payload.endurance_after_ams) or "na",
-        payload.endurance_natural_delta ~= nil and string.format("%.4f", payload.endurance_natural_delta) or "na",
-        payload.endurance_applied_delta ~= nil and string.format("%.4f", payload.endurance_applied_delta) or "na",
-        #(payload.drivers or {}),
-        tostring(payload.activity_label or "idle"),
-        tostring(payload.thermal_hot == true),
-        tostring(payload.thermal_cold == true),
-        tonumber(payload.pending_catchup) or 0
-    ))
-end
-
 local function sendDiagDump(playerObj, reason)
     if type(sendServerCommand) ~= "function" then
         log("sendServerCommand unavailable; diag dump cannot be delivered")
@@ -544,9 +510,6 @@ local function onEveryOneMinute()
     for i = 0, count - 1 do
         local playerObj = safeCall(onlinePlayers, "get", i)
         if playerObj then
-            if minuteSummaryEnabled() then
-                emitMinuteSummary(playerObj)
-            end
             emitSleepDiagnostics(playerObj)
         end
     end

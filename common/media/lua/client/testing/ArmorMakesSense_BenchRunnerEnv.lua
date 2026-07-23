@@ -900,8 +900,6 @@ function BenchRunnerEnv.collectMetrics(player)
         breathingEffortRamp = tonumber(runtime and runtime.breathingEffortRamp),
         breathingDynamicLoad = tonumber(runtime and runtime.breathingDynamicLoad),
         breathingSealedLoad = tonumber(runtime and runtime.breathingSealedLoad),
-        muscleContribution = tonumber(runtime and runtime.muscleContribution),
-        recoveryContribution = tonumber(runtime and runtime.recoveryContribution),
         enduranceBeforeAms = enduranceBeforeAms,
         enduranceAfterAms = enduranceAfterAms,
         enduranceNaturalDelta = enduranceNaturalDelta,

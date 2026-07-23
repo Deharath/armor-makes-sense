@@ -134,7 +134,13 @@ local function trySendHarnessPing(reason)
         script_build = tostring(MP.SCRIPT_BUILD),
     }
 
-    local ok, err = pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.HARNESS_PING_COMMAND), args)
+    local ok, err = pcall(
+        sendClientCommand,
+        getLocalPlayer(),
+        tostring(MP.NET_MODULE),
+        tostring(MP.HARNESS_PING_COMMAND),
+        args
+    )
     if not ok then
         log("harness ping send failed: " .. tostring(err))
         return false

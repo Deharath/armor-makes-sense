@@ -7,6 +7,7 @@ Core.UI = Core.UI or {}
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local Options = require "ArmorMakesSense_Options"
+local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local SupportReport = require "core/ArmorMakesSense_SupportReport"
 local UITooltip = require "core/ArmorMakesSense_UITooltip"
@@ -81,34 +82,27 @@ local function burdenBarFraction(physicalLoad, maxLoad)
 end
 
 local function breathingTierFromResistance(resistance, sealedRestriction)
-    local value = tonumber(resistance) or 0
-    if value < 0.80 then
-        return nil
-    end
-    if (tonumber(sealedRestriction) or 0) > 0 then
-        return tr("UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted")
-    end
-    if value < 2.00 then
-        return tr("UI_AMS_Label_BreathingMild", "Mild")
-    end
-    return tr("UI_AMS_Label_BreathingRestricted", "Restricted")
+    local tier = PresentationPolicy.breathingTier(resistance, sealedRestriction)
+    local labels = {
+        mild = { "UI_AMS_Label_BreathingMild", "Mild" },
+        restricted = { "UI_AMS_Label_BreathingRestricted", "Restricted" },
+        heavy = { "UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted" },
+    }
+    local label = tier and labels[tier] or nil
+    return label and tr(label[1], label[2]) or nil
 end
 
 local function burdenTierFromTotal(physicalLoad)
-    local value = tonumber(physicalLoad) or 0
-    if value < 7 then
-        return tr("UI_AMS_Tier_Negligible", "Negligible"), "negligible"
-    end
-    if value < 20 then
-        return tr("UI_AMS_Tier_Light", "Light"), "light"
-    end
-    if value < 45 then
-        return tr("UI_AMS_Tier_Moderate", "Moderate"), "moderate"
-    end
-    if value < 75 then
-        return tr("UI_AMS_Tier_Heavy", "Heavy"), "heavy"
-    end
-    return tr("UI_AMS_Tier_Extreme", "Extreme"), "extreme"
+    local tier = PresentationPolicy.burdenTier(physicalLoad)
+    local labels = {
+        negligible = { "UI_AMS_Tier_Negligible", "Negligible" },
+        light = { "UI_AMS_Tier_Light", "Light" },
+        moderate = { "UI_AMS_Tier_Moderate", "Moderate" },
+        heavy = { "UI_AMS_Tier_Heavy", "Heavy" },
+        extreme = { "UI_AMS_Tier_Extreme", "Extreme" },
+    }
+    local label = labels[tier] or labels.negligible
+    return tr(label[1], label[2]), tier
 end
 
 local function showExportResultModal(playerNum, ok, detail)
@@ -177,7 +171,7 @@ local function resolveDriverLabelsForClient(analysis, drivers)
             local fullType = tostring(row.fullType or "")
             local fallbackLabel = tostring(row.label or "")
             if fallbackLabel == "" then
-                fallbackLabel = fullType ~= "" and fullType or "Unknown Item"
+                fallbackLabel = fullType ~= "" and fullType or tr("UI_AMS_UnknownItem", "Unknown Item")
             end
             resolved[#resolved + 1] = {
                 label = displayNames[fullType] or fallbackLabel,
@@ -316,7 +310,7 @@ local function ensurePanelClasses()
         if type(exportFn) ~= "function" then
             return
         end
-        local ok, pathOrNil, err = exportFn()
+        local ok, pathOrNil, err = exportFn(self:resolvePlayer())
         if ok then
             local savedPath = tostring(pathOrNil or "Lua/ams_reports/")
             showExportResultModal(self.playerNum, true, savedPath)
@@ -403,28 +397,21 @@ local function ensurePanelClasses()
     end
 
     local function buildBreathingDescription(airflowResistance, sealedRestriction)
-        local resistance = tonumber(airflowResistance) or 0
-        if (tonumber(sealedRestriction) or 0) > 0 then
+        local tier = PresentationPolicy.breathingTier(airflowResistance, sealedRestriction)
+        if tier == "heavy" then
             return tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-        elseif resistance >= 2.00 then
+        elseif tier == "restricted" then
             return tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
         end
         return tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
     end
 
     local function buildSleepWord(rigidityLoad)
-        local rigidity = tonumber(rigidityLoad) or 0
-        if rigidity < 10 then
+        if not PresentationPolicy.hasSleepRestriction(rigidityLoad) then
             return nil
         end
 
-        local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
-        local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
-        if sleepPct < 1 then
-            return nil
-        end
-
-        return string.format("~%d%% %s", sleepPct, tr("UI_AMS_Label_SleepLonger", "longer recovery"))
+        return tr("UI_AMS_Label_SleepSlower", "Slower recovery")
     end
 
     local function buildBurdenWords(profile)
@@ -649,7 +636,12 @@ local function ensurePanelClasses()
 
         local labelCol = 0
         if measure then
-            local labels = { "Burden:", "Thermal:", "Breathing:", "Sleep:" }
+            local labels = {
+                tr("UI_AMS_Panel_Burden", "Burden") .. ":",
+                tr("UI_AMS_Panel_Thermal", "Thermal") .. ":",
+                tr("UI_AMS_Panel_Breathing", "Breathing") .. ":",
+                tr("UI_AMS_Panel_Sleep", "Sleep") .. ":",
+            }
             for li = 1, #labels do
                 local lw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, labels[li])) or 60
                 if lw > labelCol then labelCol = lw end
@@ -668,7 +660,16 @@ local function ensurePanelClasses()
         local cSep = { 0.35, 0.35, 0.35 }
 
         if data.pendingSnapshot then
-            self:drawText("Waiting for server snapshot...", x, y, cValue[1], cValue[2], cValue[3], 1.0, font)
+            self:drawText(
+                tr("UI_AMS_WaitingSnapshot", "Waiting for server snapshot..."),
+                x,
+                y,
+                cValue[1],
+                cValue[2],
+                cValue[3],
+                1.0,
+                font
+            )
             self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
             return
         end
@@ -808,7 +809,7 @@ local function ensurePanelClasses()
         { key = "UI_AMS_Help_Burden",          fallback = "Burden: The total physical weight and bulk of your worn armor. The bar shows your current load on a fixed scale. Heavier loadouts drain endurance faster during running, sprinting, and melee combat. In heavy armor, your arms also tire faster per swing." },
         { key = "UI_AMS_Help_Thermal",         fallback = "Thermal: Insulating gear adds exertion cost only after your body remains hot long enough. Short temperature spikes fade without a penalty. In cold conditions, Helpful means the insulation suits the weather; AMS does not add a cold bonus. Vanilla clothing condition and wetness are included in the reading." },
         { key = "UI_AMS_Help_Breathing",       fallback = "Breathing: Respirators, gas masks, and other sealed headgear restrict airflow. This adds to your exertion cost during physical activity. The severity is shown as Mildly Restricted, Restricted, or Heavily Restricted depending on the gear." },
-        { key = "UI_AMS_Help_Sleep",           fallback = "Sleep: Sleeping in rigid armor slows recovery. The percentage shows the estimated extra time needed to fully rest. Take off heavy gear before bed." },
+        { key = "UI_AMS_Help_Sleep",           fallback = "Sleep: Sleeping in rigid armor slows fatigue recovery. The exact effect depends on your fatigue, bed quality, traits, and sandbox settings. Take off rigid gear before bed." },
         { key = "UI_AMS_Help_CostDrivers",     fallback = "Cost Drivers: Shows which worn items contribute most to your total burden, sorted by impact. If one item dominates the list, swapping it out will make the biggest difference." },
         { key = "UI_AMS_Help_ExportTitleDesc",  fallback = "Support Reports: If something feels wrong, use this to save a snapshot of your current loadout, burden calculations, mod list, and game state to a text file. Attach it when reporting a problem." },
     }

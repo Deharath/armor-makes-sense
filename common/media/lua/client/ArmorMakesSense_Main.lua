@@ -8,12 +8,12 @@ local SpeedRebalance = require "ArmorMakesSense_SpeedRebalance"
 
 local Bootstrap = require "core/ArmorMakesSense_Bootstrap"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
-local Environment = require "ArmorMakesSense_EnvironmentShared"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local MPClientRuntime = require "ArmorMakesSense_MPClientRuntime"
 local Options = require "ArmorMakesSense_Options"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local Runtime = require "core/ArmorMakesSense_Runtime"
+local SleepHooks = require "ArmorMakesSense_SleepHooks"
 local UI = require "core/ArmorMakesSense_UI"
 
 local Mod = ArmorMakesSense
@@ -108,16 +108,6 @@ local function tryInstallSleepHooks(playerObj)
     if Mod._sleepHooksInstallResolved or not isEligibleLocalPlayer(playerObj) then
         return Mod._sleepHooksInstallResolved
     end
-    local loaded, SleepHooks = pcall(require, "ArmorMakesSense_SleepHooks")
-    if not loaded then
-        ClientRuntime.logErrorOnce("sleep_hooks_require_failed", "sleep planner module unavailable: " .. tostring(SleepHooks))
-        return false
-    end
-    if type(SleepHooks) ~= "table" or type(SleepHooks.wrapSleepPlanning) ~= "function" then
-        ClientRuntime.logErrorOnce("sleep_hooks_invalid", "sleep planner module did not expose wrapSleepPlanning")
-        return false
-    end
-
     local installed = SleepHooks.wrapSleepPlanning()
     if installed == nil then
         ClientRuntime.logOnce("sleep_hooks_deferred", "sleep planner dependencies not ready; installation deferred")
@@ -138,11 +128,8 @@ local function onCreatePlayer(_playerIndex, playerObj)
         return
     end
     ensureClientUi(player)
-    if SlotCompat and type(SlotCompat.initialize) == "function" then
-        SlotCompat.initialize()
-    end
-    if SpeedRebalance and type(SpeedRebalance.registerEvents) == "function"
-        and not ArmorMakesSense._speedRebalanceLoaded then
+    SlotCompat.initialize()
+    if not ArmorMakesSense._speedRebalanceLoaded then
         SpeedRebalance.registerEvents()
     end
     tryInstallSleepHooks(player)

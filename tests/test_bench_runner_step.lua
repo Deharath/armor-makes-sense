@@ -7,6 +7,15 @@ ArmorMakesSense = {
             safeMethod = Support.safeMethod,
             toBoolArg = function(value) return value == true end,
             nowMinutes = function() return 0 end,
+            boolTag = function(value)
+                if value == nil then return "na" end
+                return value and "true" or "false"
+            end,
+            metricOrNa = function(value, decimals)
+                local number = tonumber(value)
+                if number == nil then return "na" end
+                return string.format("%." .. tostring(decimals or 5) .. "f", number)
+            end,
         },
     },
 }

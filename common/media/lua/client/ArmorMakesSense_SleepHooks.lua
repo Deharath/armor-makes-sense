@@ -7,6 +7,7 @@ local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 
 local SleepHooks = ArmorMakesSense.SleepHooks
 local MP = ArmorMakesSense.MP or {}
+local MIN_VALID_AUTO_SLEEP_HOURS = 0.25
 
 local function log(message)
     print("[ArmorMakesSense] " .. tostring(message))
@@ -79,28 +80,65 @@ local function computeAdjustedHours(player, baseHours)
     return math.min(16, base + compat.computePlannerExtraHours(base, combined)), true
 end
 
+local function hoursUntilWake(timeOfDay, wakeHour)
+    local now = tonumber(timeOfDay)
+    local wake = tonumber(wakeHour)
+    if now == nil or wake == nil or wake < 0 then
+        return nil
+    end
+    local delta = wake - now
+    if delta < 0 then
+        delta = delta + 24
+    end
+    return delta
+end
+
+local function wakeHourFromNow(timeOfDay, hoursFromNow)
+    local wake = (tonumber(timeOfDay) or 0) + math.max(0, tonumber(hoursFromNow) or 0)
+    while wake >= 24 do
+        wake = wake - 24
+    end
+    return wake
+end
+
 local function wrapSleepDialog()
     if ArmorMakesSense._sleepDialogPlannerWrapped then
         return true
     end
     pcall(require, "ISUI/ISSleepDialog")
-    if type(ISSleepDialog) ~= "table" or type(ISSleepDialog.initialise) ~= "function" then
+    if type(ISSleepDialog) ~= "table"
+        or type(ISSleepDialog.initialise) ~= "function"
+        or type(ISSleepDialog.onClick) ~= "function" then
         return false
     end
-    local original = ISSleepDialog.initialise
+    local originalInitialise = ISSleepDialog.initialise
     ISSleepDialog.initialise = function(self)
-        original(self)
+        originalInitialise(self)
         local player = self and self.player
         local spinBox = self and self.spinBox
         local baseHours = tonumber(spinBox and spinBox.selected)
         if not player or not spinBox or not baseHours or baseHours <= 0 then
             return
         end
-        local adjusted = math.max(baseHours, math.floor(computeAdjustedHours(player, baseHours) + 0.5))
+        local adjustedHours, hasSleepPenalty = computeAdjustedHours(player, baseHours)
+        local adjusted = math.max(baseHours, math.floor(adjustedHours + 0.5))
         for hour = baseHours + 1, adjusted do
             spinBox:addOption(getText("IGUI_Sleep_NHours", hour))
         end
         spinBox.selected = adjusted
+        self._amsHasSleepPenalty = hasSleepPenalty
+    end
+
+    local originalOnClick = ISSleepDialog.onClick
+    ISSleepDialog.onClick = function(self, button)
+        local result = originalOnClick(self, button)
+        if button and button.internal == "YES"
+            and self
+            and self._amsHasSleepPenalty == true
+            and safeMethod(self.player, "isAsleep") == true then
+            sendSleepBedType(self.player, safeMethod(self.player, "getBedType"))
+        end
+        return result
     end
     ArmorMakesSense._sleepDialogPlannerWrapped = true
     return true
@@ -134,10 +172,21 @@ local function wrapAutoSleep()
         if timeOfDay == nil or wakeHour == nil then
             return result
         end
-        local baseHours = (wakeHour - timeOfDay) % 24
+        local baseHours = hoursUntilWake(timeOfDay, wakeHour)
+        local repairedSchedule = false
+        if baseHours == nil or baseHours < MIN_VALID_AUTO_SLEEP_HOURS then
+            log(string.format(
+                "repaired invalid vanilla sleep schedule wake=%.3f now=%.3f duration=%s",
+                wakeHour,
+                timeOfDay,
+                baseHours and string.format("%.3f", baseHours) or "invalid"
+            ))
+            baseHours = 3
+            repairedSchedule = true
+        end
         local adjustedHours, hasSleepPenalty = computeAdjustedHours(player, baseHours)
-        if adjustedHours > baseHours then
-            safeMethod(player, "setForceWakeUpTime", (timeOfDay + adjustedHours) % 24)
+        if repairedSchedule or adjustedHours > baseHours then
+            safeMethod(player, "setForceWakeUpTime", wakeHourFromNow(timeOfDay, adjustedHours))
         end
         if hasSleepPenalty then
             sendSleepBedType(player, safeMethod(player, "getBedType"))

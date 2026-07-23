@@ -169,7 +169,7 @@ local function ensureNativeDriverCapabilities(player, mode, block)
     if type(hasFunction) ~= "function" then
         return false, "native_hard_missing_has_function"
     end
-    if mode == "native_move" or mode == "native_warmup" or mode == "native_treadmill_simple" then
+    if mode == "native_treadmill_simple" then
         local movementMode = string.lower(tostring(block and (block.movement_mode or block.native_movement_mode) or "path"))
         if mode == "native_treadmill_simple" then
             movementMode = "forward"
@@ -533,7 +533,7 @@ local function nativeDriverRetryPath(player, driver, now, x, y, z)
 end
 
 local function startNativeDriver(player, exec, block)
-    local mode = tostring(block.mode or "native_move")
+    local mode = tostring(block.mode or "")
     local isTreadmillSimple = (mode == "native_treadmill_simple")
     local ok, reason = ensureNativeDriverCapabilities(player, mode, block)
     if not ok then
@@ -615,12 +615,6 @@ local function startNativeDriver(player, exec, block)
     end
     local targetLaps = math.max(0, math.floor(tonumber(block.lap_target) or 0))
     local targetSec = tonumber(block.requested_sec) or 0
-    if mode == "native_warmup" and targetSec <= 0 then
-        targetSec = 45
-    end
-    if mode == "native_move" and completionMode ~= "laps" and targetSec <= 0 then
-        targetSec = 600
-    end
     if isTreadmillSimple and targetSec <= 0 then
         local treadmillActivity = tostring(block.activity or "walk")
         targetSec = treadmillActivity == "sprint" and 120 or 360
@@ -751,7 +745,7 @@ local function startNativeDriver(player, exec, block)
         waypoints = nil,
         waypointIndex = 1,
         movementMode = movementMode,
-        useTestAIMode = (mode == "native_move" or mode == "native_warmup" or mode == "native_treadmill_simple" or mode == "native_combat_air") and block.test_ai_mode ~= false,
+        useTestAIMode = block.test_ai_mode ~= false,
         testAIModeState = "disabled",
         behavior = nil,
         pathState = nil,
@@ -787,7 +781,7 @@ local function startNativeDriver(player, exec, block)
         end
     end
 
-    if mode == "native_move" or mode == "native_warmup" or mode == "native_treadmill_simple" then
+    if mode == "native_treadmill_simple" then
         local hasFunction = ctx("hasFunction")
         local behavior = safeMethod(player, "getPathFindBehavior2")
         driver.behavior = behavior
@@ -1161,7 +1155,7 @@ local function tickNativeDriver(player, exec)
         driver.validSamples = (tonumber(driver.validSamples) or 0) + 1
     end
 
-    if driver.mode == "native_move" or driver.mode == "native_warmup" or driver.mode == "native_treadmill_simple" then
+    if driver.mode == "native_treadmill_simple" then
         applyNativeActivityMode(player, driver.activity)
 
         if driver.movementMode == "forward" then

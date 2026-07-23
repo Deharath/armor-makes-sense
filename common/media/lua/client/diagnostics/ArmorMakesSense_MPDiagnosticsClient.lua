@@ -154,6 +154,7 @@ local function sendSleepWakeDiagnostic(playerObj, payload)
 
     local ok, err = pcall(
         sendClientCommand,
+        playerObj,
         tostring(MP.NET_MODULE),
         SLEEP_WAKE_DIAG_COMMAND,
         payload
@@ -297,7 +298,13 @@ function ams_mp_diag_dump(reason)
         script_build = tostring(MP.SCRIPT_BUILD),
     }
 
-    local ok, err = pcall(sendClientCommand, tostring(MP.NET_MODULE), tostring(MP.DIAG_DUMP_REQUEST_COMMAND), args)
+    local ok, err = pcall(
+        sendClientCommand,
+        playerObj,
+        tostring(MP.NET_MODULE),
+        tostring(MP.DIAG_DUMP_REQUEST_COMMAND),
+        args
+    )
     if not ok then
         log("diag dump request failed: " .. tostring(err))
         return false

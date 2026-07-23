@@ -22,9 +22,6 @@ function Tick.tickPlayer(player)
     end
 
     local state = ClientRuntime.ensureState(player)
-    local options = Options.get()
-    UI.update(player, nil, options)
-
     local nowMinutes = Utils.getWorldAgeMinutes()
     if not ClientRuntime.runPlayerStartupChecks(player) then
         return
@@ -35,6 +32,9 @@ function Tick.tickPlayer(player)
         state.pendingCatchupMinutes = 0
         return
     end
+
+    local options = Options.get()
+    UI.update(player, nil, options)
 
     local profile = LoadModel.computeWornProfile(player)
     local activity = Environment.resolveActivity(player, options)

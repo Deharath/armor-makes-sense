@@ -9,6 +9,7 @@ local Environment = require "ArmorMakesSense_EnvironmentShared"
 local IncidentTrace = require "core/ArmorMakesSense_IncidentTrace"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local Options = require "ArmorMakesSense_Options"
+local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
 local Stats = require "ArmorMakesSense_StatsShared"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
@@ -117,33 +118,21 @@ local function closeWriterQuietly(writer)
 end
 
 local function burdenTierLabel(physicalLoad)
-    local value = tonumber(physicalLoad) or 0
-    if value < 7 then
-        return "Negligible"
-    end
-    if value < 20 then
-        return "Light"
-    end
-    if value < 45 then
-        return "Moderate"
-    end
-    if value < 75 then
-        return "Heavy"
-    end
-    return "Extreme"
+    local labels = {
+        negligible = "Negligible",
+        light = "Light",
+        moderate = "Moderate",
+        heavy = "Heavy",
+        extreme = "Extreme",
+    }
+    return labels[PresentationPolicy.burdenTier(physicalLoad)] or labels.negligible
 end
 
 local function sleepPenaltyLabel(rigidityLoad)
-    local rigidity = tonumber(rigidityLoad) or 0
-    if rigidity < 10 then
+    if not PresentationPolicy.hasSleepRestriction(rigidityLoad) then
         return nil
     end
-    local rigidityNorm = rigidity / (rigidity + 80.0) * 2.0
-    local sleepPct = math.floor(rigidityNorm * 6.75 + 0.5)
-    if sleepPct < 1 then
-        return nil
-    end
-    return string.format("~%d%% longer recovery", sleepPct)
+    return "Slower recovery"
 end
 
 local function javaListToArray(list)

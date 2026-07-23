@@ -38,7 +38,7 @@ local function setRole(client, server, gameClient, gameServer)
 end
 
 setRole(false, false, false, false)
-Support.assertEqual(Utils.getExecutionRole(), "standalone", "standalone execution role")
+Support.assertEqual(Utils.getExecutionRole(), "singleplayer", "singleplayer execution role")
 Stats.setEndurance(player, 0.6)
 Support.assertEqual(writes, 1, "standalone stat write")
 

@@ -81,7 +81,7 @@ encoder and decoder.
 | Response command | `snapshot` |
 | Request throttle | 2 wall-clock seconds |
 | Client cache expiry | 10 wall-clock seconds |
-| Snapshot schema | `2` |
+| Snapshot schema | `4` |
 
 ### Client Requests
 
@@ -93,6 +93,8 @@ A request contains:
 Load, connect, create-player, and clothing requests share the same request
 throttle. `EveryOneMinute` requests `SnapshotRecovery` only when the cached
 snapshot is absent or expired.
+The server independently enforces the same two-second floor per player, so a
+modified client cannot force unbounded physiology and snapshot work.
 
 ### Server Responses
 
@@ -199,6 +201,11 @@ drops, or AMS-applied endurance drops. The client sends only the request reason
 and its latest incident sequence; the server sends a trace only when the client
 is behind.
 
+An active trace retains its original trigger while collecting post-trigger
+rows. Once sealed, a later abnormal event replaces it with a new sequence, so
+support reports contain the most recent incident rather than the first incident
+since reconnect.
+
 The client appends the latest trace to the exported support report. Incident
 capture is part of the release runtime and has no separate player-facing UI.
 
@@ -209,8 +216,6 @@ Development builds provide:
 - `ams_mp_ping(reason)` through the client/server harness pair
 - `ams_mp_diag_dump(reason)` to request a server state dump
 - `ams_mp_diag_last()` to read the latest client-held dump
-- optional server minute summaries gated by
-  `_G.ams_enable_mp_diag_minute_summary == true`
 
 The Workshop packaging process excludes files under the client and server
 `diagnostics/` directories. Staging validates that remaining Lua has no
@@ -221,6 +226,9 @@ development references and does not rewrite runtime source files.
 - `client/ArmorMakesSense_MPClientRuntime.lua`: client transport and
   reconciliation
 - `server/ArmorMakesSense_MPServerRuntime.lua`: gameplay authority
+- `server/ArmorMakesSense_MPSnapshotBuilder.lua`: authoritative runtime snapshot
+  shaping
+- `server/ArmorMakesSense_MPRequestPolicy.lua`: per-player request throttling
 - `server/ArmorMakesSense_MPIncidentRecorder.lua`: bounded incident capture
 - `shared/ArmorMakesSense_MPCompat.lua`: protocol constants
 - `shared/ArmorMakesSense_SleepOwnership.lua`: AMS/CMS sleep authority policy

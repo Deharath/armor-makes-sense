@@ -16,7 +16,9 @@ local Environment = require "ArmorMakesSense_EnvironmentShared"
 local Strain = require "ArmorMakesSense_StrainShared"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local IncidentRecorder = require "ArmorMakesSense_MPIncidentRecorder"
+local RequestPolicy = require "ArmorMakesSense_MPRequestPolicy"
 local SnapshotCodec = require "ArmorMakesSense_MPSnapshotCodec"
+local SnapshotBuilder = require "ArmorMakesSense_MPSnapshotBuilder"
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
 local Simulation = require "ArmorMakesSense_Simulation"
 local FATIGUE_STAT_MASK = 16
@@ -28,14 +30,11 @@ local function log(message)
 end
 
 local safeCall = Utils.safeMethod
-local clamp = Utils.clamp
 local lower = Utils.lower
 local toBoolean = Utils.toBoolean
 local getWorldAgeMinutes = Utils.getWorldAgeMinutes
 local getEndurance = Stats.getEndurance
-local setEndurance = Stats.setEndurance
 local getFatigue = Stats.getFatigue
-local setFatigue = Stats.setFatigue
 local getWallClockSeconds = Utils.getWallClockSeconds
 
 local function playerName(playerObj)
@@ -67,6 +66,7 @@ local function ensurePlayerState(playerObj)
     mpState.lastSleepSnapshotSentWallSecond = tonumber(mpState.lastSleepSnapshotSentWallSecond) or 0
     mpState.lastSleepFatigueSyncWallSecond = tonumber(mpState.lastSleepFatigueSyncWallSecond) or 0
     mpState.lastSleepRealtimeUpdateWallSecond = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
+    mpState.lastClientSnapshotRequestWallSecond = tonumber(mpState.lastClientSnapshotRequestWallSecond) or 0
     mpState.pendingCatchupMinutes = math.max(0, tonumber(mpState.pendingCatchupMinutes) or 0)
     local pendingSleepBedType = tostring(mpState.pendingSleepBedType or "")
     mpState.pendingSleepBedType = pendingSleepBedType ~= "" and pendingSleepBedType or nil
@@ -218,31 +218,7 @@ prepareRuntimeInputs = function(playerObj, mpState, options, sleepOnly)
 end
 
 local function buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
-    local uiSnapshot = type(mpState.uiRuntimeSnapshot) == "table" and mpState.uiRuntimeSnapshot or {}
-    return {
-        loadNorm = tonumber(uiSnapshot.loadNorm) or 0,
-        physicalLoad = tonumber(profile.physicalLoad) or 0,
-        thermalResistance = tonumber(uiSnapshot.thermalResistance) or 0,
-        airflowResistance = tonumber(profile.airflowResistance) or 0,
-        sealedRestriction = tonumber(profile.sealedRestriction) or 0,
-        rigidityLoad = tonumber(profile.rigidityLoad) or 0,
-        driverCount = tonumber(profile.driverCount) or 0,
-        effectiveLoad = tonumber(uiSnapshot.effectiveLoad) or tonumber(profile.physicalLoad) or 0,
-        thermalContribution = tonumber(uiSnapshot.thermalContribution) or 0,
-        breathingContribution = tonumber(uiSnapshot.breathingContribution) or 0,
-        drivers = drivers or {},
-        activityLabel = tostring(activityLabel or uiSnapshot.activityLabel or "idle"),
-        hotPressure = tonumber(uiSnapshot.hotPressure) or 0,
-        coldSuitability = tonumber(uiSnapshot.coldSuitability) or 0,
-        thermalStrainScale = tonumber(uiSnapshot.thermalStrainScale) or 0,
-        enduranceBeforeAms = tonumber(uiSnapshot.enduranceBeforeAms) or 0,
-        enduranceAfterAms = tonumber(uiSnapshot.enduranceAfterAms) or 0,
-        enduranceNaturalDelta = tonumber(uiSnapshot.enduranceNaturalDelta) or 0,
-        enduranceAppliedDelta = tonumber(uiSnapshot.enduranceAppliedDelta) or 0,
-        lastAppliedDtMinutes = tonumber(mpState.lastAppliedDtMinutes) or 0,
-        catchupPendingMinutes = tonumber(mpState.pendingCatchupMinutes) or 0,
-        updatedMinute = tonumber(uiSnapshot.updatedMinute) or getWorldAgeMinutes(),
-    }
+    return SnapshotBuilder.build(mpState, profile, drivers, activityLabel, getWorldAgeMinutes())
 end
 
 local function getMovementFlags(playerObj)
@@ -609,6 +585,15 @@ local function onClientCommand(module, command, playerObj, args)
         return
     end
     if tostring(command) ~= tostring(MP.REQUEST_SNAPSHOT_COMMAND) then
+        return
+    end
+
+    local _, mpState = ensurePlayerState(playerObj)
+    if not mpState or not RequestPolicy.acceptSnapshotRequest(
+        mpState,
+        getWallClockSeconds(),
+        MP.SNAPSHOT_FALLBACK_SECONDS
+    ) then
         return
     end
 

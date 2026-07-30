@@ -15,13 +15,13 @@ local TOOLTIP_DISPLAY_THRESHOLD = 1.5
 local TOOLTIP_BAR_MAX = 28
 local TOOLTIP_MIN_LABEL_WIDTH = 80
 local TOOLTIP_VALUE_WIDTH = 80
+local TOOLTIP_TITLE_GAP = 5
 local TT_LABEL_DEFAULT = { 1.0, 1.0, 0.8, 1.0 }
 local TT_LABEL_ACCENT = { 1.0, 0.85, 0.55, 1.0 }
 local TT_VALUE_DEFAULT = { 1.0, 1.0, 1.0, 1.0 }
 local TT_VALUE_BREATHING = { 1.0, 0.80, 0.40, 1.0 }
 local TT_VALUE_BREATHING_HEAVY = { 1.0, 0.45, 0.35, 1.0 }
 local TT_BAR_BURDEN = { 0.95, 0.70, 0.25, 1.0 }
-local javaFieldCache = {}
 
 local function tr(key, fallback)
     if not getText then
@@ -38,46 +38,25 @@ local function clamp01(value)
     return Utils.clamp(tonumber(value) or 0, 0, 1)
 end
 
-local function reflectedFieldValue(target, scope, fieldName)
-    if not target
-        or type(getNumClassFields) ~= "function"
-        or type(getClassField) ~= "function"
-        or type(getClassFieldVal) ~= "function"
-    then
-        return nil
-    end
-
-    local key = tostring(scope) .. ":" .. tostring(fieldName)
-    local field = javaFieldCache[key]
-    if field == false then
-        return nil
-    end
-    if field == nil then
-        local count = tonumber(getNumClassFields(target)) or 0
-        for index = 0, count - 1 do
-            local candidate = getClassField(target, index)
-            if candidate and tostring(ClientRuntime.safeMethod(candidate, "getName") or "") == fieldName then
-                field = candidate
-                javaFieldCache[key] = candidate
-                break
-            end
-        end
-        if field == nil then
-            javaFieldCache[key] = false
-            return nil
+local function tooltipLayoutGeometry(tooltip)
+    local lineSpacing = tonumber(ClientRuntime.safeMethod(tooltip, "getLineSpacing")) or 14
+    local font = ClientRuntime.safeMethod(tooltip, "getFont")
+    local textManager = nil
+    if type(getTextManager) == "function" then
+        local ok, value = pcall(getTextManager)
+        if ok then
+            textManager = value
         end
     end
-    local ok, value = pcall(getClassFieldVal, target, field)
-    return ok and value or nil
-end
 
-local function numericJavaField(target, scope, fieldName, fallback)
-    local reflected = tonumber(reflectedFieldValue(target, scope, fieldName))
-    if reflected ~= nil then
-        return reflected
+    local digitWidth = tonumber(ClientRuntime.safeMethod(textManager, "MeasureStringX", font, "0"))
+    if digitWidth == nil then
+        return 5, lineSpacing + 10, 5
     end
-    local direct = target and tonumber(target[fieldName]) or nil
-    return direct ~= nil and direct or fallback
+
+    local horizontalPad = math.max(0, math.floor(digitWidth))
+    local verticalPad = math.max(0, math.floor(digitWidth / 2))
+    return horizontalPad, verticalPad + lineSpacing + TOOLTIP_TITLE_GAP, verticalPad
 end
 
 local function burdenBarFraction(physicalLoad)
@@ -283,9 +262,7 @@ local function renderCombinedTooltip(tooltip, item)
     end
 
     addRowsToLayout(layout, item)
-    local y = numericJavaField(layout, "ObjectTooltip.Layout", "offsetY", 0)
-    local padLeft = numericJavaField(tooltip, "ObjectTooltip", "padLeft", 5)
-    local padBottom = numericJavaField(tooltip, "ObjectTooltip", "padBottom", 5)
+    local padLeft, y, padBottom = tooltipLayoutGeometry(tooltip)
     local height = tonumber(ClientRuntime.safeMethod(layout, "render", padLeft, y, tooltip)) or y
     ClientRuntime.safeMethod(tooltip, "endLayout", layout)
     ClientRuntime.safeMethod(tooltip, "setHeight", math.floor(height + padBottom))

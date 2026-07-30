@@ -246,7 +246,8 @@ not duplicate `common/media`.
   optional shared-controller provider for AMS burden and breathing rows; the
   standalone path supplies one layout to 42.20's `DoTooltipEmbedded` contract so
   vanilla and AMS rows share column measurement, rendering, and final bounds,
-  with PZ class-field reflection used for Java-owned offset and padding values
+  deriving the title offset and padding from the tooltip's public font and line
+  metrics without debug-only Java reflection
 - `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
 - `ArmorMakesSense_IncidentTrace.lua`: mirrored MP incident storage and report
   formatting

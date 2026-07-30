@@ -68,7 +68,7 @@ local itemMethods = {
         if self:getTooltip() == nil then
             tooltipSuppressedDuringRender = tooltipSuppressedDuringRender + 1
         end
-        layout._javaFields.offsetY = 30
+        layout.offsetY = 30
         local encumbrance = layout:addItem()
         encumbrance:setLabel("Encumbrance:", 1, 1, 0.8, 1)
         encumbrance:setValue("2.0 (0.6 equipped)", 1, 1, 1, 1)
@@ -89,7 +89,6 @@ local function newLayout()
         minLabelWidth = 0,
         minValueWidth = 0,
         offsetY = 0,
-        _javaFields = { offsetY = 0 },
     }
     function layout:setMinLabelWidth(width)
         self.minLabelWidth = width
@@ -136,37 +135,32 @@ local tooltipMethods = {
         return layout
     end,
     endLayout = function() end,
+    getFont = function() return "TooltipFont" end,
+    getLineSpacing = function() return 20 end,
     getHeight = function() return tooltipHeight end,
     getWidth = function() return tooltipWidth end,
     setHeight = function(_, value) tooltipHeight = value end,
     setWidth = function(_, value) tooltipWidth = value end,
 }
 local tooltip = setmetatable({
-    padLeft = 0,
-    padRight = 5,
-    padBottom = 0,
-    _javaFields = { padLeft = 5, padBottom = 5 },
+    padRight = 10,
 }, { __index = tooltipMethods })
-local reflectedFields = {
-    offsetY = { name = "offsetY", getName = function(self) return self.name end },
-    padLeft = { name = "padLeft", getName = function(self) return self.name end },
-    padBottom = { name = "padBottom", getName = function(self) return self.name end },
-}
-getNumClassFields = function(target)
-    if target == tooltip then
-        return 2
-    end
-    return target and target._javaFields and 1 or 0
+getTextManager = function()
+    return {
+        MeasureStringX = function(_, font, text)
+            Support.assertEqual(font, "TooltipFont", "tooltip geometry uses the active tooltip font")
+            Support.assertEqual(text, "0", "tooltip geometry mirrors vanilla padding measurement")
+            return 10
+        end,
+    }
 end
-getClassField = function(target, index)
-    if target == tooltip then
-        return index == 0 and reflectedFields.padLeft or reflectedFields.padBottom
-    end
-    return reflectedFields.offsetY
+local reflectionCalls = 0
+getNumClassFields = function()
+    reflectionCalls = reflectionCalls + 1
+    error("Not in debug")
 end
-getClassFieldVal = function(target, field)
-    return target._javaFields[field.name]
-end
+getClassField = getNumClassFields
+getClassFieldVal = getNumClassFields
 local panel = { item = item, tooltip = tooltip }
 originalRender = function(self)
     self.item:DoTooltip(self.tooltip)
@@ -188,13 +182,14 @@ for _, layout in ipairs(completedLayouts) do
     Support.assertClose(layout.rows[4].progress, 0.5, 1e-9, "combined layout preserves the burden fraction")
     Support.assertEqual(layout.rows[5].label, "Breathing:", "breathing follows burden in the combined layout")
     Support.assertEqual(layout.rows[5].value, "Restricted", "combined layout preserves breathing text")
-    Support.assertEqual(layout.renderX, 5, "combined layout renders once at vanilla left padding")
+    Support.assertEqual(layout.renderX, 10, "combined layout derives vanilla left padding from font metrics")
     Support.assertEqual(layout.renderY, 30, "combined layout renders at vanilla's embedded content offset")
 end
-Support.assertEqual(tooltipWidth, 375, "widest vanilla label and value determine the shared tooltip width")
+Support.assertEqual(tooltipWidth, 385, "widest vanilla label and value determine the shared tooltip width")
 Support.assertEqual(tooltipHeight, 105, "combined layout owns the final tooltip height")
 Support.assertEqual(tooltipSuppressedDuringRender, 2, "misleading shoulder warning is suppressed for both owner passes")
 Support.assertEqual(tooltipKey, "Tooltip_item_NoBackpack", "shoulder tooltip state is restored after owner render")
+Support.assertEqual(reflectionCalls, 0, "release tooltip rendering never calls debug-only reflection helpers")
 
 local wrappedByAnotherMod = ISToolTipInv.render
 ISToolTipInv.render = function(self)

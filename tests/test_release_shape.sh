@@ -346,6 +346,10 @@ if rg -n '"DrawText"|"DrawTextRight"|"DrawProgressBar"' "${tooltip_module}"; the
   echo "standalone tooltip integration bypasses shared layout measurement with direct drawing" >&2
   exit 1
 fi
+if rg -n 'getNumClassFields|getClassField|getClassFieldVal' "${tooltip_module}"; then
+  echo "release tooltip integration uses debug-only Java reflection" >&2
+  exit 1
+fi
 if ! rg -q 'getPlayerData.+characterInfo|playerData\.characterInfo' "${ui_module}"; then
   echo "Burden UI no longer resolves the live per-player character window" >&2
   exit 1

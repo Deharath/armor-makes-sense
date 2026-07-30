@@ -70,7 +70,7 @@ Both coordinators omit the endurance callback during sleep.
 ### Vanilla Runtime Contracts
 
 The model integrations were checked against the installed Project Zomboid
-42.19.0 runtime. Vanilla alone initializes `SleepingEvent`; AMS never calls
+42.20.0 runtime. Vanilla alone initializes `SleepingEvent`; AMS never calls
 `setPlayerFallAsleep` after vanilla has started sleep because that API resets
 sleep-event state and reapplies the delay-to-sleep timer. MP wake reconciliation
 only accepts an explicit server `WakeTransition`; an older ordinary snapshot
@@ -211,7 +211,7 @@ not duplicate `common/media`.
   policy, bounded slicing, and shared sleep/endurance advancement
 - `ArmorMakesSense_StrainShared.lua`: melee strain eligibility and magnitude
 - `ArmorMakesSense_SpeedRebalance.lua`: discomfort removal, curated speed values,
-  and item reslots
+  item reslots, and removal of obsolete shoulder-pad script tooltips
 - `ArmorMakesSense_SlotCompat.lua`: custom body locations and compatibility rules
 - `ArmorMakesSense_Compat.lua`: `MakesSenseCompat` registry
 - `ArmorMakesSense_MPCompat.lua`: MP protocol constants and build identity
@@ -238,11 +238,15 @@ not duplicate `common/media`.
 - `ArmorMakesSense_Runtime.lua`: event registration and lifecycle guards
 - `ArmorMakesSense_Combat.lua`: singleplayer combat event handling
 - `ArmorMakesSense_UI.lua`: Burden panel, character-tab integration, help, and
-  support export
+  support export; already-created character windows are resolved through
+  42.20's per-player UI data rather than a class-level singleton
 - `ArmorMakesSense_PresentationPolicy.lua`: shared burden, breathing, and sleep
   presentation thresholds used by UI and reports
 - `ArmorMakesSense_UITooltip.lua`: compositional wearable tooltip extension and
-  optional shared-controller provider for AMS burden and breathing rows
+  optional shared-controller provider for AMS burden and breathing rows; the
+  standalone path supplies one layout to 42.20's `DoTooltipEmbedded` contract so
+  vanilla and AMS rows share column measurement, rendering, and final bounds,
+  with PZ class-field reflection used for Java-owned offset and padding values
 - `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
 - `ArmorMakesSense_IncidentTrace.lua`: mirrored MP incident storage and report
   formatting

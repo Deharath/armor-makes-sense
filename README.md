@@ -5,7 +5,7 @@ wearable discomfort penalties with physical equipment costs.
 
 ## Requirements
 
-- Project Zomboid Build 42.19.0 or later
+- Project Zomboid Build 42.20.0 or later
 - No required library mods
 
 ## Features

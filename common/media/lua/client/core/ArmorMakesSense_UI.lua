@@ -105,6 +105,17 @@ local function burdenTierFromTotal(physicalLoad)
     return tr(label[1], label[2]), tier
 end
 
+local function getCharacterInfoWindow(playerNum)
+    if type(_G.getPlayerData) ~= "function" then
+        return nil
+    end
+    local ok, playerData = pcall(_G.getPlayerData, tonumber(playerNum) or 0)
+    if not ok or not playerData then
+        return nil
+    end
+    return playerData.characterInfo
+end
+
 local function showExportResultModal(playerNum, ok, detail)
     if not ISModalDialog then
         return false
@@ -127,10 +138,11 @@ local function markUiDirty()
     if fallbackWindow and fallbackWindow.panel and type(fallbackWindow.panel.markDirty) == "function" then
         fallbackWindow.panel:markDirty()
     end
-    local screenClass = _G.ISCharacterInfoWindow
-    local existing = screenClass and screenClass.instance or nil
-    if existing and existing._amsBurdenPanel and type(existing._amsBurdenPanel.markDirty) == "function" then
-        existing._amsBurdenPanel:markDirty()
+    for playerNum = 0, 3 do
+        local existing = getCharacterInfoWindow(playerNum)
+        if existing and existing._amsBurdenPanel and type(existing._amsBurdenPanel.markDirty) == "function" then
+            existing._amsBurdenPanel:markDirty()
+        end
     end
 end
 
@@ -1077,6 +1089,11 @@ local function attachBurdenTabToScreen(screen)
     return false, "character info tabs container unavailable"
 end
 
+local function getLiveCharacterInfoWindow(player)
+    local playerNum = tonumber(ClientRuntime.safeMethod(player, "getPlayerNum")) or 0
+    return getCharacterInfoWindow(playerNum)
+end
+
 local function installCharacterTabHook()
     if tabHookInstalled then
         return
@@ -1125,14 +1142,6 @@ local function installCharacterTabHook()
     screenClass._amsBurdenTabOriginalCreateChildren = originalCreateChildren
     tabHookInstalled = true
     ClientRuntime.logOnce("ui_burden_tab_hook_installed", "[UI] Character info Burden tab hook installed.")
-
-    -- Retroactively attach to any already-created instance
-    pcall(function()
-        local existing = screenClass.instance
-        if existing and not existing._amsBurdenAttached and existing.panel and type(existing.panel.addView) == "function" then
-            screenClass._amsAttachBurdenTab(existing)
-        end
-    end)
 end
 
 -- -----------------------------------------------------------------------------
@@ -1150,10 +1159,14 @@ function UI.update(player, profile, options)
     installClothingUpdateHook()
     installCharacterTabHook()
 
+    local screenClass = _G.ISCharacterInfoWindow
+    local existing = getLiveCharacterInfoWindow(player)
+    local attach = screenClass and screenClass._amsAttachBurdenTab or nil
+    if existing and not existing._amsBurdenAttached and type(attach) == "function" then
+        attach(existing)
+    end
+
     if tabHookFailed then
-        local screenClass = _G.ISCharacterInfoWindow
-        local existing = screenClass and screenClass.instance or nil
-        local attach = screenClass and screenClass._amsAttachBurdenTab or nil
         if not existing or type(attach) ~= "function" or not attach(existing) then
             ensureFallbackWindow(true)
         end

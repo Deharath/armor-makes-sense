@@ -2,11 +2,13 @@
 
 ## Tooltip Integration
 
-`client/core/ArmorMakesSense_UITooltip.lua` extends `ISToolTipInv.render` without
-replacing an item's `DoTooltip` implementation. AMS lets the current tooltip
-owner build its normal layout and contributes wearable rows immediately before
-that layout is finalized. When `EuryTooltipController` is installed, AMS
-registers as a row provider instead of wrapping layout finalization.
+`client/core/ArmorMakesSense_UITooltip.lua` extends `ISToolTipInv.render`.
+During the owner's synchronous render call, AMS temporarily wraps the exposed
+item `DoTooltip` entry and routes eligible non-container wearables through
+42.20's `DoTooltipEmbedded` contract. Vanilla and AMS populate one shared
+`ObjectTooltip.Layout`, which is rendered and measured once before the original
+method is restored. When `EuryTooltipController` is installed, AMS registers as
+a row provider and leaves the owner's ordinary tooltip path intact.
 If the vanilla tooltip class is not ready during the first UI update, AMS
 defers installation and retries on a later update.
 
@@ -16,6 +18,13 @@ defers installation and retries on a later update.
 | Breathing | `airflowResistance >= 0.8` |
 
 The standalone extension uses a burden bar with a per-item maximum of `28`.
+Because the row belongs to vanilla's own layout, the longest vanilla label and
+value determine the shared label boundary, progress width, font-dependent bar
+height, line spacing, and final tooltip bounds. Only the colored fill varies
+with the item's burden fraction. The standalone path reads the Java layout
+offset and tooltip padding through PZ's class-field reflection helpers because
+direct Lua access to those primitive fields can expose zero rather than the
+values used by Java.
 The shared-controller provider expresses the same fraction as a percentage
 because that controller's row contract is text-based.
 
@@ -28,7 +37,9 @@ Breathing labels:
 | `sealedRestriction > 0` | Heavily Restricted |
 
 Shoulder-pad backpack-conflict text is cleared from the reslotted script item by
-the speed and slot rebalance pass, outside tooltip rendering.
+the speed and slot rebalance pass. Existing item instances can retain their
+copied vanilla tooltip, so the tooltip owner also suppresses that one obsolete
+key for the duration of rendering and restores the item afterward.
 
 ## Burden Panel
 
@@ -79,8 +90,9 @@ tooltips, and support-report formatting.
 
 ## Character Information Integration
 
-AMS patches `ISCharacterInfoWindow.createChildren` to add the Burden tab. It can
-also attach to an existing character window.
+AMS patches `ISCharacterInfoWindow.createChildren` to add the Burden tab. If
+42.20 created the window before AMS installed its hook, AMS resolves the live
+window from `getPlayerData(playerNum).characterInfo` and attaches directly.
 
 - The character window is widened when required to keep the tab strip visible.
 - Controller LB/RB input from the Burden tab delegates to vanilla tab switching.

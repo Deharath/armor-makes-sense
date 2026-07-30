@@ -41,6 +41,44 @@ Support.assertEqual(reloaded, first, "speed module preserves its public table on
 Support.assertEqual(#handlers.OnGameBoot, 1, "speed boot handler replaced on reload")
 Support.assertEqual(#handlers.OnMainMenuEnter, 1, "speed menu handler replaced on reload")
 Support.assertEqual(#handlers.OnGameStart, 1, "speed game handler replaced on reload")
+
+local params = {}
+local shoulder = {
+    getFullType = function() return "Base.Shoulderpad_Articulated_L_Metal" end,
+    getBodyLocation = function() return "base:shoulderpadleft" end,
+    getDiscomfortModifier = function() return 0.1 end,
+    getRunSpeedModifier = function() return 1.0 end,
+    getCombatSpeedModifier = function() return 0.97 end,
+    DoParam = function(_, ...)
+        params[#params + 1] = { ... }
+    end,
+}
+local emptyItems = {
+    size = function() return 0 end,
+}
+ScriptManager = {
+    instance = {
+        getItem = function(_, fullType)
+            if fullType == "Base.Shoulderpad_Articulated_L_Metal" then
+                return shoulder
+            end
+            return nil
+        end,
+        getAllItems = function()
+            return emptyItems
+        end,
+    },
+}
+handlers.OnGameBoot[1]()
+
+local clearedTooltip = false
+for _, call in ipairs(params) do
+    if call[1] == "Tooltip" and call[2] == "" then
+        clearedTooltip = true
+        break
+    end
+end
+Support.assertTrue(clearedTooltip, "shoulder reslot clears the obsolete script tooltip through DoParam")
 next = luaNext
 
 print("ams speed rebalance lifecycle checks passed")

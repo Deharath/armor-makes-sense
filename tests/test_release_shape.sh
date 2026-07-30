@@ -337,6 +337,23 @@ if ! rg -q 'function UITooltip\.install' "${tooltip_module}"; then
   echo "tooltip integration entrypoint missing" >&2
   exit 1
 fi
+if ! rg -q 'DoTooltipEmbedded' "${tooltip_module}" \
+  || ! rg -q '"beginLayout"' "${tooltip_module}"; then
+  echo "standalone tooltip integration does not use the 42.20 shared-layout contract" >&2
+  exit 1
+fi
+if rg -n '"DrawText"|"DrawTextRight"|"DrawProgressBar"' "${tooltip_module}"; then
+  echo "standalone tooltip integration bypasses shared layout measurement with direct drawing" >&2
+  exit 1
+fi
+if ! rg -q 'getPlayerData.+characterInfo|playerData\.characterInfo' "${ui_module}"; then
+  echo "Burden UI no longer resolves the live per-player character window" >&2
+  exit 1
+fi
+if rg -n 'screenClass\.instance' "${ui_module}"; then
+  echo "Burden UI regressed to the nonexistent character-window singleton" >&2
+  exit 1
+fi
 if rg -n 'function Stats\.set(Thirst|Discomfort|Wetness|BodyTemperature)' \
   "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_StatsShared.lua"; then
   echo "development-only body-state setters leaked into production StatsShared" >&2

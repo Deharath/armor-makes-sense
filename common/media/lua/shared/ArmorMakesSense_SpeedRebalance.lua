@@ -54,17 +54,17 @@ local function safeDoParam(item, param)
     return ok
 end
 
-local function safeSetTooltip(item, value)
+local function safeClearScriptTooltip(item)
     if not item then
         return false
     end
-    local fn = item.setTooltip
+    local fn = item.DoParam
     if type(fn) ~= "function" then
         return false
     end
-    local ok, err = pcall(fn, item, value)
+    local ok, err = pcall(fn, item, "Tooltip", "")
     if not ok then
-        print("[ArmorMakesSense] setTooltip failed: " .. tostring(err))
+        print("[ArmorMakesSense] clearing script tooltip failed: " .. tostring(err))
     end
     return ok
 end
@@ -542,7 +542,7 @@ local function applySlotReslots(sm)
                 -- Vanilla shoulderpads carry Tooltip_item_NoBackpack. After AMS slot
                 -- compatibility changes this becomes misleading, so clear it.
                 if isShoulderpadSlot then
-                    itemChanged = safeSetTooltip(item, nil) or itemChanged
+                    itemChanged = safeClearScriptTooltip(item) or itemChanged
                 end
                 if itemChanged then
                     changed = changed + 1

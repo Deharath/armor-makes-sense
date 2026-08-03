@@ -6,7 +6,6 @@ Core.SupportReport = Core.SupportReport or {}
 
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local Environment = require "ArmorMakesSense_EnvironmentShared"
-local IncidentTrace = require "core/ArmorMakesSense_IncidentTrace"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local Options = require "ArmorMakesSense_Options"
 local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
@@ -524,15 +523,6 @@ local function buildReport(player)
             appendLine(lines, "server_snapshot=unavailable")
         end
         appendLine(lines, "")
-
-        local appendIncidentTraceSection = IncidentTrace.appendReportSection
-        if type(appendIncidentTraceSection) == "function" then
-            appendIncidentTraceSection(lines)
-        else
-            appendLine(lines, "## Incident Trace")
-            appendLine(lines, "incident=unavailable")
-            appendLine(lines, "")
-        end
     end
 
     -- Worn Items
@@ -586,6 +576,17 @@ function SupportReport.writeCurrentPlayerReport(player)
     end
     if not playerObj then
         return false, nil, "No local player available."
+    end
+
+    if Utils.isMultiplayer() then
+        local state = ClientRuntime.ensureState(playerObj)
+        if not (state and type(state.mpServerSnapshot) == "table") then
+            local mpRuntime = ArmorMakesSense and ArmorMakesSense.MPClientRuntime or nil
+            if mpRuntime and type(mpRuntime.requestSnapshot) == "function" then
+                mpRuntime.requestSnapshot(playerObj, 0)
+            end
+            return false, nil, "Server snapshot requested. Try export again in a moment."
+        end
     end
 
     local fileName = sanitizeFileToken("ams-report-" .. getWallClockFileStamp(), "ams-report") .. ".txt"

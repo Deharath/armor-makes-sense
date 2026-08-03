@@ -261,6 +261,31 @@ function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profi
     return enduranceDelta
 end
 
+function Physiology.projectRuntimeSnapshot(player, state, options, profile, activityFactor, activityLabel, postureLabel)
+    local sourceState = type(state) == "table" and state or {}
+    local thermalProjection = {}
+    for key, value in pairs(sourceState.thermalModelState or {}) do
+        if type(value) ~= "table" then
+            thermalProjection[key] = value
+        end
+    end
+    local projectionState = {
+        lastEnduranceObserved = tonumber(sourceState.lastEnduranceObserved),
+        thermalModelState = thermalProjection,
+    }
+    Physiology.applyEnduranceModel(
+        player,
+        projectionState,
+        options,
+        0,
+        profile,
+        activityFactor,
+        activityLabel,
+        postureLabel
+    )
+    return projectionState.uiRuntimeSnapshot
+end
+
 function Physiology.buildCompatTraceSnapshot(state)
     local snapshot = type(state) == "table" and type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or {}
     return {

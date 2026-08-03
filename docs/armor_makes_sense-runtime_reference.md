@@ -43,26 +43,29 @@ The MP registration path requires its server-command, connection,
 create-player, clothing-update, and minute events. The MP runtime imports the
 shared client UI and options modules directly for installation and invalidation.
 
-## Per-Minute and Per-Frame Loops
+## Singleplayer Per-Minute and Per-Frame Loops
 
 `EveryOneMinute` path:
 - enumerates every active local player
 - calls `tickPlayer(player)` once for each player
 
 `OnPlayerUpdate` path:
-- sleep-time per-frame `tickPlayer`
+- sleep-time per-frame `tickPlayer` in the singleplayer runtime only
 
 Development builds register separate benchmark and environment-lock handlers
 from `client/testing/ArmorMakesSense_00_DevBootstrap.lua`. Production runtime
 handlers do not inspect or mutate development state.
 
-MP snapshot requests use PZ's player-aware `sendClientCommand` overload. Server
-responses include the addressed online player id so a split-screen client stores
-each snapshot against the correct local runtime state.
+MP snapshot requests use PZ's player-aware `sendClientCommand` overload and are
+issued only by visible UI collection or support export. Server responses include
+the addressed online player id so a split-screen client stores each snapshot
+against the correct local runtime state.
 
 ## Tick Pipeline (`Tick.tickPlayer`)
 
-Called once per game minute from `EveryOneMinute` and per-frame during sleep from `OnPlayerUpdate`.
+Called once per game minute from `EveryOneMinute` and, in SP, during sleep from
+`OnPlayerUpdate`. The MP server instead gates one global online-player sleep scan
+per wall-clock second.
 
 1. `ensureState(player)` and `getOptions()`
 2. `UI.update(player, nil, options)`
@@ -89,11 +92,16 @@ it for:
 - sleep-before-endurance model ordering;
 - structured attempted, committed, discarded, failure, and abort results.
 
-The MP server supplies incident capture and snapshot projection as its awake
-per-slice callback. SP needs no callback. Both authorities use the same
-sleep-only policy without an endurance callback; sleep fatigue remains
-authority-owned while MP wall-clock transport throttles stay in the server
-coordinator.
+The MP server supplies lightweight cumulative-loss guarding and snapshot-cache
+projection as its awake per-slice callback. SP needs no callback. Both
+authorities use the same sleep-only policy without an endurance callback; sleep
+fatigue remains authority-owned while MP wall-clock transport throttles stay in
+the server coordinator.
+
+Demand-driven MP UI refresh uses `Physiology.projectRuntimeSnapshot()`. It runs
+the zero-duration telemetry calculation against copied endurance and thermal
+state, returning current gear-dependent presentation without mutating the
+authority state or player stats.
 
 All production client and shared gameplay modules are free of mutable runtime
 contexts. They require their collaborators directly. Tests use real module
@@ -250,7 +258,8 @@ One traversal of `player:getWornItems()` produces:
 - `profile`: aggregate gameplay totals;
 - `rows`: normalized rows for every worn item, including excluded items with zero signals;
 - `costDrivers`: rows at or above the physical-load display threshold;
-- `equipmentSignature` and `wornCount`: stable incident-trace identity.
+- `equipmentSignature` and `wornCount`: stable analysis identity for diagnostics
+  and benchmark comparison.
 
 UI, support reports, and MP authority consume this canonical result instead of
 maintaining separate worn-item collectors. `computeWornProfile(player)` returns

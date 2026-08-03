@@ -11,7 +11,7 @@ client owns presentation, local singleplayer execution, and development tools.
 - [Runtime Reference](./armor_makes_sense-runtime_reference.md): classification,
   load aggregation, physiology, strain, sleep, slots, and configuration
 - [Multiplayer Reference](./armor_makes_sense-mp_reference.md): authority,
-  snapshot transport, network state, and diagnostics
+  demand-driven snapshot transport, sleep synchronization, and network state
 - [UI Reference](./armor_makes_sense-ui_reference.md): tooltips, Burden panel,
   refresh behavior, and controller handling
 - [Testing Reference](./armor_makes_sense-testing_reference.md): test API,
@@ -47,23 +47,26 @@ and benchmark speed restoration uses PZ's configured `getTrueMultiplier` value.
 `ArmorMakesSense_MPServerRuntime.lua` owns endurance, sleep fatigue, wake
 correction, and melee strain. Its weapon-swing handler delegates eligibility,
 vanilla-option gating, magnitude, and stat application to the same shared
-strain policy used in SP. Clients request player-addressed snapshots at session boundaries,
-after local clothing changes, or when cached state is missing or stale. Normal
-updates are pushed by the server. Requests carry their local player identity,
-reason, and latest incident sequence. Responses transport the addressed online
-player id and numeric thermal signals;
-the client derives hot/cold presentation from those values.
-Client and server request throttles are independent. The server accepts at most
-one request-triggered snapshot per player every two wall-clock seconds.
+strain policy used in SP and reuses the server's latest cached worn profile.
+Full player-addressed snapshots are demand-driven: the visible Burden panel or a
+support-report export asks for current UI state when needed. A clothing change
+only dirties the UI, which recomputes deterministic gear burden and driver rows
+locally on its next frame without requiring a clothing-specific request. Periodic presentation
+requests contain no gameplay or lifecycle input and never invoke simulation.
+The server recomputes dynamic telemetry against an isolated state copy without
+advancing endurance, catch-up, sleep, or thermal authority. Client and server
+independently enforce a five-second request floor, and the client suppresses
+duplicates while a request is pending.
 
 The MP client runtime is inert when loaded. The production bootstrap calls its
 explicit registration entrypoint only when `isClient()` identifies a
 multiplayer client. SP gameplay handlers are not registered in that role. The
-MP runtime requires the shared client UI directly and owns its refresh calls.
+MP runtime registers only server-command and player lifecycle handlers; it does
+not subscribe snapshot transport to clothing or minute events.
 
 The MP server and SP client use the same shared load, environment, strain,
 physiology, and simulation-advance modules. Coordinators sample PZ state and
-own UI, incident, and network side effects; the shared advance operation owns
+own UI and network side effects; the shared advance operation owns
 elapsed accumulation, active catch-up limits, slicing, and model call order.
 Both coordinators omit the endurance callback during sleep.
 
@@ -73,8 +76,8 @@ The model integrations were checked against the installed Project Zomboid
 42.20.0 runtime. Vanilla alone initializes `SleepingEvent`; AMS never calls
 `setPlayerFallAsleep` after vanilla has started sleep because that API resets
 sleep-event state and reapplies the delay-to-sleep timer. MP wake reconciliation
-only accepts an explicit server `WakeTransition`; an older ordinary snapshot
-cannot cancel a sleep that has just started locally. The automatic sleep hook
+only accepts an explicit compact server `WakeTransition` sleep-state message;
+an ordinary UI snapshot cannot cancel sleep. The automatic sleep hook
 also repairs a missing or near-zero wake interval before applying the planner
 penalty, preventing a broken schedule from immediately waking the player and
 consuming the sleep attempt. When a planner penalty
@@ -145,7 +148,7 @@ physical burden.
 
 Server snapshots are encoded and decoded by
 `ArmorMakesSense_MPSnapshotCodec.lua`. The codec owns the wire-field mapping,
-driver-row mapping, defaults, and schema validation. Schema version 4 is a hard
+driver-row mapping, defaults, and schema validation. Schema version 5 is a hard
 contract; clients reject snapshots with a missing or different version.
 
 Simulation is explicitly fail-open. Results distinguish attempted, committed,
@@ -218,11 +221,10 @@ not duplicate `common/media`.
 - `ArmorMakesSense_RuntimeState.lua`: isolated transient SP, MP-client, and
   MP-server state stores
 - `ArmorMakesSense_MPSnapshotCodec.lua`: versioned server snapshot wire codec
-- `ArmorMakesSense_MPIncidentSchema.lua`: incident trace schema and thresholds
 - `server/ArmorMakesSense_MPSnapshotBuilder.lua`: server runtime snapshot
   shaping, including detailed breathing telemetry
 - `server/ArmorMakesSense_MPRequestPolicy.lua`: request-triggered snapshot
-  throttling
+  throttling, queueing, and completion
 - `client/testing/ArmorMakesSense_BenchRunnerSnapshot.lua`: streamed benchmark
   artifact writer with compact snapshot fallback; successful streams are finalized
   in place so transient samples and probes remain available to parsers
@@ -249,8 +251,6 @@ not duplicate `common/media`.
   deriving the title offset and padding from the tooltip's public font and line
   metrics without debug-only Java reflection
 - `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
-- `ArmorMakesSense_IncidentTrace.lua`: mirrored MP incident storage and report
-  formatting
 
 Production client modules do not use mutable dependency contexts. The
 development benchmark modules retain their separate context because their job
@@ -287,9 +287,6 @@ is to run controlled substitutions and scenarios rather than game runtime.
   item objects and emits the vanilla clothing-update event
 - benchmark plans do not support perk/XP mutation; controlled equilibrium reset
   remains intentionally destructive and is for disposable test characters
-- `server/ArmorMakesSense_MPIncidentRecorder.lua`: bounded release-path incident
-  capture used by support reports
-
 Workshop packaging excludes the development testing and diagnostics modules.
 It validates that remaining Lua has no development references and does not
 rewrite source files during staging.
@@ -300,9 +297,11 @@ Runtime state is held in three weak-key tables indexed by player identity. It is
 not written to player `modData` or save files.
 
 - SP state stores timing, endurance baselines, runtime snapshots, and sleep state.
-- MP client state stores request timing and the latest server snapshot.
+- MP client state stores request timing, one pending flag, and the latest server
+  snapshot.
 - MP server state stores authority timing, catch-up, sleep synchronization,
-  thermal state, runtime snapshots, and bounded incident data.
+  thermal state, a runtime snapshot cache, queued snapshot demand, and a cached
+  worn profile.
 
 On first access for a player, `ArmorMakesSense_RuntimeState.lua` deletes the
 obsolete `ArmorMakesSenseState` save blob without importing any values from it.

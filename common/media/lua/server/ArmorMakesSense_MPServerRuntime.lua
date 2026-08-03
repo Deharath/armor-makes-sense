@@ -15,7 +15,6 @@ local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local Environment = require "ArmorMakesSense_EnvironmentShared"
 local Strain = require "ArmorMakesSense_StrainShared"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
-local IncidentRecorder = require "ArmorMakesSense_MPIncidentRecorder"
 local RequestPolicy = require "ArmorMakesSense_MPRequestPolicy"
 local SnapshotCodec = require "ArmorMakesSense_MPSnapshotCodec"
 local SnapshotBuilder = require "ArmorMakesSense_MPSnapshotBuilder"
@@ -23,14 +22,16 @@ local RuntimeState = require "ArmorMakesSense_RuntimeState"
 local Simulation = require "ArmorMakesSense_Simulation"
 local FATIGUE_STAT_MASK = 16
 local SLEEP_FATIGUE_SYNC_INTERVAL_WALL_SECONDS = 5
-local SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS = 1
+local SLEEP_REALTIME_UPDATE_WALL_SECONDS = 1
+local WORN_PROFILE_CACHE_WALL_SECONDS = 1
+local MAX_APPLIED_ENDURANCE_DROP_PER_INVOCATION = 0.12
+local lastSleepScanWallSecond = 0
 
 local function log(message)
     print("[ArmorMakesSense][MP][SERVER] " .. tostring(message))
 end
 
 local safeCall = Utils.safeMethod
-local lower = Utils.lower
 local toBoolean = Utils.toBoolean
 local getWorldAgeMinutes = Utils.getWorldAgeMinutes
 local getEndurance = Stats.getEndurance
@@ -62,15 +63,19 @@ local function ensurePlayerState(playerObj)
     local mpState = state.mpServer
     mpState.lastUpdateGameMinutes = tonumber(mpState.lastUpdateGameMinutes) or getWorldAgeMinutes()
     mpState.lastEnduranceObserved = tonumber(mpState.lastEnduranceObserved)
+        or tonumber(getEndurance(playerObj))
     mpState.wasSleeping = toBoolean(mpState.wasSleeping)
-    mpState.lastSleepSnapshotSentWallSecond = tonumber(mpState.lastSleepSnapshotSentWallSecond) or 0
     mpState.lastSleepFatigueSyncWallSecond = tonumber(mpState.lastSleepFatigueSyncWallSecond) or 0
     mpState.lastSleepRealtimeUpdateWallSecond = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
+    mpState.lastSleepBedHintWallSecond = tonumber(mpState.lastSleepBedHintWallSecond) or 0
     mpState.lastClientSnapshotRequestWallSecond = tonumber(mpState.lastClientSnapshotRequestWallSecond) or 0
+    mpState.pendingSnapshotRequest = mpState.pendingSnapshotRequest == true
     mpState.pendingCatchupMinutes = math.max(0, tonumber(mpState.pendingCatchupMinutes) or 0)
     local pendingSleepBedType = tostring(mpState.pendingSleepBedType or "")
     mpState.pendingSleepBedType = pendingSleepBedType ~= "" and pendingSleepBedType or nil
     mpState.runtimeSnapshot = type(mpState.runtimeSnapshot) == "table" and mpState.runtimeSnapshot or nil
+    mpState.cachedWornProfile = type(mpState.cachedWornProfile) == "table" and mpState.cachedWornProfile or nil
+    mpState.cachedWornProfileWallSecond = tonumber(mpState.cachedWornProfileWallSecond) or 0
     if type(mpState.lastWakeSyncAsleepFlag) ~= "boolean" then
         mpState.lastWakeSyncAsleepFlag = nil
     end
@@ -80,14 +85,27 @@ end
 
 local function recordSleepBedType(playerObj, args)
     local _, mpState = ensurePlayerState(playerObj)
-    if not mpState then
+    if not mpState or not toBoolean(safeCall(playerObj, "isAsleep")) then
         return
     end
 
     local bedType = tostring(args and args.bed_type or "")
-    if bedType == "" then
+    if bedType == "" or #bedType > 64 then
         return
     end
+    local validPrefix = string.find(bedType, "goodBed", 1, true) == 1
+        or string.find(bedType, "averageBed", 1, true) == 1
+        or string.find(bedType, "badBed", 1, true) == 1
+        or string.find(bedType, "floor", 1, true) == 1
+    if not validPrefix then
+        return
+    end
+    local nowSecond = getWallClockSeconds()
+    local lastHint = tonumber(mpState.lastSleepBedHintWallSecond) or 0
+    if lastHint > 0 and nowSecond >= lastHint and (nowSecond - lastHint) < 2 then
+        return
+    end
+    mpState.lastSleepBedHintWallSecond = nowSecond
 
     mpState.pendingSleepBedType = bedType
     safeCall(playerObj, "setBedType", bedType)
@@ -102,6 +120,30 @@ end
 
 local function isPlayerAsleep(playerObj)
     return toBoolean(safeCall(playerObj, "isAsleep"))
+end
+
+local function sendSleepState(playerObj, reason)
+    if type(sendServerCommand) ~= "function" then
+        return false
+    end
+    local args = {
+        player_online_id = tonumber(safeCall(playerObj, "getOnlineID")) or -1,
+        authoritativeFatigue = tonumber(getFatigue(playerObj)) or 0,
+        serverSleeping = isPlayerAsleep(playerObj),
+        reason = tostring(reason or "SleepSync"),
+    }
+    local ok, err = pcall(
+        sendServerCommand,
+        playerObj,
+        tostring(MP.NET_MODULE),
+        tostring(MP.SLEEP_STATE_COMMAND),
+        args
+    )
+    if not ok then
+        log("sleep state send failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(err))
+        return false
+    end
+    return true
 end
 
 local function syncFatigueToClient(playerObj, phaseTag)
@@ -134,6 +176,7 @@ local function syncSleepingFatigueToClient(playerObj, mpState)
     local sent = syncFatigueToClient(playerObj, "sleep")
     if sent then
         mpState.lastSleepFatigueSyncWallSecond = nowSecond
+        sendSleepState(playerObj, "SleepSync")
     end
     return sent
 end
@@ -205,6 +248,8 @@ registerCompatProvider()
 prepareRuntimeInputs = function(playerObj, mpState, options, sleepOnly)
     local analysis = LoadModel.analyzeWornGear(playerObj)
     local profile = analysis.profile
+    mpState.cachedWornProfile = profile
+    mpState.cachedWornProfileWallSecond = getWallClockSeconds()
 
     local sleeping = sleepOnly == true
     local drivers = sleeping and {} or analysis.costDrivers
@@ -221,72 +266,39 @@ local function buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
     return SnapshotBuilder.build(mpState, profile, drivers, activityLabel, getWorldAgeMinutes())
 end
 
-local function getMovementFlags(playerObj)
-    return {
-        moving = toBoolean(safeCall(playerObj, "isMoving")),
-        playerMoving = toBoolean(safeCall(playerObj, "isPlayerMoving")),
-        running = toBoolean(safeCall(playerObj, "isRunning")),
-        sprinting = toBoolean(safeCall(playerObj, "isSprinting")),
-        aiming = toBoolean(safeCall(playerObj, "isAiming")),
-        attackStarted = toBoolean(safeCall(playerObj, "isAttackStarted")),
-    }
-end
-
-local function buildTopDriverLabels(drivers)
-    local parts = {}
-    if type(drivers) ~= "table" then
-        return parts
+local function refreshPresentationSnapshot(playerObj, mpState)
+    local options = Options.get()
+    local profile, drivers, activityFactor, activityLabel, postureLabel =
+        prepareRuntimeInputs(playerObj, mpState, options, false)
+    local uiSnapshot = Physiology.projectRuntimeSnapshot(
+        playerObj,
+        mpState,
+        options,
+        profile,
+        activityFactor,
+        activityLabel,
+        postureLabel
+    )
+    if type(uiSnapshot) ~= "table" then
+        error("presentation projection did not produce a runtime snapshot")
     end
-    local limit = math.min(3, #drivers)
-    for i = 1, limit do
-        local driver = drivers[i] or {}
-        parts[#parts + 1] = string.format(
-            "%s (%s)",
-            tostring(driver.label or "Unknown Item"),
-            string.format("%.1f", tonumber(driver.physical) or 0)
-        )
-    end
-    return parts
-end
-
-local function buildIncidentSlice(playerObj, reason, dtMinutes, mpState, profile, drivers, snapshot, activityLabel, analysis)
-    local uiSnapshot = type(mpState.uiRuntimeSnapshot) == "table" and mpState.uiRuntimeSnapshot or {}
-    local flags = getMovementFlags(playerObj)
-    return {
-        worldMinute = tonumber(getWorldAgeMinutes()) or 0,
-        reason = tostring(reason or "tick"),
-        dtMinutes = tonumber(dtMinutes) or 0,
-        pendingCatchupMinutes = tonumber(mpState.pendingCatchupMinutes) or 0,
-        activityLabel = tostring(activityLabel or snapshot.activityLabel or "idle"),
-        moving = flags.moving == true,
-        playerMoving = flags.playerMoving == true,
-        running = flags.running == true,
-        sprinting = flags.sprinting == true,
-        aiming = flags.aiming == true,
-        attackStarted = flags.attackStarted == true,
-        enduranceBeforeAms = tonumber(uiSnapshot.enduranceBeforeAms) or 0,
-        enduranceAfterAms = tonumber(uiSnapshot.enduranceAfterAms) or 0,
-        enduranceNaturalDelta = tonumber(uiSnapshot.enduranceNaturalDelta) or 0,
-        enduranceAppliedDelta = tonumber(uiSnapshot.enduranceAppliedDelta) or 0,
-        effectiveLoad = tonumber(snapshot.effectiveLoad) or 0,
-        loadNorm = tonumber(snapshot.loadNorm) or 0,
-        physicalLoad = tonumber(profile.physicalLoad) or 0,
-        thermalResistance = tonumber(snapshot.thermalResistance) or 0,
-        airflowResistance = tonumber(profile.airflowResistance) or 0,
-        sealedRestriction = tonumber(profile.sealedRestriction) or 0,
-        rigidityLoad = tonumber(profile.rigidityLoad) or 0,
-        thermalContribution = tonumber(snapshot.thermalContribution) or 0,
-        breathingContribution = tonumber(snapshot.breathingContribution) or 0,
-        hotPressure = tonumber(snapshot.hotPressure) or 0,
-        thermalStrainScale = tonumber(snapshot.thermalStrainScale) or 0,
-        coldSuitability = tonumber(snapshot.coldSuitability) or 0,
-        equipSignature = tostring(analysis and analysis.equipmentSignature or ""),
-        wornCount = tonumber(analysis and analysis.wornCount) or 0,
-        topDrivers = buildTopDriverLabels(drivers),
+    local projectionState = {
+        uiRuntimeSnapshot = uiSnapshot,
+        lastAppliedDtMinutes = mpState.lastAppliedDtMinutes,
+        pendingCatchupMinutes = mpState.pendingCatchupMinutes,
     }
+    local snapshot = SnapshotBuilder.build(
+        projectionState,
+        profile,
+        drivers,
+        activityLabel,
+        getWorldAgeMinutes()
+    )
+    mpState.runtimeSnapshot = snapshot
+    return snapshot
 end
 
-local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncidentSeq, lightweight)
+local function sendSnapshot(playerObj, snapshot)
     if type(sendServerCommand) ~= "function" then
         return
     end
@@ -294,104 +306,49 @@ local function sendSnapshot(playerObj, mpState, snapshot, reason, clientIncident
         return
     end
 
-    local args = SnapshotCodec.encode(snapshot, {
-        authoritativeFatigue = getFatigue(playerObj),
-        serverSleeping = isPlayerAsleep(playerObj),
-        reason = reason,
-    }, not lightweight)
+    local args = SnapshotCodec.encode(snapshot, true)
     args.player_online_id = tonumber(safeCall(playerObj, "getOnlineID")) or -1
-
-    if not lightweight then
-        local incidentSeq, incidentPayload = IncidentRecorder.buildSnapshotIncidentPayload(playerObj, mpState, clientIncidentSeq)
-        args.incident_seq = tonumber(incidentSeq) or 0
-        if type(incidentPayload) == "table" then
-            args.incident_trace = incidentPayload
-        end
-
-    else
-        args.incident_seq = 0
-    end
 
     local ok, err = pcall(sendServerCommand, playerObj, tostring(MP.NET_MODULE), tostring(MP.SNAPSHOT_COMMAND), args)
     if not ok then
         log("snapshot send failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(err))
+        return false
     end
+    return true
 end
 
-local function shouldSendSleepingSnapshot(mpState)
-    local nowSecond = getWallClockSeconds()
-    local lastSent = tonumber(mpState.lastSleepSnapshotSentWallSecond) or 0
-    if lastSent <= 0 or (nowSecond - lastSent) >= SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS then
-        mpState.lastSleepSnapshotSentWallSecond = nowSecond
-        return true
+local function flushPendingSnapshot(playerObj, mpState)
+    local snapshot = mpState.runtimeSnapshot
+    if not RequestPolicy.canFlushSnapshot(mpState, snapshot) then
+        return false
     end
-    return false
-end
-
-local function buildFreshSnapshot(playerObj, mpState, options, preserveEnduranceBaseline)
-    local okInputs, profile, drivers, activityFactor, activityLabel, postureLabel =
-        pcall(prepareRuntimeInputs, playerObj, mpState, options)
-    if not okInputs then
-        log("shared model input prep failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
-        return nil
+    if not sendSnapshot(playerObj, snapshot) then
+        return false
     end
-    local okSleep, sleepErr = pcall(Physiology.applySleepTransition, playerObj, mpState, options, 0, profile)
-    if not okSleep then
-        log("sleep model failed during snapshot refresh player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(sleepErr))
-        return nil
-    end
-    local previousEnduranceObserved = tonumber(mpState.lastEnduranceObserved)
-    local okEndurance, enduranceErr = pcall(
-        Physiology.applyEnduranceModel,
-        playerObj,
-        mpState,
-        options,
-        0,
-        profile,
-        activityFactor,
-        activityLabel,
-        postureLabel
-    )
-    if not okEndurance then
-        log("endurance model failed during snapshot refresh player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(enduranceErr))
-        return nil
-    end
-    if preserveEnduranceBaseline then
-        mpState.lastEnduranceObserved = previousEnduranceObserved
-    end
-    return buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
-end
-
-local function isSessionBoundaryReason(reason)
-    return reason == "onconnected" or reason == "oncreateplayer"
+    RequestPolicy.completeSnapshotRequest(mpState)
+    return true
 end
 
 local function resetCatchupState(playerObj, mpState, nowMinute)
     mpState.lastUpdateGameMinutes = tonumber(nowMinute) or 0
     mpState.pendingCatchupMinutes = 0
     mpState.lastAppliedDtMinutes = 0
-    mpState.lastSleepSnapshotSentWallSecond = 0
     mpState.lastSleepFatigueSyncWallSecond = 0
     mpState.lastSleepRealtimeUpdateWallSecond = 0
     mpState.lastWakeSyncAsleepFlag = nil
     mpState.lastEnduranceObserved = tonumber(getEndurance(playerObj))
 end
 
-local function updatePlayer(playerObj, reason, requestArgs)
+local function updatePlayer(playerObj, sleepingOverride)
     local _, mpState = ensurePlayerState(playerObj)
     if not mpState then
         return
     end
 
-    local normalizedReason = lower(reason)
     local nowMinute = tonumber(getWorldAgeMinutes()) or 0
-    if isSessionBoundaryReason(normalizedReason) then
-        resetCatchupState(playerObj, mpState, nowMinute)
-        IncidentRecorder.clearSession(playerObj, mpState, nowMinute)
-    end
     Simulation.accumulateElapsed(mpState, nowMinute)
 
-    local sleepingNow = isPlayerAsleep(playerObj)
+    local sleepingNow = type(sleepingOverride) == "boolean" and sleepingOverride or isPlayerAsleep(playerObj)
     if sleepingNow then
         mpState.lastWakeSyncAsleepFlag = true
     end
@@ -410,18 +367,7 @@ local function updatePlayer(playerObj, reason, requestArgs)
     end
 
     if mpState.pendingCatchupMinutes <= 0 then
-        if normalizedReason ~= "minute" and normalizedReason ~= "tick" then
-            local options = Options.get()
-            local freshSnapshot = buildFreshSnapshot(playerObj, mpState, options, not isSessionBoundaryReason(normalizedReason))
-            if freshSnapshot then
-                mpState.runtimeSnapshot = freshSnapshot
-                sendSnapshot(playerObj, mpState, freshSnapshot, reason, requestArgs and requestArgs.incident_seq)
-                return
-            end
-        end
-        if type(mpState.runtimeSnapshot) == "table" then
-            sendSnapshot(playerObj, mpState, mpState.runtimeSnapshot, reason, requestArgs and requestArgs.incident_seq)
-        end
+        flushPendingSnapshot(playerObj, mpState)
         return
     end
 
@@ -463,27 +409,20 @@ local function updatePlayer(playerObj, reason, requestArgs)
         end
         if snapshot then
             mpState.runtimeSnapshot = snapshot
-            if shouldSendSleepingSnapshot(mpState) then
-                sendSnapshot(playerObj, mpState, snapshot, reason, requestArgs and requestArgs.incident_seq, true)
-            end
+            flushPendingSnapshot(playerObj, mpState)
         end
         return
     end
 
-    IncidentRecorder.beginInvocation(playerObj, mpState, {
-        reason = normalizedReason,
-        worldMinute = nowMinute,
-    })
-
-    local okInputs, profile, drivers, activityFactor, activityLabel, postureLabel, analysis =
+    local okInputs, profile, drivers, activityFactor, activityLabel, postureLabel =
         pcall(prepareRuntimeInputs, playerObj, mpState, options)
     if not okInputs then
-        IncidentRecorder.finishInvocation(playerObj, mpState)
         resetCatchupState(playerObj, mpState, nowMinute)
         log("shared model input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
         return
     end
 
+    local cumulativeAppliedDrop = 0
     local result = Simulation.advance({
         player = playerObj,
         state = mpState,
@@ -497,29 +436,15 @@ local function updatePlayer(playerObj, reason, requestArgs)
         applyEnduranceModel = Physiology.applyEnduranceModel,
         afterSlice = function(slice)
             snapshot = buildRuntimeSnapshot(mpState, profile, drivers, activityLabel)
-            local incidentResult = IncidentRecorder.recordSlice(
-                playerObj,
-                mpState,
-                buildIncidentSlice(
-                    playerObj,
-                    reason,
-                    slice.dtMinutes,
-                    mpState,
-                    profile,
-                    drivers,
-                    snapshot,
-                    activityLabel,
-                    analysis
-                )
-            )
-            if incidentResult.abortReplay then
-                mpState.pendingCatchupMinutes = 0
-                snapshot = buildFreshSnapshot(playerObj, mpState, options, false) or snapshot
+            local appliedDelta = tonumber(slice and slice.enduranceResult) or 0
+            if appliedDelta < 0 then
+                cumulativeAppliedDrop = cumulativeAppliedDrop - appliedDelta
+            end
+            if cumulativeAppliedDrop >= MAX_APPLIED_ENDURANCE_DROP_PER_INVOCATION then
                 return { abort = true, clearPending = true }
             end
         end,
     })
-    IncidentRecorder.finishInvocation(playerObj, mpState)
     if result.failurePhase then
         log(string.format(
             "%s model failed player=%s err=%s",
@@ -534,46 +459,62 @@ local function updatePlayer(playerObj, reason, requestArgs)
     end
     if snapshot then
         mpState.runtimeSnapshot = snapshot
-        sendSnapshot(playerObj, mpState, snapshot, reason, requestArgs and requestArgs.incident_seq)
+        flushPendingSnapshot(playerObj, mpState)
     end
 end
 
-local function onPlayerUpdate(playerObj)
-    if not playerObj then
-        return
-    end
+local function updateSleepPlayer(playerObj)
     local _, mpState = ensurePlayerState(playerObj)
     if not mpState then
         return
     end
 
     local sleepingNow = isPlayerAsleep(playerObj)
-    local wasSleeping = mpState.lastWakeSyncAsleepFlag
-    if type(wasSleeping) ~= "boolean" then
-        wasSleeping = mpState.wasSleeping == true
-    end
-    mpState.lastWakeSyncAsleepFlag = sleepingNow
+    local wasSleeping = mpState.lastWakeSyncAsleepFlag == true
 
-    if wasSleeping == true and sleepingNow == false then
-        updatePlayer(playerObj, "WakeTransition")
+    if wasSleeping and not sleepingNow then
+        updatePlayer(playerObj, true)
+        mpState.lastWakeSyncAsleepFlag = false
+        mpState.lastSleepRealtimeUpdateWallSecond = 0
         if SleepOwnership.amsOwnsFatigue(Options.get()) then
             syncWakeFatigueToClient(playerObj)
+            sendSleepState(playerObj, "WakeTransition")
         end
         return
     end
 
-    if sleepingNow then
-        local nowWallSecond = getWallClockSeconds()
-        local lastSleepRealtime = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
-        if lastSleepRealtime <= 0 or (nowWallSecond - lastSleepRealtime) >= SLEEP_REALTIME_SNAPSHOT_WALL_SECONDS then
-            mpState.lastSleepRealtimeUpdateWallSecond = nowWallSecond
-            updatePlayer(playerObj, "SleepRealtimeSync")
-            return
-        end
-    else
+    mpState.lastWakeSyncAsleepFlag = sleepingNow
+    if not sleepingNow then
         mpState.lastSleepRealtimeUpdateWallSecond = 0
+        return
     end
 
+    local nowWallSecond = getWallClockSeconds()
+    local lastSleepRealtime = tonumber(mpState.lastSleepRealtimeUpdateWallSecond) or 0
+    if lastSleepRealtime > 0 and (nowWallSecond - lastSleepRealtime) < SLEEP_REALTIME_UPDATE_WALL_SECONDS then
+        return
+    end
+    mpState.lastSleepRealtimeUpdateWallSecond = nowWallSecond
+    updatePlayer(playerObj, true)
+end
+
+local function onPlayerUpdate(_playerObj)
+    local nowWallSecond = getWallClockSeconds()
+    if lastSleepScanWallSecond > 0
+        and nowWallSecond >= lastSleepScanWallSecond
+        and (nowWallSecond - lastSleepScanWallSecond) < SLEEP_REALTIME_UPDATE_WALL_SECONDS then
+        return
+    end
+    lastSleepScanWallSecond = nowWallSecond
+
+    local onlinePlayers = type(getOnlinePlayers) == "function" and getOnlinePlayers() or nil
+    local count = tonumber(onlinePlayers and safeCall(onlinePlayers, "size")) or 0
+    for i = 0, count - 1 do
+        local playerObj = safeCall(onlinePlayers, "get", i)
+        if playerObj then
+            updateSleepPlayer(playerObj)
+        end
+    end
 end
 
 local function onClientCommand(module, command, playerObj, args)
@@ -592,12 +533,18 @@ local function onClientCommand(module, command, playerObj, args)
     if not mpState or not RequestPolicy.acceptSnapshotRequest(
         mpState,
         getWallClockSeconds(),
-        MP.SNAPSHOT_FALLBACK_SECONDS
+        MP.SNAPSHOT_REQUEST_MIN_SECONDS
     ) then
         return
     end
 
-    updatePlayer(playerObj, args and args.reason or "request", args)
+    RequestPolicy.queueSnapshotRequest(mpState)
+    local okRefresh, refreshFailure = pcall(refreshPresentationSnapshot, playerObj, mpState)
+    if not okRefresh then
+        log("presentation snapshot refresh failed player=" .. tostring(playerName(playerObj))
+            .. " err=" .. tostring(refreshFailure))
+    end
+    flushPendingSnapshot(playerObj, mpState)
 end
 
 local function onEveryOneMinute()
@@ -606,8 +553,8 @@ local function onEveryOneMinute()
 
     for i = 0, count - 1 do
         local playerObj = safeCall(onlinePlayers, "get", i)
-        if playerObj then
-            updatePlayer(playerObj, "minute")
+        if playerObj and not isPlayerAsleep(playerObj) then
+            updatePlayer(playerObj)
         end
     end
 end
@@ -623,11 +570,26 @@ local function onWeaponSwing(attacker, weapon)
         return
     end
 
+    local _, mpState = ensurePlayerState(playerObj)
+    local profile = mpState and mpState.cachedWornProfile or nil
+    local nowWallSecond = getWallClockSeconds()
+    local profileAge = nowWallSecond - (tonumber(mpState and mpState.cachedWornProfileWallSecond) or 0)
+    if type(profile) ~= "table"
+        or profileAge < 0
+        or profileAge >= WORN_PROFILE_CACHE_WALL_SECONDS then
+        profile = LoadModel.computeWornProfile(playerObj)
+        if mpState then
+            mpState.cachedWornProfile = profile
+            mpState.cachedWornProfileWallSecond = nowWallSecond
+        end
+    end
+
     local okOverlay, extraOrErr = pcall(
         Strain.applyArmorStrainOverlay,
         playerObj,
         weapon,
-        options
+        options,
+        profile
     )
     if not okOverlay then
         log("strain overlay failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(extraOrErr))

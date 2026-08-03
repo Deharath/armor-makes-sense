@@ -276,4 +276,26 @@ Support.assertClose(
     "runtime preserves explicit unsealed state"
 )
 
+endurance = 0.73
+local projectionSource = {
+    lastEnduranceObserved = 0.61,
+    thermalModelState = { hotPressure = 0.2 },
+}
+local projected = Physiology.projectRuntimeSnapshot(
+    player,
+    projectionSource,
+    enduranceOptions,
+    breathingProfile,
+    defaults.ActivitySprint,
+    "sprint",
+    "stand"
+)
+Support.assertTrue(type(projected) == "table", "presentation projection returns runtime telemetry")
+Support.assertClose(projected.physicalLoad, 10, 1e-9, "presentation projection uses current worn profile")
+Support.assertClose(projected.breathingContribution, 6.375, 1e-9, "presentation projection refreshes breathing")
+Support.assertClose(endurance, 0.73, 1e-9, "presentation projection does not write endurance")
+Support.assertEqual(projectionSource.uiRuntimeSnapshot, nil, "presentation projection does not replace authority snapshot")
+Support.assertClose(projectionSource.lastEnduranceObserved, 0.61, 1e-9, "presentation projection does not re-anchor endurance")
+Support.assertClose(projectionSource.thermalModelState.hotPressure, 0.2, 1e-9, "presentation projection does not advance thermal state")
+
 print("ams physiology characterization passed")

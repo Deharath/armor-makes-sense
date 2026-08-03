@@ -38,8 +38,9 @@ wearable discomfort penalties with physical equipment costs.
 ## Multiplayer
 
 AMS supports singleplayer, hosted co-op, and dedicated servers. Multiplayer
-gameplay calculations are server-authoritative. Clients receive snapshots for
-the Burden UI and apply server-authoritative sleep and wake corrections.
+gameplay calculations are server-authoritative. Clients request current
+presentation snapshots only while the Burden UI or support export needs them;
+sleep and wake corrections use a separate compact server message.
 
 ## Configuration
 

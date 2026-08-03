@@ -115,6 +115,18 @@ Support.assertEqual(#appliedStrain, 1, "event-authoritative strain write count")
 Support.assertEqual(appliedStrain[1].hitCount, 1, "one overlay application per swing")
 Support.assertClose(appliedStrain[1].extra, 0.15, 1e-9, "event-authoritative strain amount")
 
+LoadModel.computeWornProfile = function()
+    error("cached swing profile should avoid a worn-gear rescan")
+end
+local cachedExtra = Strain.applyArmorStrainOverlay(
+    player,
+    meleeWeapon,
+    defaults,
+    { swingChainLoad = 12.5 }
+)
+Support.assertClose(cachedExtra, 0.053033008589, 1e-9, "cached swing profile amount")
+Support.assertEqual(#appliedStrain, 2, "cached swing profile write count")
+
 LoadModel.computeWornProfile = computeWornProfile
 SandboxOptions = nil
 

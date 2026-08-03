@@ -15,7 +15,6 @@ tests=(
   test_mp_snapshot_codec.lua
   test_mp_snapshot_builder.lua
   test_mp_request_policy.lua
-  test_mp_incident_recorder.lua
   test_mp_sleep_wake.lua
   test_runtime_state.lua
   test_options.lua

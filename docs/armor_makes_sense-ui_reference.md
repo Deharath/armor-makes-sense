@@ -74,8 +74,10 @@ snapshot.
   fatigue, bed quality, traits, and sandbox settings.
 - Cost drivers include worn items with `physicalLoad >= 1.5`, sorted by physical
   load descending.
-- MP clients use server-supplied driver rows and resolve local display names by
-  full item type when possible.
+- MP clients calculate gear burden, breathing restriction, rigidity, and cost
+  drivers from the current local worn-item collection so clothing actions are
+  reflected immediately. Dynamic physiology and thermal state remain supplied
+  by the server snapshot.
 
 Burden, breathing, and sleep visibility thresholds come from
 `ArmorMakesSense_PresentationPolicy.lua`, which is shared by the panel,
@@ -83,9 +85,13 @@ tooltips, and support-report formatting.
 
 ## Refresh Behavior
 
-- `OnClothingUpdated` marks the UI dirty.
+- A local player's `OnClothingUpdated` marks the UI dirty; remote-player events
+  are ignored and the hook sends no network request.
 - SP reads the local profile and runtime snapshot.
-- MP reads `mpServerSnapshot`; missing or expired data displays a waiting state.
+- MP combines the current local worn profile with dynamic `mpServerSnapshot`
+  telemetry. A visible panel requests server telemetry only when the cache is
+  missing or older than 30 wall-clock seconds. Missing data displays a waiting
+  state.
 - A change in thermal UI state also marks the panel dirty.
 
 ## Character Information Integration
@@ -103,8 +109,8 @@ window from `getPlayerData(playerNum).characterInfo` and attaches directly.
 ## Support Report
 
 The Burden panel can save a support report under `Lua/ams_reports/`. Reports
-include version, options, runtime state, equipment attribution, and the latest
-MP incident trace when available.
+include version, options, runtime state, and equipment attribution. In MP, an
+export without a cached server snapshot queues one and asks the player to retry.
 
 ## Modules
 

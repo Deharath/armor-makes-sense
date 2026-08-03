@@ -12,4 +12,12 @@ Support.assertTrue(Policy.acceptSnapshotRequest(state, 1, 2), "wall-clock rewind
 Support.assertFalse(Policy.acceptSnapshotRequest(state, 1.5, 2), "rewound clock establishes new throttle point")
 Support.assertFalse(Policy.acceptSnapshotRequest(nil, 10, 2), "missing player state rejected")
 
+local queued = {}
+Support.assertTrue(Policy.queueSnapshotRequest(queued), "snapshot request queued")
+Support.assertTrue(Policy.canFlushSnapshot(queued, { updatedMinute = 100 }), "projected snapshot can be flushed")
+Support.assertTrue(Policy.completeSnapshotRequest(queued), "snapshot request completion")
+Support.assertFalse(Policy.canFlushSnapshot(queued, { updatedMinute = 100 }), "completed request is not resent")
+
+Support.assertFalse(Policy.queueSnapshotRequest(nil), "missing queue state rejected")
+
 print("ams MP request policy checks passed")

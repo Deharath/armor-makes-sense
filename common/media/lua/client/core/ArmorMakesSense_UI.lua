@@ -6,6 +6,7 @@ Core.UI = Core.UI or {}
 
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
+local MP = require "ArmorMakesSense_MPCompat"
 local Options = require "ArmorMakesSense_Options"
 local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
@@ -154,7 +155,12 @@ local function installClothingUpdateHook()
         return
     end
 
-    local handler = function()
+    local handler = function(changedPlayer)
+        if changedPlayer
+            and Utils.isMultiplayer()
+            and not ClientRuntime.isLocalPlayer(changedPlayer) then
+            return
+        end
         markUiDirty()
     end
     Events.OnClothingUpdated.Add(handler)
@@ -164,36 +170,6 @@ end
 -- -----------------------------------------------------------------------------
 -- Panel / tab data model
 -- -----------------------------------------------------------------------------
-
-local function resolveDriverLabelsForClient(analysis, drivers)
-    local displayNames = {}
-    for i = 1, #(analysis and analysis.rows or {}) do
-        local row = analysis.rows[i]
-        local fullType = tostring(row and row.fullType or "")
-        local displayName = tostring(row and row.displayName or "")
-        if fullType ~= "" and displayName ~= "" then
-            displayNames[fullType] = displayName
-        end
-    end
-
-    local resolved = {}
-    for i = 1, #(drivers or {}) do
-        local row = drivers[i]
-        if type(row) == "table" then
-            local fullType = tostring(row.fullType or "")
-            local fallbackLabel = tostring(row.label or "")
-            if fallbackLabel == "" then
-                fallbackLabel = fullType ~= "" and fullType or tr("UI_AMS_UnknownItem", "Unknown Item")
-            end
-            resolved[#resolved + 1] = {
-                label = displayNames[fullType] or fallbackLabel,
-                fullType = fullType,
-                physical = tonumber(row.physical) or 0,
-            }
-        end
-    end
-    return resolved
-end
 
 local function resolveThermalEffect(runtimeSnapshot)
     local thermalScale = tonumber(runtimeSnapshot and runtimeSnapshot.thermalStrainScale) or 0
@@ -393,21 +369,6 @@ local function ensurePanelClasses()
         return thermalBurdensome or thermalAnnotation ~= nil or showBurden or showBreathing or showSleep
     end
 
-    local function buildProfileFromRuntime(runtime)
-        local loadNorm = tonumber(runtime and runtime.loadNorm) or 0
-        local physicalLoad = tonumber(runtime and runtime.physicalLoad)
-        if physicalLoad == nil then
-            physicalLoad = Utils.clamp(loadNorm / 2.8 * 100.0, 0, 100)
-        end
-        return {
-            physicalLoad = physicalLoad,
-            airflowResistance = tonumber(runtime and runtime.airflowResistance) or 0,
-            sealedRestriction = tonumber(runtime and runtime.sealedRestriction) or 0,
-            rigidityLoad = tonumber(runtime and runtime.rigidityLoad) or 0,
-            driverCount = tonumber(runtime and runtime.driverCount) or (physicalLoad > 1 and 1 or 0),
-        }
-    end
-
     local function buildBreathingDescription(airflowResistance, sealedRestriction)
         local tier = PresentationPolicy.breathingTier(airflowResistance, sealedRestriction)
         if tier == "heavy" then
@@ -471,10 +432,21 @@ local function ensurePanelClasses()
             return
         end
 
+        local isMp = Utils.isMultiplayer()
+        if isMp then
+            local mpRuntime = ArmorMakesSense and ArmorMakesSense.MPClientRuntime or nil
+            local requestSnapshot = mpRuntime and mpRuntime.requestSnapshot or nil
+            if type(requestSnapshot) == "function" then
+                requestSnapshot(
+                    player,
+                    tonumber(MP.SNAPSHOT_UI_REFRESH_SECONDS) or 30
+                )
+            end
+        end
+
         local state = ClientRuntime.ensureState(player)
         local options = UI._lastOptions or Options.get()
         local runtime = Physiology.getUiRuntimeSnapshot(player, state, options)
-        local isMp = Utils.isMultiplayer()
 
         if isMp and type(runtime) ~= "table" then
             self.snapshot = {
@@ -514,13 +486,8 @@ local function ensurePanelClasses()
         local burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = nil, nil, nil, nil, nil
         local costDrivers = {}
         local analysis = LoadModel.analyzeWornGear(player)
-        if isMp then
-            profile = buildProfileFromRuntime(runtime)
-            costDrivers = resolveDriverLabelsForClient(analysis, runtime and runtime.drivers)
-        else
-            profile = analysis.profile
-            costDrivers = analysis.costDrivers
-        end
+        profile = analysis.profile
+        costDrivers = analysis.costDrivers
         burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = buildBurdenWords(profile)
 
         local thermalWord, thermalColor, thermalBurdensome, thermalAnnotation, thermalAnnotationColor = resolveThermalEffect(runtime)

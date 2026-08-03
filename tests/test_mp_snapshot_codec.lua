@@ -37,11 +37,7 @@ local snapshot = {
     },
 }
 
-local encoded = Codec.encode(snapshot, {
-    authoritativeFatigue = 0.42,
-    serverSleeping = false,
-    reason = "OnClothingUpdated",
-}, true)
+local encoded = Codec.encode(snapshot, true)
 
 Support.assertEqual(encoded.snapshot_schema_version, Codec.SCHEMA_VERSION, "encoded schema version")
 Support.assertEqual(encoded.activity_label, "sprint", "encoded activity")
@@ -83,13 +79,10 @@ for i = 1, #numericFields do
     local field = numericFields[i]
     Support.assertClose(decoded[field], snapshot[field], 1e-9, "round-trip " .. field)
 end
-Support.assertClose(decoded.authoritativeFatigue, 0.42, 1e-9, "round-trip fatigue")
-Support.assertFalse(decoded.serverSleeping, "round-trip sleeping state")
-Support.assertEqual(decoded.reason, "OnClothingUpdated", "round-trip reason")
 Support.assertEqual(decoded.drivers[2].fullType, "Base.Hat_Army", "round-trip driver type")
 Support.assertClose(decoded.drivers[2].physical, 4.2, 1e-9, "round-trip driver load")
 
-local lightweight = Codec.encode(snapshot, {}, false)
+local lightweight = Codec.encode(snapshot, false)
 Support.assertEqual(#lightweight.drivers, 0, "lightweight driver omission")
 
 local rejected, schemaError = Codec.decode({ snapshot_schema_version = 2 })

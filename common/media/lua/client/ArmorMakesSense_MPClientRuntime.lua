@@ -10,13 +10,15 @@ ArmorMakesSense.MPClientRuntime = MPClientRuntime
 
 local SnapshotCodec = require "ArmorMakesSense_MPSnapshotCodec"
 
-local IncidentTrace = require "core/ArmorMakesSense_IncidentTrace"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local Options = require "ArmorMakesSense_Options"
 local UI = require "core/ArmorMakesSense_UI"
 
-local SNAPSHOT_INTERVAL_SECONDS = math.max(1, math.floor(tonumber(MP.SNAPSHOT_FALLBACK_SECONDS) or 2))
-local SNAPSHOT_STALE_SECONDS = math.max(10, SNAPSHOT_INTERVAL_SECONDS * 4)
+local SNAPSHOT_REQUEST_MIN_SECONDS = math.max(1, math.floor(tonumber(MP.SNAPSHOT_REQUEST_MIN_SECONDS) or 5))
+local SNAPSHOT_REQUEST_TIMEOUT_SECONDS = math.max(
+    SNAPSHOT_REQUEST_MIN_SECONDS,
+    math.floor(tonumber(MP.SNAPSHOT_REQUEST_TIMEOUT_SECONDS) or 60)
+)
 local uiHooksEnsured = false
 local markUiDirty
 local SLEEP_FATIGUE_CORRECTION_EPSILON = 0.002
@@ -43,6 +45,7 @@ local function ensureState(playerObj)
     local mpClient = state.mpClient
     mpClient.lastRequestWallSecond = tonumber(mpClient.lastRequestWallSecond) or 0
     mpClient.lastSnapshotWallSecond = tonumber(mpClient.lastSnapshotWallSecond) or 0
+    mpClient.snapshotRequestPending = mpClient.snapshotRequestPending == true
 
     return state, mpClient
 end
@@ -55,6 +58,7 @@ local function clearSnapshotState(playerObj, resetLogLatch)
     local hadSnapshot = type(state.mpServerSnapshot) == "table"
     state.mpServerSnapshot = nil
     mpClient.lastSnapshotWallSecond = 0
+    mpClient.snapshotRequestPending = false
     if resetLogLatch then
         mpClient.firstSnapshotLogged = false
     end
@@ -62,24 +66,6 @@ local function clearSnapshotState(playerObj, resetLogLatch)
         markUiDirty()
     end
     return hadSnapshot
-end
-
-local function expireStaleSnapshot(playerObj)
-    local state, mpClient = ensureState(playerObj)
-    if not state or not mpClient or type(state.mpServerSnapshot) ~= "table" then
-        return false
-    end
-    local lastSnapshot = tonumber(mpClient.lastSnapshotWallSecond) or 0
-    if lastSnapshot <= 0 then
-        return false
-    end
-    local ageSeconds = Utils.getWallClockSeconds() - lastSnapshot
-    if ageSeconds < SNAPSHOT_STALE_SECONDS then
-        return false
-    end
-    clearSnapshotState(playerObj, false)
-    log(string.format("expired stale snapshot age_s=%.1f", tonumber(ageSeconds) or 0))
-    return true
 end
 
 local function canSendRequest(playerObj)
@@ -226,7 +212,7 @@ local function applyAuthoritativeFatigue(playerObj, snapshot)
     return applied
 end
 
-local function sendSnapshotRequest(playerObj, reason)
+local function sendSnapshotRequest(playerObj)
     if not canSendRequest(playerObj) then
         return false
     end
@@ -238,31 +224,53 @@ local function sendSnapshotRequest(playerObj, reason)
 
     local nowSecond = Utils.getWallClockSeconds()
     local lastRequest = tonumber(mpClient.lastRequestWallSecond) or 0
+    local requestAge = nowSecond - lastRequest
+    if mpClient.snapshotRequestPending
+        and lastRequest > 0
+        and nowSecond >= lastRequest
+        and requestAge < SNAPSHOT_REQUEST_TIMEOUT_SECONDS then
+        return false, "pending"
+    end
     if lastRequest > 0
         and nowSecond >= lastRequest
-        and (nowSecond - lastRequest) < SNAPSHOT_INTERVAL_SECONDS then
-        return false
+        and requestAge < SNAPSHOT_REQUEST_MIN_SECONDS then
+        return false, "throttled"
     end
-
-    local args = {
-        reason = tostring(reason or "fallback"),
-        incident_seq = tonumber(IncidentTrace.getSeq()) or 0,
-    }
 
     local ok, err = pcall(
         sendClientCommand,
         playerObj,
         tostring(MP.NET_MODULE),
         tostring(MP.REQUEST_SNAPSHOT_COMMAND),
-        args
+        {}
     )
     if not ok then
         log("snapshot request send failed: " .. tostring(err))
-        return false
+        return false, "send_failed"
     end
 
     mpClient.lastRequestWallSecond = math.max(1, nowSecond)
-    return true
+    mpClient.snapshotRequestPending = true
+    return true, "sent"
+end
+
+function MPClientRuntime.requestSnapshot(playerObj, maxAgeSeconds)
+    local player = playerObj or ClientRuntime.getLocalPlayer()
+    local state, mpClient = ensureState(player)
+    if not state or not mpClient then
+        return false, "state_unavailable"
+    end
+
+    local maxAge = math.max(0, tonumber(maxAgeSeconds) or 0)
+    local lastSnapshot = tonumber(mpClient.lastSnapshotWallSecond) or 0
+    local snapshotAge = lastSnapshot > 0 and math.max(0, Utils.getWallClockSeconds() - lastSnapshot) or nil
+    if type(state.mpServerSnapshot) == "table"
+        and snapshotAge ~= nil
+        and snapshotAge <= maxAge then
+        return false, "fresh"
+    end
+
+    return sendSnapshotRequest(player)
 end
 
 local function resolveSnapshotPlayer(args)
@@ -297,13 +305,9 @@ local function onServerCommand(module, command, args)
             return
         end
 
-        reconcileAuthoritativeWakeState(playerObj, snapshot)
-        applyAuthoritativeFatigue(playerObj, snapshot)
         state.mpServerSnapshot = snapshot
         mpClient.lastSnapshotWallSecond = Utils.getWallClockSeconds()
-        if type(args.incident_trace) == "table" then
-            IncidentTrace.applyServerIncident(args.incident_trace)
-        end
+        mpClient.snapshotRequestPending = false
         if not mpClient.firstSnapshotLogged then
             mpClient.firstSnapshotLogged = true
             log(string.format(
@@ -320,14 +324,22 @@ local function onServerCommand(module, command, args)
         markUiDirty()
         return
     end
+
+    if tostring(command) == tostring(MP.SLEEP_STATE_COMMAND) then
+        local playerObj = resolveSnapshotPlayer(args)
+        if not playerObj then
+            return
+        end
+        reconcileAuthoritativeWakeState(playerObj, args)
+        applyAuthoritativeFatigue(playerObj, args)
+        return
+    end
 end
 
 local function onConnected()
-    IncidentTrace.clear()
     ClientRuntime.forEachLocalPlayer(function(player)
         clearSnapshotState(player, true)
         ensureMpUiHooks(player)
-        sendSnapshotRequest(player, "OnConnected")
     end)
 end
 
@@ -360,35 +372,7 @@ local function onCreatePlayer(_playerIndex, playerObj)
     end
     local player = playerObj or ClientRuntime.getLocalPlayer()
     clearSnapshotState(player, true)
-    IncidentTrace.clear()
     ensureMpUiHooks(player)
-    sendSnapshotRequest(player, "OnCreatePlayer")
-end
-
-local function onClothingUpdated(changedPlayer)
-    if changedPlayer and not ClientRuntime.isLocalPlayer(changedPlayer) then
-        return
-    end
-    if changedPlayer then
-        expireStaleSnapshot(changedPlayer)
-        sendSnapshotRequest(changedPlayer, "OnClothingUpdated")
-        return
-    end
-    ClientRuntime.forEachLocalPlayer(function(player)
-        expireStaleSnapshot(player)
-        sendSnapshotRequest(player, "OnClothingUpdated")
-    end)
-end
-
-local function onEveryOneMinute()
-    ClientRuntime.forEachLocalPlayer(function(player)
-        local expired = expireStaleSnapshot(player)
-        ensureMpUiHooks(player)
-        local state = ensureState(player)
-        if expired or not (state and type(state.mpServerSnapshot) == "table") then
-            sendSnapshotRequest(player, "SnapshotRecovery")
-        end
-    end)
 end
 
 local function logBootBanner(contextTag)
@@ -408,8 +392,6 @@ function MPClientRuntime.registerEvents(mod)
         "OnServerCommand",
         "OnConnected",
         "OnCreatePlayer",
-        "OnClothingUpdated",
-        "EveryOneMinute",
     }
     for i = 1, #requiredEvents do
         local name = requiredEvents[i]
@@ -431,8 +413,6 @@ function MPClientRuntime.registerEvents(mod)
         OnServerCommand = onServerCommand,
         OnConnected = onConnected,
         OnCreatePlayer = onCreatePlayer,
-        OnClothingUpdated = onClothingUpdated,
-        EveryOneMinute = onEveryOneMinute,
     }
     local added = {}
     for eventName, handler in pairs(handlers) do
@@ -457,7 +437,6 @@ function MPClientRuntime.registerEvents(mod)
     logBootBanner("load")
     ClientRuntime.forEachLocalPlayer(function(player)
         clearSnapshotState(player, true)
-        sendSnapshotRequest(player, "load")
     end)
     return true
 end

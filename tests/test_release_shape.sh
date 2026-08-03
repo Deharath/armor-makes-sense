@@ -123,9 +123,68 @@ if ! rg -q 'safeCall\(playerObj, "setBedType", bedType\)' \
   echo "MP sleep bed hint is not applied to vanilla server recovery" >&2
   exit 1
 fi
-if rg -n 'getClientActivityLabel|world_minute|activity_label|script_version|script_build' \
+if rg -n 'getClientActivityLabel|after_world_minute|activity_label|script_version|script_build|args\.reason|incident_seq' \
   "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua"; then
   echo "MP snapshot requests still carry server-ignored client metadata" >&2
+  exit 1
+fi
+if rg -n 'IncidentTrace|IncidentRecorder|MPIncidentSchema|incident_trace|incident_seq' \
+  "${ROOT_DIR}/common/media/lua/client" \
+  "${ROOT_DIR}/common/media/lua/server" \
+  "${ROOT_DIR}/common/media/lua/shared" \
+  -g '*.lua' \
+  -g '!**/testing/**' \
+  -g '!**/diagnostics/**'; then
+  echo "released runtime still contains MP incident capture" >&2
+  exit 1
+fi
+if rg -n '"OnClothingUpdated"|"EveryOneMinute"' \
+  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua"; then
+  echo "MP client runtime still subscribes snapshot transport to broad events" >&2
+  exit 1
+fi
+if rg -n 'after_world_minute|pendingServerRefreshMinute|serverRefreshAfterMinute|buildProfileFromRuntime' \
+  "${ROOT_DIR}/common/media/lua/client" \
+  "${ROOT_DIR}/common/media/lua/server" \
+  "${ROOT_DIR}/common/media/lua/shared" \
+  -g '*.lua' \
+  -g '!**/testing/**' \
+  -g '!**/diagnostics/**'; then
+  echo "released runtime still couples clothing UI refresh to snapshot freshness metadata" >&2
+  exit 1
+fi
+if ! rg -q 'profile = analysis\.profile' \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
+  echo "Burden UI does not use the current local worn profile" >&2
+  exit 1
+fi
+if rg -n 'SNAPSHOT_FALLBACK_SECONDS' \
+  "${ROOT_DIR}/common/media/lua/client" \
+  "${ROOT_DIR}/common/media/lua/server" \
+  "${ROOT_DIR}/common/media/lua/shared" \
+  -g '*.lua'; then
+  echo "released runtime still uses the old two-second snapshot fallback" >&2
+  exit 1
+fi
+if ! rg -q 'MP\.SLEEP_STATE_COMMAND = "sleep_state"' \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPCompat.lua"; then
+  echo "compact MP sleep-state transport is missing" >&2
+  exit 1
+fi
+if ! rg -q 'RequestPolicy\.queueSnapshotRequest' \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
+  echo "MP server does not queue bounded presentation snapshot requests" >&2
+  exit 1
+fi
+if ! rg -q 'Physiology\.projectRuntimeSnapshot' \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
+  echo "MP request path does not refresh presentation telemetry through the read-only projector" >&2
+  exit 1
+fi
+client_command_body="$(sed -n '/local function onClientCommand/,/local function onEveryOneMinute/p' \
+  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua")"
+if rg -q 'updatePlayer' <<<"${client_command_body}"; then
+  echo "MP snapshot requests still invoke gameplay simulation" >&2
   exit 1
 fi
 if rg -n 'lastSnapshotSentSecond|thermalHot|thermalCold|thermal_hot|thermal_cold' \

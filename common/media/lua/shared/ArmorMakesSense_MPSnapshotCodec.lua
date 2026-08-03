@@ -3,7 +3,7 @@ ArmorMakesSense.MPSnapshotCodec = ArmorMakesSense.MPSnapshotCodec or {}
 
 local Codec = ArmorMakesSense.MPSnapshotCodec
 
-Codec.SCHEMA_VERSION = 4
+Codec.SCHEMA_VERSION = 5
 
 local NUMBER_FIELDS = {
     { runtime = "loadNorm", wire = "load_norm", default = 0 },
@@ -33,20 +33,6 @@ local NUMBER_FIELDS = {
     { runtime = "catchupPendingMinutes", wire = "catchup_pending_minutes", default = 0 },
     { runtime = "updatedMinute", wire = "updated_minute", default = 0 },
 }
-
-local function toBoolean(value)
-    if type(value) == "boolean" then
-        return value
-    end
-    if type(value) == "number" then
-        return value ~= 0
-    end
-    if type(value) == "string" then
-        local lowered = string.lower(value)
-        return lowered == "true" or lowered == "1" or lowered == "yes" or lowered == "on"
-    end
-    return false
-end
 
 local function encodeDrivers(drivers)
     local encoded = {}
@@ -78,18 +64,14 @@ local function decodeDrivers(drivers)
     return decoded
 end
 
-function Codec.encode(snapshot, metadata, includeDrivers)
+function Codec.encode(snapshot, includeDrivers)
     if type(snapshot) ~= "table" then
         error("snapshot must be a table", 2)
     end
 
-    local resolvedMetadata = type(metadata) == "table" and metadata or {}
     local encoded = {
         snapshot_schema_version = Codec.SCHEMA_VERSION,
         activity_label = tostring(snapshot.activityLabel or "idle"),
-        fatigue = tonumber(resolvedMetadata.authoritativeFatigue) or 0,
-        server_sleeping = resolvedMetadata.serverSleeping == true,
-        reason = tostring(resolvedMetadata.reason or "tick"),
         drivers = includeDrivers == false and {} or encodeDrivers(snapshot.drivers),
     }
 
@@ -119,9 +101,6 @@ function Codec.decode(payload)
         schemaVersion = schemaVersion,
         activityLabel = tostring(payload.activity_label or "idle"),
         drivers = decodeDrivers(payload.drivers),
-        authoritativeFatigue = tonumber(payload.fatigue),
-        serverSleeping = toBoolean(payload.server_sleeping),
-        reason = tostring(payload.reason or ""),
         source = "server_snapshot",
     }
 

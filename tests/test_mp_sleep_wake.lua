@@ -25,8 +25,10 @@ local player = {
 package.loaded["ArmorMakesSense_MPCompat"] = {
     NET_MODULE = "ArmorMakesSenseRuntime",
     SNAPSHOT_COMMAND = "snapshot",
+    SLEEP_STATE_COMMAND = "sleep_state",
     REQUEST_SNAPSHOT_COMMAND = "request_snapshot",
-    SNAPSHOT_FALLBACK_SECONDS = 2,
+    SNAPSHOT_REQUEST_MIN_SECONDS = 5,
+    SNAPSHOT_REQUEST_TIMEOUT_SECONDS = 60,
     SCRIPT_VERSION = "test",
     SCRIPT_BUILD = "test",
 }
@@ -50,11 +52,6 @@ package.loaded["ArmorMakesSense_MPSnapshotCodec"] = {
         return args
     end,
 }
-package.loaded["core/ArmorMakesSense_IncidentTrace"] = {
-    clear = function() end,
-    getSeq = function() return 0 end,
-    applyServerIncident = function() end,
-}
 package.loaded["core/ArmorMakesSense_ClientRuntime"] = {
     getLocalPlayer = function() return player end,
     forEachLocalPlayer = function(callback)
@@ -76,8 +73,10 @@ CharacterStat = nil
 isClient = function() return true end
 isServer = function() return false end
 local snapshotRequestPlayer = nil
+local snapshotRequestCalls = 0
 sendClientCommand = function(commandPlayer)
     snapshotRequestPlayer = commandPlayer
+    snapshotRequestCalls = snapshotRequestCalls + 1
 end
 getTimestampMs = function() return 1000 end
 getSleepingEvent = function()
@@ -103,16 +102,22 @@ Events = {
     OnServerCommand = event("OnServerCommand"),
     OnConnected = event("OnConnected"),
     OnCreatePlayer = event("OnCreatePlayer"),
-    OnClothingUpdated = event("OnClothingUpdated"),
-    EveryOneMinute = event("EveryOneMinute"),
 }
 
 package.loaded["ArmorMakesSense_MPClientRuntime"] = nil
 local MPClientRuntime = require "ArmorMakesSense_MPClientRuntime"
 Support.assertTrue(MPClientRuntime.registerEvents(), "MP client runtime registration")
+Support.assertEqual(snapshotRequestPlayer, nil, "MP runtime does not request state during load")
+Support.assertTrue(MPClientRuntime.requestSnapshot(player, 0, nil), "explicit UI snapshot request")
 Support.assertEqual(snapshotRequestPlayer, player, "MP snapshot request addresses the local player")
+Support.assertFalse(MPClientRuntime.requestSnapshot(player, 0, nil), "pending request is not duplicated")
+Support.assertEqual(snapshotRequestCalls, 1, "one client command while request is pending")
 
-handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", { drivers = {}, updatedMinute = 10 })
+local freshSent, freshStatus = MPClientRuntime.requestSnapshot(player, 30, nil)
+Support.assertFalse(freshSent, "fresh snapshot does not request again")
+Support.assertEqual(freshStatus, "fresh", "fresh snapshot status")
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "sleep_state", {
     serverSleeping = false,
     reason = "WakeTransition",
     authoritativeFatigue = 0.30,
@@ -126,7 +131,7 @@ Support.assertClose(fatigue, 0.30, 1e-9, "wake snapshot applies authoritative fa
 
 asleep = true
 fatigue = 0.30
-handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "sleep_state", {
     serverSleeping = false,
     reason = "minute",
     authoritativeFatigue = 0.20,
@@ -138,7 +143,7 @@ Support.assertClose(fatigue, 0.30, 1e-9, "ordinary awake snapshot does not apply
 
 asleep = true
 fatigue = 0.45
-handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "sleep_state", {
     serverSleeping = false,
     reason = "WakeTransition",
     authoritativeFatigue = 0.30,
@@ -150,7 +155,7 @@ Support.assertClose(fatigue, 0.30, 1e-9, "wake snapshot may lower stale client f
 sleepEnabled = false
 asleep = true
 fatigue = 0.20
-handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "sleep_state", {
     serverSleeping = false,
     reason = "WakeTransition",
     authoritativeFatigue = 0.30,
@@ -162,7 +167,7 @@ Support.assertClose(fatigue, 0.20, 1e-9, "disabled sleep model does not apply fa
 
 sleepEnabled = true
 cmsOwnsFatigue = true
-handlers.OnServerCommand("ArmorMakesSenseRuntime", "snapshot", {
+handlers.OnServerCommand("ArmorMakesSenseRuntime", "sleep_state", {
     serverSleeping = false,
     reason = "WakeTransition",
     authoritativeFatigue = 0.30,

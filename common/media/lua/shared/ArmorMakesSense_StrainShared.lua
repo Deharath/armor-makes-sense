@@ -63,7 +63,7 @@ function Strain.computeArmorStrainExtra(options, profile)
     return maxExtra * (t * math.sqrt(t))
 end
 
-function Strain.applyArmorStrainOverlay(player, weapon, options)
+function Strain.applyArmorStrainOverlay(player, weapon, options, cachedProfile)
     if not options or not options.EnableMuscleStrainModel then
         return 0, 0
     end
@@ -78,7 +78,7 @@ function Strain.applyArmorStrainOverlay(player, weapon, options)
         return 0, vanillaStrainFactor
     end
 
-    local profile = LoadModel.computeWornProfile(player)
+    local profile = type(cachedProfile) == "table" and cachedProfile or LoadModel.computeWornProfile(player)
     local extra = Strain.computeArmorStrainExtra(options, profile)
     if extra <= 0 then
         return 0, vanillaStrainFactor

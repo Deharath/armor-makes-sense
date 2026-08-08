@@ -1,6 +1,7 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.SlotCompat = ArmorMakesSense.SlotCompat or {}
 local SlotCompat = ArmorMakesSense.SlotCompat
+local Logger = require "ArmorMakesSense_Logger"
 
 -- Module load guard.
 if ArmorMakesSense._slotCompatLoaded then
@@ -8,7 +9,7 @@ if ArmorMakesSense._slotCompatLoaded then
 end
 
 local function log(msg)
-    print('[ArmorMakesSense] ' .. tostring(msg))
+    Logger.debug(tostring(msg))
 end
 
 local function hasFunction(target, methodName)
@@ -242,12 +243,17 @@ local function registerCustomLocations()
         end
     end
     local complete = resolvedCount == 8
-    log(string.format(
+    local summary = string.format(
         "SlotCompat %s: register attempts=%d, resolved locations=%d/8",
         complete and "initialized" or "incomplete",
         registeredCount,
         resolvedCount
-    ))
+    )
+    if complete then
+        log(summary)
+    else
+        Logger.warnOnce("slot_compat_incomplete", summary)
+    end
     return complete
 end
 

@@ -75,7 +75,7 @@ wire mapping.
 | Client and server request floor | 5 wall-clock seconds per player |
 | Pending request timeout | 60 wall-clock seconds |
 | UI cache freshness window | 30 wall-clock seconds |
-| Snapshot schema | `5` |
+| Snapshot schema | `6` |
 
 ### Client Requests
 
@@ -100,10 +100,11 @@ There are no automatic connect, create-player, clothing, minute, or sleep full
 snapshot pushes.
 
 Each response carries aggregate load, numeric thermal and breathing telemetry,
-endurance telemetry, activity, update minute, and optional physical cost-driver
-rows. It does not carry sleep state, fatigue, client reasons, incident sequence,
-or incident traces. Every response includes `snapshot_schema_version`; the
-client rejects missing or unsupported schemas.
+endurance telemetry, the most recent sleep penalty/wake adjustment, activity,
+update minute, and optional physical cost-driver rows. It does not carry live
+fatigue, client reasons, incident sequence, or incident traces. Every response
+includes `snapshot_schema_version`; the client rejects missing or unsupported
+schemas.
 
 ## Sleep and Wake Synchronization
 

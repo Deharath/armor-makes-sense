@@ -48,6 +48,24 @@ getGameTime = function()
     }
 end
 
+local exposedUiSnapshot = Physiology.getUiRuntimeSnapshot(player, {
+    lastSleepPenaltyFraction = 0.14,
+    lastSleepWakeAdjustment = -0.03,
+    uiRuntimeSnapshot = {
+        loadNorm = 0.25,
+        thermalContribution = 2.75,
+        amsEnduranceRegenScale = 0.8,
+        amsEnduranceDrainApplied = 0.002,
+        lastAppliedDtMinutes = 0.5,
+    },
+}, defaults)
+Support.assertClose(exposedUiSnapshot.thermalContribution, 2.75, 1e-9, "UI snapshot exposes thermal contribution")
+Support.assertClose(exposedUiSnapshot.amsEnduranceRegenScale, 0.8, 1e-9, "UI snapshot exposes AMS recovery scale")
+Support.assertClose(exposedUiSnapshot.amsEnduranceDrainApplied, 0.002, 1e-9, "UI snapshot exposes AMS drain")
+Support.assertClose(exposedUiSnapshot.lastAppliedDtMinutes, 0.5, 1e-9, "UI snapshot exposes sample duration")
+Support.assertClose(exposedUiSnapshot.sleepPenaltyFraction, 0.14, 1e-9, "UI snapshot exposes live sleep penalty")
+Support.assertClose(exposedUiSnapshot.sleepWakeAdjustment, -0.03, 1e-9, "UI snapshot exposes wake adjustment")
+
 local sleepState = {}
 local planner = Physiology.computeSleepPlannerPenalty(player, sleepState, defaults, { rigidityLoad = 80 }, fatigue)
 Support.assertClose(planner.penaltyFraction, 0.012857142857, 1e-9, "average-bed sleep penalty")
@@ -60,10 +78,20 @@ player.bedType = "averageBed"
 
 local sleepDisabled = Support.copyTable(defaults)
 sleepDisabled.EnableSleepPenaltyModel = false
-local disabledState = { lastSleepPenaltyFraction = 0.5 }
+local disabledState = {
+    wasSleeping = true,
+    sleepSnapshot = { bedType = "goodBed" },
+    pendingSleepBedType = "goodBed",
+    lastSleepPenaltyFraction = 0.5,
+    lastSleepWakeAdjustment = -0.1,
+}
 planner = Physiology.computeSleepPlannerPenalty(player, disabledState, sleepDisabled, { rigidityLoad = 80 }, fatigue)
 Support.assertClose(planner.penaltyFraction, 0, 1e-9, "disabled sleep penalty")
 Support.assertClose(disabledState.lastSleepPenaltyFraction, 0, 1e-9, "disabled planner clears stale penalty state")
+Support.assertEqual(disabledState.sleepSnapshot, nil, "disabled planner clears sleep snapshot")
+Support.assertEqual(disabledState.pendingSleepBedType, nil, "disabled planner clears bed hint")
+Support.assertFalse(disabledState.wasSleeping, "disabled planner owns no sleep transition state")
+Support.assertClose(disabledState.lastSleepWakeAdjustment, 0, 1e-9, "disabled planner clears wake telemetry")
 
 player.asleep = true
 sleepState = { wasSleeping = false }

@@ -3,6 +3,7 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local Combat = require "core/ArmorMakesSense_Combat"
+local Options = require "ArmorMakesSense_Options"
 local Tick = require "core/ArmorMakesSense_Tick"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
@@ -16,7 +17,7 @@ local function hasFunction(target, name)
     return target and type(target[name]) == "function"
 end
 
-function Runtime.runStaticStartupChecks()
+function Runtime.runStaticStartupChecks(options)
     if startupCheckedStatic then
         return not ClientRuntime.isDisabled()
     end
@@ -29,10 +30,6 @@ function Runtime.runStaticStartupChecks()
     if not hasFunction(_G, "getPlayer") then
         issues[#issues + 1] = "global getPlayer missing"
     end
-    if not (Events and Events.OnPlayerUpdate and hasFunction(Events.OnPlayerUpdate, "Add")) then
-        ClientRuntime.logOnce("startup_no_player_update", "startup check: Events.OnPlayerUpdate.Add missing (sleep realtime tick disabled)")
-    end
-
     if #issues > 0 then
         ClientRuntime.setDisabled(true)
         ClientRuntime.logError("startup check failed: " .. table.concat(issues, " | "))
@@ -68,6 +65,8 @@ function Runtime.onPlayerUpdate(playerObj)
 end
 
 function Runtime.registerEvents(mod)
+    local options = Options.get()
+    local sleepEnabled = Utils.toBoolean(options.EnableSleepPenaltyModel)
     local handlers = mod and mod._eventsRegisteredHandlers
     if handlers and type(handlers) == "table" then
         if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Remove) == "function" and handlers.onEveryOneMinute then
@@ -81,22 +80,7 @@ function Runtime.registerEvents(mod)
         end
     end
 
-    ClientRuntime.log(string.format(
-        "[BOOT] signature modVersion=%s scriptVersion=%s build=%s",
-        ClientRuntime.getLoadedModVersion(),
-        ClientRuntime.SCRIPT_VERSION,
-        ClientRuntime.SCRIPT_BUILD
-    ))
-    ClientRuntime.log(string.format(
-        "[BOOT_ROLE] role=singleplayer isClient=%s isServer=%s ingame=%s scriptVersion=%s build=%s",
-        tostring(Utils.isClientSide()),
-        tostring(Utils.isServerSide()),
-        tostring(GameClient and GameClient.ingame or false),
-        ClientRuntime.SCRIPT_VERSION,
-        ClientRuntime.SCRIPT_BUILD
-    ))
-
-    Runtime.runStaticStartupChecks()
+    Runtime.runStaticStartupChecks(options)
     if ClientRuntime.isDisabled() then
         ClientRuntime.logErrorOnce("boot_disabled", "runtime disabled by startup checks; event registration skipped")
         return false
@@ -117,13 +101,16 @@ function Runtime.registerEvents(mod)
     if Events.OnPlayerAttackFinished and type(Events.OnPlayerAttackFinished.Add) == "function" then
         Events.OnPlayerAttackFinished.Add(Combat.onPlayerAttackFinished)
     else
-        ClientRuntime.logOnce("no_attack_finished_event", "OnPlayerAttackFinished event not available; armor strain overlay disabled.")
+        ClientRuntime.logWarnOnce(
+            "no_attack_finished_event",
+            "OnPlayerAttackFinished unavailable; armor strain overlay is disabled"
+        )
     end
-    if Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
+    if sleepEnabled and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
         Events.OnPlayerUpdate.Add(Runtime.onPlayerUpdate)
         ClientRuntime.logOnce("per_frame_hooks_on", "OnPlayerUpdate hook enabled for realtime sleep ticks.")
-    else
-        ClientRuntime.logErrorOnce("no_player_update_hook", "OnPlayerUpdate unavailable; realtime sleep ticks disabled.")
+    elseif sleepEnabled then
+        ClientRuntime.logWarnOnce("no_player_update_hook", "OnPlayerUpdate unavailable; realtime sleep updates are disabled")
     end
 
     if mod then
@@ -131,9 +118,14 @@ function Runtime.registerEvents(mod)
         mod._eventsRegisteredHandlers = {
             onEveryOneMinute = Runtime.onEveryOneMinute,
             onPlayerAttackFinished = Combat.onPlayerAttackFinished,
-            onPlayerUpdate = Runtime.onPlayerUpdate,
+            onPlayerUpdate = sleepEnabled and Runtime.onPlayerUpdate or nil,
         }
     end
+    ClientRuntime.logInfo(string.format(
+        "[BOOT] loaded version=%s build=%s role=singleplayer",
+        ClientRuntime.getLoadedModVersion(),
+        ClientRuntime.SCRIPT_BUILD
+    ))
     return true
 end
 

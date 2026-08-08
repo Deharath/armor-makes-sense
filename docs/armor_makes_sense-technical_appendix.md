@@ -77,14 +77,17 @@ The model integrations were checked against the installed Project Zomboid
 `setPlayerFallAsleep` after vanilla has started sleep because that API resets
 sleep-event state and reapplies the delay-to-sleep timer. MP wake reconciliation
 only accepts an explicit compact server `WakeTransition` sleep-state message;
-an ordinary UI snapshot cannot cancel sleep. The automatic sleep hook
-also repairs a missing or near-zero wake interval before applying the planner
-penalty, preventing a broken schedule from immediately waking the player and
-consuming the sleep attempt. When a planner penalty
-is active, AMS only extends vanilla's existing wake time. With the penalty
-disabled, it leaves the planned wake time untouched. Active multiplayer sleep
-clients send only a bed-type hint and preserve the server-delegated
-`SleepAllowed` branch.
+an ordinary UI snapshot cannot cancel sleep. When the sleep model is enabled,
+the automatic sleep hook repairs a missing or near-zero wake interval before
+applying the planner penalty, preventing a broken schedule from immediately
+waking the player and consuming the sleep attempt. AMS otherwise only extends
+vanilla's existing wake time. When the sleep model is disabled, AMS installs no
+sleep dialog or automatic-sleep wrappers, advertises no sleep compatibility
+capabilities, performs no MP sleep scan or bed-hint handling, and clears its
+transient sleep state without observing the session. This installation decision
+is made at startup, so changing the sandbox option requires a restart. Active
+multiplayer sleep clients send only a bed-type hint and preserve the
+server-delegated `SleepAllowed` branch.
 The server applies that hint to the vanilla player so continuous bed recovery
 matches the client, while AMS retains only the bounded wake reconciliation
 needed when the server does not observe vanilla's client-side wake adjustment.
@@ -100,10 +103,14 @@ All AMS/CMS sleep handoffs resolve through
 wake-adjustment ownership are separate capabilities; gameplay coordinators do
 not duplicate compatibility probes or capability names.
 
-Thermoregulator node samples are weighted by vanilla `ThermalNode` skin
-surface. Equal weighting is used only when `getSkinSurface()` is unavailable.
-This matches vanilla's use of body-part surface area in heat calculations and
-prevents small regions from dominating whole-body telemetry.
+Thermoregulator node samples use vanilla's normalized `getInsulationUI()` and
+`getWindresistUI()` values and are weighted by `ThermalNode` skin surface.
+The raw getters are not used: their values contain nonlinear per-garment
+transforms and layer bonuses and are not bounded to the model's 0-1 resistance
+scale. Equal weighting is used only when `getSkinSurface()` is unavailable.
+This matches vanilla's UI normalization and use of body-part surface area and
+prevents either raw layer counts or small regions from dominating whole-body
+telemetry.
 
 Physical load intentionally starts from `InventoryItem.getEquippedWeight()`.
 In the checked runtime this applies vanilla's `0.3` equipped-or-worn
@@ -133,6 +140,10 @@ Physical calculations read movement modifiers cached before AMS applies its
 direct speed rebalance, so movement policy cannot feed back into burden.
 Thermal resistance is sampled separately from vanilla's effective
 thermoregulator nodes and is not inferred from item defense or movement stats.
+The Burden panel shows retained heat only as a relative active-pressure bar
+after the contribution reaches its visibility floor; exact values remain in
+support reports. Body heat alone is neither presented nor applied as an
+equipment penalty.
 
 The worn profile has one canonical name per channel: `physicalLoad`,
 `airflowResistance`, `sealedRestriction`, `rigidityLoad`, and `swingChainLoad`.
@@ -148,7 +159,7 @@ physical burden.
 
 Server snapshots are encoded and decoded by
 `ArmorMakesSense_MPSnapshotCodec.lua`. The codec owns the wire-field mapping,
-driver-row mapping, defaults, and schema validation. Schema version 5 is a hard
+driver-row mapping, defaults, and schema validation. Schema version 6 is a hard
 contract; clients reject snapshots with a missing or different version.
 
 Simulation is explicitly fail-open. Results distinguish attempted, committed,
@@ -242,15 +253,17 @@ not duplicate `common/media`.
 - `ArmorMakesSense_UI.lua`: Burden panel, character-tab integration, help, and
   support export; already-created character windows are resolved through
   42.20's per-player UI data rather than a class-level singleton
-- `ArmorMakesSense_PresentationPolicy.lua`: shared burden, breathing, and sleep
-  presentation thresholds used by UI and reports
+- `ArmorMakesSense_PresentationPolicy.lua`: shared physical tiers,
+  active-pressure visibility, and diagnostic effect formatting
 - `ArmorMakesSense_UITooltip.lua`: compositional wearable tooltip extension and
   optional shared-controller provider for AMS burden and breathing rows; the
   standalone path supplies one layout to 42.20's `DoTooltipEmbedded` contract so
   vanilla and AMS rows share column measurement, rendering, and final bounds,
   deriving the title offset and padding from the tooltip's public font and line
   metrics without debug-only Java reflection
-- `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
+- `ArmorMakesSense_SupportReport.lua`: support report collection and formatting;
+  SP and MP reports preserve raw thermal evidence, snapshot age, quantitative
+  endurance effects, and option-aware sleep state
 
 Production client modules do not use mutable dependency contexts. The
 development benchmark modules retain their separate context because their job
@@ -311,6 +324,19 @@ of replaying saved catch-up state.
 Active non-sleep catch-up is capped at one game minute. Sleep catch-up remains
 time-based because fatigue recovery advances during accelerated sleep.
 
+## Console Output
+
+Production modules route console output through `ArmorMakesSense_Logger.lua`.
+A release session emits one boot identity for its active role, confirmations
+for explicit user actions such as writing a support report, and actionable
+warnings or errors. Normal option state, successful hook installation, UI and
+slot initialization, rebalance summaries, snapshots, and synchronization are
+silent. Routine lifecycle details use the `DEBUG` level and appear only when PZ
+debug mode is active or the loaded mod id is `ArmorMakesSenseDev`.
+
+Release-shape validation rejects direct `print()` calls outside the logger and
+requires exactly one boot identity definition for SP, MP-client, and MP-server.
+
 ## Configuration
 
 `ArmorMakesSense_Config.lua` defines tuning defaults. Public sandbox options are
@@ -325,9 +351,13 @@ values from `SandboxVars.ArmorMakesSense`.
 
 ## Makes Sense Compatibility
 
-AMS registers these `MakesSenseCompat` capabilities:
+AMS always registers this `MakesSenseCompat` capability:
 
 - `endurance_coordinator`
+
+When `EnableSleepPenaltyModel` is enabled at startup, AMS additionally
+registers:
+
 - `sleep_penalty_provider`
 - `sleep_planner_penalty_provider`
 

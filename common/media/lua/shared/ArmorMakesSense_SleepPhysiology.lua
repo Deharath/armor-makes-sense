@@ -159,7 +159,23 @@ local function applySleepWakeFatigueAdjustment(player, state, currentFatigue)
     return expectedWakeAdjustment
 end
 
+local function clearDisabledSleepState(state)
+    state.sleepSnapshot = nil
+    state.pendingSleepBedType = nil
+    state.wasSleeping = false
+    state.lastSleepPenaltyFraction = 0
+    state.lastSleepWakeAdjustment = 0
+end
+
 function SleepPhysiology.computePenaltyContribution(player, state, options, dtMinutes, profile, currentFatigue)
+    if not Utils.toBoolean(options and options.EnableSleepPenaltyModel) then
+        clearDisabledSleepState(state)
+        return {
+            penaltyFraction = 0,
+            sleeping = false,
+        }
+    end
+
     local sleeping = Utils.toBoolean(Utils.safeMethod(player, "isAsleep"))
     local wasSleeping = Utils.toBoolean(state.wasSleeping)
     if sleeping and not wasSleeping then
@@ -191,10 +207,7 @@ function SleepPhysiology.computePenaltyContribution(player, state, options, dtMi
             snapshot.startMinute = tonumber(Utils.getWorldAgeMinutes())
         end
         snapshot.lastFatigue = tonumber(currentFatigue) or Stats.getFatigue(player)
-        local penaltyFraction = 0
-        if options.EnableSleepPenaltyModel then
-            penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
-        end
+        local penaltyFraction = getSleepRigidityPenaltyFraction(player, options, snapshot, currentFatigue)
         state.lastSleepPenaltyFraction = penaltyFraction
         state.lastSleepWakeAdjustment = 0
         state.wasSleeping = true
@@ -205,11 +218,7 @@ function SleepPhysiology.computePenaltyContribution(player, state, options, dtMi
     end
 
     if wasSleeping and state.sleepSnapshot then
-        if options.EnableSleepPenaltyModel then
-            applySleepWakeFatigueAdjustment(player, state, currentFatigue)
-        else
-            state.lastSleepWakeAdjustment = 0
-        end
+        applySleepWakeFatigueAdjustment(player, state, currentFatigue)
         state.sleepSnapshot = nil
         state.pendingSleepBedType = nil
     end
@@ -224,8 +233,8 @@ end
 
 function SleepPhysiology.computePlannerPenalty(player, state, options, profile, currentFatigue)
     local resolvedState = type(state) == "table" and state or {}
-    if not options.EnableSleepPenaltyModel then
-        resolvedState.lastSleepPenaltyFraction = 0
+    if not Utils.toBoolean(options and options.EnableSleepPenaltyModel) then
+        clearDisabledSleepState(resolvedState)
         return {
             penaltyFraction = 0,
             sleeping = false,
@@ -262,6 +271,10 @@ function SleepPhysiology.applyTransition(player, state, options, dtMinutes, prof
     )
     result.extraFatigue = 0
     result.wroteFatigue = false
+
+    if not Utils.toBoolean(options and options.EnableSleepPenaltyModel) then
+        return result
+    end
 
     if SleepOwnership.cmsOwnsFatigue() or isMultiplayerClientSession() then
         return result

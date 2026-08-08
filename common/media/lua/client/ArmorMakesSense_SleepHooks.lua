@@ -2,16 +2,13 @@ ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.SleepHooks = ArmorMakesSense.SleepHooks or {}
 
 require "ArmorMakesSense_MPCompat"
+local Logger = require "ArmorMakesSense_Logger"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 
 local SleepHooks = ArmorMakesSense.SleepHooks
 local MP = ArmorMakesSense.MP or {}
 local MIN_VALID_AUTO_SLEEP_HOURS = 0.25
-
-local function log(message)
-    print("[ArmorMakesSense] " .. tostring(message))
-end
 
 local safeMethod = Utils.safeMethod
 
@@ -175,7 +172,7 @@ local function wrapAutoSleep()
         local baseHours = hoursUntilWake(timeOfDay, wakeHour)
         local repairedSchedule = false
         if baseHours == nil or baseHours < MIN_VALID_AUTO_SLEEP_HOURS then
-            log(string.format(
+            Logger.warnOnce("sleep:invalid_schedule", string.format(
                 "repaired invalid vanilla sleep schedule wake=%.3f now=%.3f duration=%s",
                 wakeHour,
                 timeOfDay,
@@ -197,24 +194,20 @@ local function wrapAutoSleep()
     return true
 end
 
-function SleepHooks.wrapSleepPlanning()
+function SleepHooks.wrapSleepPlanning(options)
+    assert(type(options) == "table", "resolved AMS options required")
+    if not Utils.toBoolean(options.EnableSleepPenaltyModel) then
+        return false, "disabled"
+    end
     if SleepOwnership.cmsOwnsPlanner() then
-        if not ArmorMakesSense._sleepPlannerHooksLogged then
-            ArmorMakesSense._sleepPlannerHooksLogged = true
-            log("sleep planner hooks delegated to CMS coordinator")
-        end
-        return false
+        return false, "delegated"
     end
     local dialogInstalled = wrapSleepDialog()
     local autoSleepInstalled = wrapAutoSleep()
     if not dialogInstalled or not autoSleepInstalled then
         return nil
     end
-    if not ArmorMakesSense._sleepPlannerHooksLogged then
-        ArmorMakesSense._sleepPlannerHooksLogged = true
-        log("wrapped sleep duration hooks")
-    end
-    return true
+    return true, "installed"
 end
 
 return SleepHooks

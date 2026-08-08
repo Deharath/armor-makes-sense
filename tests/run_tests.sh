@@ -18,6 +18,7 @@ tests=(
   test_mp_sleep_wake.lua
   test_runtime_state.lua
   test_options.lua
+  test_logger.lua
   test_stats_authority.lua
   test_local_player_ownership.lua
   test_simulation.lua

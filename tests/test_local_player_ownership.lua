@@ -23,6 +23,8 @@ Support.assertTrue(ClientRuntime.isLocalPlayer(playerTwo), "secondary player is 
 Support.assertFalse(ClientRuntime.isLocalPlayer(remotePlayer), "remote actor is not local")
 
 local ticked = {}
+local resolvedOptions = { EnableSleepPenaltyModel = false }
+package.loaded["ArmorMakesSense_Options"] = { get = function() return resolvedOptions end }
 package.loaded["core/ArmorMakesSense_Combat"] = { onPlayerAttackFinished = function() end }
 package.loaded["core/ArmorMakesSense_Tick"] = {
     tickPlayer = function(player)
@@ -34,6 +36,29 @@ local Runtime = dofile(root .. "/common/media/lua/client/core/ArmorMakesSense_Ru
 Runtime.onEveryOneMinute()
 Support.assertEqual(#ticked, 2, "minute runtime ticks every local player")
 Support.assertEqual(ticked[2], playerTwo, "minute runtime reaches secondary player")
+
+local registeredHandlers = {}
+local function event(name)
+    return {
+        Add = function(handler) registeredHandlers[name] = handler end,
+        Remove = function(handler)
+            if registeredHandlers[name] == handler then
+                registeredHandlers[name] = nil
+            end
+        end,
+    }
+end
+Events = {
+    EveryOneMinute = event("EveryOneMinute"),
+    OnPlayerAttackFinished = event("OnPlayerAttackFinished"),
+    OnPlayerUpdate = event("OnPlayerUpdate"),
+}
+local runtimeMod = {}
+Support.assertTrue(Runtime.registerEvents(runtimeMod), "runtime registers with sleep disabled")
+Support.assertEqual(registeredHandlers.OnPlayerUpdate, nil, "disabled sleep model registers no realtime sleep observer")
+resolvedOptions.EnableSleepPenaltyModel = true
+Support.assertTrue(Runtime.registerEvents(runtimeMod), "runtime registers with sleep enabled")
+Support.assertEqual(registeredHandlers.OnPlayerUpdate, Runtime.onPlayerUpdate, "enabled sleep model registers realtime observer")
 
 local strainedPlayer = nil
 package.loaded["ArmorMakesSense_Options"] = { get = function() return { EnableMuscleStrainModel = true } end }

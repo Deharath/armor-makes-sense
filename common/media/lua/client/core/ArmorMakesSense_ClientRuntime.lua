@@ -2,6 +2,7 @@ ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
 local MP = require "ArmorMakesSense_MPCompat"
+local Logger = require "ArmorMakesSense_Logger"
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local State = require "core/ArmorMakesSense_State"
@@ -10,8 +11,6 @@ local Core = ArmorMakesSense.Core
 Core.ClientRuntime = Core.ClientRuntime or {}
 
 local ClientRuntime = Core.ClientRuntime
-local warned = {}
-local errorKeys = {}
 local runtimeDisabled = false
 local startupCheckedPlayers = setmetatable({}, { __mode = "k" })
 
@@ -19,27 +18,31 @@ ClientRuntime.SCRIPT_VERSION = tostring(MP.SCRIPT_VERSION)
 ClientRuntime.SCRIPT_BUILD = tostring(MP.SCRIPT_BUILD)
 
 function ClientRuntime.log(message)
-    print("[ArmorMakesSense] " .. tostring(message))
+    Logger.debug(message)
+end
+
+function ClientRuntime.logInfo(message)
+    Logger.info(message)
+end
+
+function ClientRuntime.logWarn(message)
+    Logger.warn(message)
 end
 
 function ClientRuntime.logError(message)
-    print("[ArmorMakesSense][ERROR] " .. tostring(message))
+    Logger.error(message)
 end
 
 function ClientRuntime.logOnce(key, message)
-    if warned[key] then
-        return
-    end
-    warned[key] = true
-    ClientRuntime.log(message)
+    Logger.debugOnce("client:" .. tostring(key), message)
+end
+
+function ClientRuntime.logWarnOnce(key, message)
+    Logger.warnOnce("client:" .. tostring(key), message)
 end
 
 function ClientRuntime.logErrorOnce(key, message)
-    if errorKeys[key] then
-        return
-    end
-    errorKeys[key] = true
-    ClientRuntime.logError(message)
+    Logger.errorOnce("client:" .. tostring(key), message)
 end
 
 function ClientRuntime.safeMethod(target, methodName, ...)

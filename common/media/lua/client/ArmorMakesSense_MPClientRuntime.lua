@@ -2,6 +2,7 @@ ArmorMakesSense = ArmorMakesSense or {}
 
 local MP = require "ArmorMakesSense_MPCompat"
 require "ArmorMakesSense_Compat"
+local Logger = require "ArmorMakesSense_Logger"
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
 local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 local Utils = require "ArmorMakesSense_UtilsShared"
@@ -24,7 +25,7 @@ local markUiDirty
 local SLEEP_FATIGUE_CORRECTION_EPSILON = 0.002
 
 local function log(message)
-    print("[ArmorMakesSense][MP][CLIENT] " .. tostring(message))
+    Logger.debug("role=mp-client " .. tostring(message))
 end
 
 local function isMultiplayerClientSession(playerObj)
@@ -154,19 +155,25 @@ local function reconcileAuthoritativeWakeState(playerObj, snapshot)
     end
 
     if type(getSleepingEvent) ~= "function" then
-        log("authoritative wake could not resolve vanilla SleepingEvent")
+        Logger.warnOnce(
+            "mp-client:sleeping_event_unavailable",
+            "role=mp-client authoritative wake could not resolve vanilla SleepingEvent"
+        )
         return false
     end
     local okEvent, sleepingEvent = pcall(getSleepingEvent)
     if not okEvent or not sleepingEvent then
-        log("authoritative wake could not resolve vanilla SleepingEvent")
+        Logger.warnOnce(
+            "mp-client:sleeping_event_unavailable",
+            "role=mp-client authoritative wake could not resolve vanilla SleepingEvent"
+        )
         return false
     end
     local okWake, wakeFailure = pcall(function()
         sleepingEvent:wakeUp(playerObj, true)
     end)
     if not okWake then
-        log("authoritative vanilla wake failed: " .. tostring(wakeFailure))
+        Logger.error("role=mp-client authoritative vanilla wake failed: " .. tostring(wakeFailure))
         return false
     end
     log("reconciled local wake state from authoritative server snapshot")
@@ -245,7 +252,7 @@ local function sendSnapshotRequest(playerObj)
         {}
     )
     if not ok then
-        log("snapshot request send failed: " .. tostring(err))
+        Logger.error("role=mp-client snapshot request send failed: " .. tostring(err))
         return false, "send_failed"
     end
 
@@ -301,7 +308,7 @@ local function onServerCommand(module, command, args)
 
         local snapshot, decodeError = SnapshotCodec.decode(args)
         if not snapshot then
-            log("snapshot rejected: " .. tostring(decodeError))
+            Logger.warn("role=mp-client snapshot rejected: " .. tostring(decodeError))
             return
         end
 
@@ -347,13 +354,13 @@ function ams_mp_snapshot_status()
     local state, mpClient = ensureState(ClientRuntime.getLocalPlayer())
     local snapshot = state and state.mpServerSnapshot or nil
     if type(snapshot) ~= "table" then
-        log("snapshot status: none yet")
+        Logger.info("role=mp-client snapshot status: none yet")
         return nil
     end
     local nowSecond = Utils.getWallClockSeconds()
     local ageSeconds = nowSecond - (tonumber(mpClient and mpClient.lastSnapshotWallSecond) or nowSecond)
-    log(string.format(
-        "snapshot status: load_norm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f age_s=%.1f",
+    Logger.info(string.format(
+        "role=mp-client snapshot status: load_norm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f age_s=%.1f",
         tonumber(snapshot.loadNorm) or 0,
         tonumber(snapshot.physicalLoad) or 0,
         #(snapshot.drivers or {}),
@@ -375,13 +382,9 @@ local function onCreatePlayer(_playerIndex, playerObj)
     ensureMpUiHooks(player)
 end
 
-local function logBootBanner(contextTag)
-    log(string.format(
-        "[BOOT_MP] context=%s side=client isClient=%s isServer=%s ingame=%s scriptVersion=%s build=%s",
-        tostring(contextTag or "load"),
-        tostring(type(isClient) == "function" and isClient() or false),
-        tostring(type(isServer) == "function" and isServer() or false),
-        tostring(GameClient and GameClient.ingame or false),
+local function logBootBanner()
+    Logger.info(string.format(
+        "[BOOT] loaded version=%s build=%s role=mp-client",
         tostring(MP.SCRIPT_VERSION),
         tostring(MP.SCRIPT_BUILD)
     ))
@@ -396,7 +399,7 @@ function MPClientRuntime.registerEvents(mod)
     for i = 1, #requiredEvents do
         local name = requiredEvents[i]
         if not (Events and Events[name] and type(Events[name].Add) == "function") then
-            log("runtime registration failed: Events." .. name .. ".Add unavailable")
+            Logger.error("role=mp-client runtime registration failed: Events." .. name .. ".Add unavailable")
             return false
         end
     end
@@ -425,7 +428,10 @@ function MPClientRuntime.registerEvents(mod)
                 end
             end
             ArmorMakesSense._mpClientRuntimeRegistered = false
-            log("runtime registration failed: Events." .. eventName .. ".Add raised " .. tostring(failure))
+            Logger.error(
+                "role=mp-client runtime registration failed: Events."
+                .. eventName .. ".Add raised " .. tostring(failure)
+            )
             return false
         end
         added[eventName] = handler
@@ -434,7 +440,7 @@ function MPClientRuntime.registerEvents(mod)
     if mod then
         mod._mpClientRuntimeHandlers = handlers
     end
-    logBootBanner("load")
+    logBootBanner()
     ClientRuntime.forEachLocalPlayer(function(player)
         clearSnapshotState(player, true)
     end)

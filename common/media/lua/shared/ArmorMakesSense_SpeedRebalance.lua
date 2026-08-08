@@ -23,10 +23,11 @@ ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.SpeedRebalance = ArmorMakesSense.SpeedRebalance or {}
 local SpeedRebalance = ArmorMakesSense.SpeedRebalance
 require "ArmorMakesSense_SlotCompat"
+local Logger = require "ArmorMakesSense_Logger"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
 local function log(msg)
-    print('[ArmorMakesSense] ' .. tostring(msg))
+    Logger.debug(tostring(msg))
 end
 
 local safeMethod = Utils.safeMethod
@@ -49,7 +50,7 @@ local function safeDoParam(item, param)
     end
     local ok, err = pcall(fn, item, param)
     if not ok then
-        print("[ArmorMakesSense] DoParam failed: " .. tostring(err) .. " param=" .. tostring(param))
+        Logger.error("DoParam failed: " .. tostring(err) .. " param=" .. tostring(param))
     end
     return ok
 end
@@ -64,7 +65,7 @@ local function safeClearScriptTooltip(item)
     end
     local ok, err = pcall(fn, item, "Tooltip", "")
     if not ok then
-        print("[ArmorMakesSense] clearing script tooltip failed: " .. tostring(err))
+        Logger.warn("clearing script tooltip failed: " .. tostring(err))
     end
     return ok
 end
@@ -606,7 +607,7 @@ local function applySpeedRebalance()
         end
     end)
     if not ok then
-        print("[ArmorMakesSense] SpeedRebalance global scan failed: " .. tostring(err))
+        Logger.error("SpeedRebalance global scan failed: " .. tostring(err))
     end
 
     log(string.format(

@@ -3,7 +3,7 @@ ArmorMakesSense.MPSnapshotCodec = ArmorMakesSense.MPSnapshotCodec or {}
 
 local Codec = ArmorMakesSense.MPSnapshotCodec
 
-Codec.SCHEMA_VERSION = 5
+Codec.SCHEMA_VERSION = 6
 
 local NUMBER_FIELDS = {
     { runtime = "loadNorm", wire = "load_norm", default = 0 },
@@ -16,6 +16,8 @@ local NUMBER_FIELDS = {
     { runtime = "effectiveLoad", wire = "effective_load", default = 0 },
     { runtime = "thermalContribution", wire = "thermal_contribution", default = 0 },
     { runtime = "breathingContribution", wire = "breathing_contribution", default = 0 },
+    { runtime = "bodyHeatDelta", wire = "body_heat_delta", default = 0 },
+    { runtime = "hotDrive", wire = "hot_drive", default = 0 },
     { runtime = "metabolicRate", wire = "metabolic_rate", default = 1.5 },
     { runtime = "metabolicDemand", wire = "metabolic_demand", default = 1.5 },
     { runtime = "metabolicNorm", wire = "metabolic_norm", default = 0 },
@@ -29,6 +31,10 @@ local NUMBER_FIELDS = {
     { runtime = "enduranceAfterAms", wire = "endurance_after_ams", default = 0 },
     { runtime = "enduranceNaturalDelta", wire = "endurance_natural_delta", default = 0 },
     { runtime = "enduranceAppliedDelta", wire = "endurance_applied_delta", default = 0 },
+    { runtime = "amsEnduranceRegenScale", wire = "ams_endurance_regen_scale", default = 1 },
+    { runtime = "amsEnduranceDrainApplied", wire = "ams_endurance_drain_applied", default = 0 },
+    { runtime = "sleepPenaltyFraction", wire = "sleep_penalty_fraction", default = 0 },
+    { runtime = "sleepWakeAdjustment", wire = "sleep_wake_adjustment", default = 0 },
     { runtime = "lastAppliedDtMinutes", wire = "last_applied_dt_minutes", default = 0 },
     { runtime = "catchupPendingMinutes", wire = "catchup_pending_minutes", default = 0 },
     { runtime = "updatedMinute", wire = "updated_minute", default = 0 },

@@ -7,6 +7,7 @@ end
 
 local MP = require "ArmorMakesSense_MPCompat"
 require "ArmorMakesSense_Compat"
+local Logger = require "ArmorMakesSense_Logger"
 local Options = require "ArmorMakesSense_Options"
 local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 local Utils = require "ArmorMakesSense_UtilsShared"
@@ -28,7 +29,7 @@ local MAX_APPLIED_ENDURANCE_DROP_PER_INVOCATION = 0.12
 local lastSleepScanWallSecond = 0
 
 local function log(message)
-    print("[ArmorMakesSense][MP][SERVER] " .. tostring(message))
+    Logger.debug("role=mp-server " .. tostring(message))
 end
 
 local safeCall = Utils.safeMethod
@@ -84,6 +85,9 @@ local function ensurePlayerState(playerObj)
 end
 
 local function recordSleepBedType(playerObj, args)
+    if not Options.get().EnableSleepPenaltyModel then
+        return
+    end
     local _, mpState = ensurePlayerState(playerObj)
     if not mpState or not toBoolean(safeCall(playerObj, "isAsleep")) then
         return
@@ -140,7 +144,10 @@ local function sendSleepState(playerObj, reason)
         args
     )
     if not ok then
-        log("sleep state send failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(err))
+        Logger.error(
+            "role=mp-server sleep state send failed player="
+            .. tostring(playerName(playerObj)) .. " err=" .. tostring(err)
+        )
         return false
     end
     return true
@@ -152,7 +159,7 @@ local function syncFatigueToClient(playerObj, phaseTag)
     end
     local ok, err = pcall(syncPlayerStats, playerObj, FATIGUE_STAT_MASK)
     if not ok then
-        log("syncPlayerStats fatigue send failed phase=" .. tostring(phaseTag or "unknown")
+        Logger.error("role=mp-server syncPlayerStats fatigue send failed phase=" .. tostring(phaseTag or "unknown")
             .. " player=" .. tostring(playerName(playerObj))
             .. " err=" .. tostring(err))
         return false
@@ -189,57 +196,63 @@ local function registerCompatProvider()
         return
     end
 
+    local options = Options.get()
+    local capabilities = {
+        endurance_coordinator = true,
+    }
+    local callbacks = {
+        buildTraceSnapshot = function(playerObj, _args)
+            local _, mpState = ensurePlayerState(playerObj)
+            if not mpState or type(Physiology.buildCompatTraceSnapshot) ~= "function" then
+                return {}
+            end
+            return Physiology.buildCompatTraceSnapshot(mpState)
+        end,
+    }
+    if options.EnableSleepPenaltyModel then
+        capabilities.sleep_penalty_provider = true
+        capabilities.sleep_planner_penalty_provider = true
+        callbacks.computeSleepPenaltyContribution = function(playerObj, args)
+            local _, mpState = ensurePlayerState(playerObj)
+            if not mpState or type(Physiology.computeSleepPenaltyContribution) ~= "function" then
+                return {
+                    penaltyFraction = 0,
+                    sleeping = false,
+                }
+            end
+
+            local callbackOptions = Options.get()
+            local profile = prepareRuntimeInputs(playerObj, mpState, callbackOptions)
+            return Physiology.computeSleepPenaltyContribution(
+                playerObj,
+                mpState,
+                callbackOptions,
+                tonumber(args and args.dtMinutes) or 0,
+                profile,
+                tonumber(args and args.currentFatigue)
+            )
+        end
+        callbacks.estimateSleepPlannerPenalty = function(playerObj, args)
+            local _, mpState = ensurePlayerState(playerObj)
+            if not mpState or type(Physiology.computeSleepPlannerPenalty) ~= "function" then
+                return { penaltyFraction = 0 }
+            end
+
+            local callbackOptions = Options.get()
+            local profile = prepareRuntimeInputs(playerObj, mpState, callbackOptions)
+            return Physiology.computeSleepPlannerPenalty(
+                playerObj,
+                mpState,
+                callbackOptions,
+                profile,
+                tonumber(args and args.currentFatigue)
+            )
+        end
+    end
+
     compat:registerProvider("ArmorMakesSense", {
-        capabilities = {
-            endurance_coordinator = true,
-            sleep_penalty_provider = true,
-            sleep_planner_penalty_provider = true,
-        },
-        callbacks = {
-            computeSleepPenaltyContribution = function(playerObj, args)
-                local _, mpState = ensurePlayerState(playerObj)
-                if not mpState or type(Physiology.computeSleepPenaltyContribution) ~= "function" then
-                    return {
-                        penaltyFraction = 0,
-                        sleeping = false,
-                    }
-                end
-
-                local options = Options.get()
-                local profile = prepareRuntimeInputs(playerObj, mpState, options)
-                return Physiology.computeSleepPenaltyContribution(
-                    playerObj,
-                    mpState,
-                    options,
-                    tonumber(args and args.dtMinutes) or 0,
-                    profile,
-                    tonumber(args and args.currentFatigue)
-                )
-            end,
-            estimateSleepPlannerPenalty = function(playerObj, args)
-                local _, mpState = ensurePlayerState(playerObj)
-                if not mpState or type(Physiology.computeSleepPlannerPenalty) ~= "function" then
-                    return { penaltyFraction = 0 }
-                end
-
-                local options = Options.get()
-                local profile = prepareRuntimeInputs(playerObj, mpState, options)
-                return Physiology.computeSleepPlannerPenalty(
-                    playerObj,
-                    mpState,
-                    options,
-                    profile,
-                    tonumber(args and args.currentFatigue)
-                )
-            end,
-            buildTraceSnapshot = function(playerObj, _args)
-                local _, mpState = ensurePlayerState(playerObj)
-                if not mpState or type(Physiology.buildCompatTraceSnapshot) ~= "function" then
-                    return {}
-                end
-                return Physiology.buildCompatTraceSnapshot(mpState)
-            end,
-        },
+        capabilities = capabilities,
+        callbacks = callbacks,
     })
 end
 
@@ -311,7 +324,10 @@ local function sendSnapshot(playerObj, snapshot)
 
     local ok, err = pcall(sendServerCommand, playerObj, tostring(MP.NET_MODULE), tostring(MP.SNAPSHOT_COMMAND), args)
     if not ok then
-        log("snapshot send failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(err))
+        Logger.error(
+            "role=mp-server snapshot send failed player="
+            .. tostring(playerName(playerObj)) .. " err=" .. tostring(err)
+        )
         return false
     end
     return true
@@ -379,7 +395,10 @@ local function updatePlayer(playerObj, sleepingOverride)
             pcall(prepareRuntimeInputs, playerObj, mpState, options, true)
         if not okInputs then
             resetCatchupState(playerObj, mpState, nowMinute)
-            log("sleep input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
+            Logger.error(
+                "role=mp-server sleep input prep failed; pending catchup discarded player="
+                .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile)
+            )
             return
         end
 
@@ -395,8 +414,8 @@ local function updatePlayer(playerObj, sleepingOverride)
             applySleepTransition = Physiology.applySleepTransition,
         })
         if result.failurePhase then
-            log(string.format(
-                "%s model failed player=%s err=%s",
+            Logger.error(string.format(
+                "role=mp-server %s model failed player=%s err=%s",
                 tostring(result.failurePhase),
                 tostring(playerName(playerObj)),
                 tostring(result.failure)
@@ -418,7 +437,10 @@ local function updatePlayer(playerObj, sleepingOverride)
         pcall(prepareRuntimeInputs, playerObj, mpState, options)
     if not okInputs then
         resetCatchupState(playerObj, mpState, nowMinute)
-        log("shared model input prep failed; pending catchup discarded player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile))
+        Logger.error(
+            "role=mp-server shared model input prep failed; pending catchup discarded player="
+            .. tostring(playerName(playerObj)) .. " err=" .. tostring(profile)
+        )
         return
     end
 
@@ -446,8 +468,8 @@ local function updatePlayer(playerObj, sleepingOverride)
         end,
     })
     if result.failurePhase then
-        log(string.format(
-            "%s model failed player=%s err=%s",
+        Logger.error(string.format(
+            "role=mp-server %s model failed player=%s err=%s",
             tostring(result.failurePhase),
             tostring(playerName(playerObj)),
             tostring(result.failure)
@@ -499,6 +521,9 @@ local function updateSleepPlayer(playerObj)
 end
 
 local function onPlayerUpdate(_playerObj)
+    if not Options.get().EnableSleepPenaltyModel then
+        return
+    end
     local nowWallSecond = getWallClockSeconds()
     if lastSleepScanWallSecond > 0
         and nowWallSecond >= lastSleepScanWallSecond
@@ -541,7 +566,7 @@ local function onClientCommand(module, command, playerObj, args)
     RequestPolicy.queueSnapshotRequest(mpState)
     local okRefresh, refreshFailure = pcall(refreshPresentationSnapshot, playerObj, mpState)
     if not okRefresh then
-        log("presentation snapshot refresh failed player=" .. tostring(playerName(playerObj))
+        Logger.error("role=mp-server presentation snapshot refresh failed player=" .. tostring(playerName(playerObj))
             .. " err=" .. tostring(refreshFailure))
     end
     flushPendingSnapshot(playerObj, mpState)
@@ -592,24 +617,20 @@ local function onWeaponSwing(attacker, weapon)
         profile
     )
     if not okOverlay then
-        log("strain overlay failed player=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(extraOrErr))
+        Logger.error(
+            "role=mp-server strain overlay failed player="
+            .. tostring(playerName(playerObj)) .. " err=" .. tostring(extraOrErr)
+        )
         return
     end
 end
 
-local function logBootBanner(contextTag)
-    log(string.format(
-        "[BOOT_MP] context=%s side=server isClient=%s isServer=%s scriptVersion=%s build=%s",
-        tostring(contextTag or "load"),
-        tostring(type(isClient) == "function" and isClient() or false),
-        tostring(type(isServer) == "function" and isServer() or false),
+local function logBootBanner()
+    Logger.info(string.format(
+        "[BOOT] loaded version=%s build=%s role=mp-server",
         tostring(MP.SCRIPT_VERSION),
         tostring(MP.SCRIPT_BUILD)
     ))
-end
-
-local function onGameBoot()
-    logBootBanner("OnGameBoot")
 end
 
 local function registerEvents()
@@ -619,14 +640,15 @@ local function registerEvents()
     }
     local optionalHandlers = {
         OnWeaponSwing = onWeaponSwing,
-        OnPlayerUpdate = onPlayerUpdate,
-        OnGameBoot = onGameBoot,
     }
+    if Options.get().EnableSleepPenaltyModel then
+        optionalHandlers.OnPlayerUpdate = onPlayerUpdate
+    end
     for eventName in pairs(requiredHandlers) do
         local event = Events and Events[eventName] or nil
         if not event or type(event.Add) ~= "function" then
             ArmorMakesSense._mpServerRuntimeRegistered = false
-            log("runtime registration deferred: Events." .. eventName .. ".Add unavailable")
+            Logger.error("role=mp-server runtime registration failed: Events." .. eventName .. ".Add unavailable")
             return false
         end
     end
@@ -646,7 +668,10 @@ local function registerEvents()
         if event and type(event.Add) == "function" then
             handlers[eventName] = handler
         else
-            log("optional runtime hook unavailable: Events." .. eventName .. ".Add")
+            Logger.warnOnce(
+                "mp-server:optional_event:" .. tostring(eventName),
+                "role=mp-server optional runtime event unavailable: Events." .. eventName .. ".Add"
+            )
         end
     end
     for eventName, handler in pairs(handlers) do
@@ -658,5 +683,6 @@ local function registerEvents()
     return true
 end
 
-registerEvents()
-logBootBanner("load")
+if registerEvents() then
+    logBootBanner()
+end

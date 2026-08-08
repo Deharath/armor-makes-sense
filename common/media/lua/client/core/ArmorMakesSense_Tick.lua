@@ -70,7 +70,11 @@ function Tick.tickPlayer(player)
         applyEnduranceModel = not sleeping and Physiology.applyEnduranceModel or nil,
     })
     if result.failurePhase then
-        ClientRuntime.log(string.format("simulation %s failed: %s", tostring(result.failurePhase), tostring(result.failure)))
+        ClientRuntime.logError(string.format(
+            "simulation %s failed: %s",
+            tostring(result.failurePhase),
+            tostring(result.failure)
+        ))
     end
     return result
 end

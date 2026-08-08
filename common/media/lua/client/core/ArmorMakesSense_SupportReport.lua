@@ -127,13 +127,6 @@ local function burdenTierLabel(physicalLoad)
     return labels[PresentationPolicy.burdenTier(physicalLoad)] or labels.negligible
 end
 
-local function sleepPenaltyLabel(rigidityLoad)
-    if not PresentationPolicy.hasSleepRestriction(rigidityLoad) then
-        return nil
-    end
-    return "Slower recovery"
-end
-
 local function javaListToArray(list)
     local out = {}
     if type(list) ~= "userdata" and type(list) ~= "table" then
@@ -166,8 +159,7 @@ local PLAYER_FACING_OPTIONS = {
     EnableSleepPenaltyModel = true,
 }
 
-local function collectOptions()
-    local options = Options.get()
+local function collectOptions(options)
     if type(options) ~= "table" then
         return {}
     end
@@ -312,6 +304,8 @@ local function collectMpSnapshot(state)
         effectiveLoad = tonumber(snapshot.effectiveLoad) or nil,
         thermalContribution = tonumber(snapshot.thermalContribution) or nil,
         breathingContribution = tonumber(snapshot.breathingContribution) or nil,
+        bodyHeatDelta = tonumber(snapshot.bodyHeatDelta) or nil,
+        hotDrive = tonumber(snapshot.hotDrive) or nil,
         metabolicRate = tonumber(snapshot.metabolicRate) or nil,
         metabolicDemand = tonumber(snapshot.metabolicDemand) or nil,
         metabolicNorm = tonumber(snapshot.metabolicNorm) or nil,
@@ -325,6 +319,10 @@ local function collectMpSnapshot(state)
         enduranceAfterAms = tonumber(snapshot.enduranceAfterAms) or nil,
         enduranceNaturalDelta = tonumber(snapshot.enduranceNaturalDelta) or nil,
         enduranceAppliedDelta = tonumber(snapshot.enduranceAppliedDelta) or nil,
+        amsEnduranceRegenScale = tonumber(snapshot.amsEnduranceRegenScale) or nil,
+        amsEnduranceDrainApplied = tonumber(snapshot.amsEnduranceDrainApplied) or nil,
+        sleepPenaltyFraction = tonumber(snapshot.sleepPenaltyFraction) or nil,
+        sleepWakeAdjustment = tonumber(snapshot.sleepWakeAdjustment) or nil,
         lastAppliedDtMinutes = tonumber(snapshot.lastAppliedDtMinutes) or nil,
         catchupPendingMinutes = tonumber(snapshot.catchupPendingMinutes) or nil,
         activityLabel = tostring(snapshot.activityLabel or "idle"),
@@ -359,7 +357,8 @@ local function buildReport(player)
     local worldMinutes = tonumber(Utils.getWorldAgeMinutes()) or 0
     local isMp = Utils.isMultiplayer()
     local state = ClientRuntime.ensureState(player)
-    local options = collectOptions()
+    local resolvedOptions = Options.get()
+    local options = collectOptions(resolvedOptions)
     local analysis = LoadModel.analyzeWornGear(player)
     local profile = analysis.profile
     local runtime = collectRuntime(state)
@@ -434,7 +433,6 @@ local function buildReport(player)
     appendLine(lines, string.format("rigidity_load=%s", formatNumber(profile.rigidityLoad, 3)))
     appendLine(lines, string.format("burden_tier=%s", burdenTierLabel(profile.physicalLoad)))
     appendLine(lines, string.format("driver_count=%s", formatScalar(profile.driverCount)))
-    appendLine(lines, string.format("sleep_penalty=%s", formatScalar(sleepPenaltyLabel(profile.rigidityLoad))))
     appendLine(lines, string.format("top_contributors=%s", topContributorsOneLiner(wornRows, 3)))
     appendLine(lines, "")
 
@@ -447,6 +445,8 @@ local function buildReport(player)
             appendLine(lines, string.format("effectiveLoad=%s", formatNumber(runtime.effectiveLoad, 4)))
             appendLine(lines, string.format("thermalContribution=%s", formatNumber(runtime.thermalContribution, 4)))
             appendLine(lines, string.format("breathingContribution=%s", formatNumber(runtime.breathingContribution, 4)))
+            appendLine(lines, string.format("bodyHeatDelta=%s", formatNumber(runtime.bodyHeatDelta, 4)))
+            appendLine(lines, string.format("hotDrive=%s", formatNumber(runtime.hotDrive, 4)))
             appendLine(lines, string.format("metabolicRate=%s", formatNumber(runtime.metabolicRate, 4)))
             appendLine(lines, string.format("metabolicDemand=%s", formatNumber(runtime.metabolicDemand, 4)))
             appendLine(lines, string.format("metabolicNorm=%s", formatNumber(runtime.metabolicNorm, 4)))
@@ -455,16 +455,29 @@ local function buildReport(player)
             appendLine(lines, string.format("breathingSealedLoad=%s", formatNumber(runtime.breathingSealedLoad, 4)))
             appendLine(lines, string.format("thermalResistance=%s", formatNumber(runtime.thermalResistance, 4)))
             appendLine(lines, string.format("hotPressure=%s", formatNumber(runtime.hotPressure, 4)))
-            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(runtime.thermalStrainScale) or 0) >= 0.15)))
             appendLine(lines, string.format("coldSuitability=%s", formatNumber(runtime.coldSuitability, 4)))
-            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(runtime.coldSuitability) or 0) > 0.45)))
             appendLine(lines, string.format("thermalStrainScale=%s", formatNumber(runtime.thermalStrainScale, 4)))
             appendLine(lines, string.format("activityLabel=%s", formatScalar(runtime.activityLabel)))
             appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(runtime.enduranceBeforeAms, 4)))
             appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(runtime.enduranceAfterAms, 4)))
             appendLine(lines, string.format("enduranceNaturalDelta=%s", formatNumber(runtime.enduranceNaturalDelta, 4)))
             appendLine(lines, string.format("enduranceAppliedDelta=%s", formatNumber(runtime.enduranceAppliedDelta, 4)))
+            appendLine(lines, string.format("amsEnduranceRegenScale=%s", formatNumber(runtime.amsEnduranceRegenScale, 4)))
+            appendLine(lines, string.format("recoveryPenaltyPercent=%s", formatNumber(PresentationPolicy.recoveryPenaltyPercent(
+                runtime.amsEnduranceRegenScale,
+                runtime.enduranceNaturalDelta
+            ), 2)))
+            appendLine(lines, string.format("amsEnduranceDrainApplied=%s", formatNumber(runtime.amsEnduranceDrainApplied, 6)))
+            appendLine(lines, string.format("drainPercentPerMinute=%s", formatNumber(PresentationPolicy.drainPercentPerMinute(
+                runtime.amsEnduranceDrainApplied,
+                runtime.lastAppliedDtMinutes
+            ), 4)))
+            appendLine(lines, string.format("lastAppliedDtMinutes=%s", formatNumber(runtime.lastAppliedDtMinutes, 4)))
             appendLine(lines, string.format("updatedMinute=%s", formatNumber(runtime.updatedMinute, 3)))
+            appendLine(lines, string.format("snapshotAgeMinutes=%s", formatNumber(PresentationPolicy.snapshotAgeMinutes(
+                worldMinutes,
+                runtime.updatedMinute
+            ), 3)))
         else
             appendLine(lines, "runtime=unavailable")
         end
@@ -487,6 +500,8 @@ local function buildReport(player)
             appendLine(lines, string.format("effectiveLoad=%s", formatNumber(mpSnapshot.effectiveLoad, 3)))
             appendLine(lines, string.format("thermalContribution=%s", formatNumber(mpSnapshot.thermalContribution, 4)))
             appendLine(lines, string.format("breathingContribution=%s", formatNumber(mpSnapshot.breathingContribution, 4)))
+            appendLine(lines, string.format("bodyHeatDelta=%s", formatNumber(mpSnapshot.bodyHeatDelta, 4)))
+            appendLine(lines, string.format("hotDrive=%s", formatNumber(mpSnapshot.hotDrive, 4)))
             appendLine(lines, string.format("metabolicRate=%s", formatNumber(mpSnapshot.metabolicRate, 4)))
             appendLine(lines, string.format("metabolicDemand=%s", formatNumber(mpSnapshot.metabolicDemand, 4)))
             appendLine(lines, string.format("metabolicNorm=%s", formatNumber(mpSnapshot.metabolicNorm, 4)))
@@ -497,14 +512,26 @@ local function buildReport(player)
             appendLine(lines, string.format("hotPressure=%s", formatNumber(mpSnapshot.hotPressure, 4)))
             appendLine(lines, string.format("coldSuitability=%s", formatNumber(mpSnapshot.coldSuitability, 4)))
             appendLine(lines, string.format("thermalStrainScale=%s", formatNumber(mpSnapshot.thermalStrainScale, 4)))
-            appendLine(lines, string.format("thermalHot=%s", formatScalar((tonumber(mpSnapshot.thermalStrainScale) or 0) >= 0.15)))
-            appendLine(lines, string.format("thermalCold=%s", formatScalar((tonumber(mpSnapshot.coldSuitability) or 0) > 0.45)))
             appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(mpSnapshot.enduranceBeforeAms, 4)))
             appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(mpSnapshot.enduranceAfterAms, 4)))
             appendLine(lines, string.format("enduranceNaturalDelta=%s", formatNumber(mpSnapshot.enduranceNaturalDelta, 4)))
             appendLine(lines, string.format("enduranceAppliedDelta=%s", formatNumber(mpSnapshot.enduranceAppliedDelta, 4)))
+            appendLine(lines, string.format("amsEnduranceRegenScale=%s", formatNumber(mpSnapshot.amsEnduranceRegenScale, 4)))
+            appendLine(lines, string.format("recoveryPenaltyPercent=%s", formatNumber(PresentationPolicy.recoveryPenaltyPercent(
+                mpSnapshot.amsEnduranceRegenScale,
+                mpSnapshot.enduranceNaturalDelta
+            ), 2)))
+            appendLine(lines, string.format("amsEnduranceDrainApplied=%s", formatNumber(mpSnapshot.amsEnduranceDrainApplied, 6)))
+            appendLine(lines, string.format("drainPercentPerMinute=%s", formatNumber(PresentationPolicy.drainPercentPerMinute(
+                mpSnapshot.amsEnduranceDrainApplied,
+                mpSnapshot.lastAppliedDtMinutes
+            ), 4)))
             appendLine(lines, string.format("lastAppliedDtMinutes=%s", formatNumber(mpSnapshot.lastAppliedDtMinutes, 4)))
             appendLine(lines, string.format("catchupPendingMinutes=%s", formatNumber(mpSnapshot.catchupPendingMinutes, 4)))
+            appendLine(lines, string.format("snapshotAgeMinutes=%s", formatNumber(PresentationPolicy.snapshotAgeMinutes(
+                worldMinutes,
+                mpSnapshot.updatedMinute
+            ), 3)))
             local serverDrivers = mpSnapshot.drivers or {}
             if #serverDrivers > 0 then
                 for i = 1, #serverDrivers do
@@ -524,6 +551,28 @@ local function buildReport(player)
         end
         appendLine(lines, "")
     end
+
+    -- Current authoritative sleep-model state. This is option-aware and never
+    -- infers a penalty solely from worn rigidity.
+    local sleepEnabled = type(resolvedOptions) == "table"
+        and resolvedOptions.EnableSleepPenaltyModel == true
+    local sleepPenaltyFraction = isMp
+        and tonumber(mpSnapshot and mpSnapshot.sleepPenaltyFraction)
+        or tonumber(state and state.lastSleepPenaltyFraction)
+    local sleepWakeAdjustment = isMp
+        and tonumber(mpSnapshot and mpSnapshot.sleepWakeAdjustment)
+        or tonumber(state and state.lastSleepWakeAdjustment)
+    appendLine(lines, "## Sleep")
+    appendLine(lines, string.format("model_enabled=%s", formatScalar(sleepEnabled)))
+    appendLine(lines, string.format("bed_type=%s", formatScalar(callMethodIfPresent(player, "getBedType"))))
+    appendLine(lines, string.format("force_wake_time=%s", formatNumber(callMethodIfPresent(player, "getForceWakeUpTime"), 3)))
+    appendLine(lines, string.format("penalty_fraction=%s", formatNumber(sleepEnabled and sleepPenaltyFraction or 0, 4)))
+    appendLine(lines, string.format("recovery_penalty_percent=%s", formatNumber(PresentationPolicy.sleepPenaltyPercent(
+        sleepPenaltyFraction,
+        sleepEnabled
+    ), 2)))
+    appendLine(lines, string.format("wake_adjustment=%s", formatNumber(sleepEnabled and sleepWakeAdjustment or 0, 4)))
+    appendLine(lines, "")
 
     -- Worn Items
     appendLine(lines, "## Worn Items")
@@ -593,7 +642,7 @@ function SupportReport.writeCurrentPlayerReport(player)
     local relativePath = "ams_reports/" .. fileName
     local okBuild, linesOrErr = pcall(buildReport, playerObj)
     if not okBuild or type(linesOrErr) ~= "table" then
-        ClientRuntime.log("support report build failed: " .. tostring(linesOrErr))
+        ClientRuntime.logError("support report build failed: " .. tostring(linesOrErr))
         return false, nil, "Failed while building report file."
     end
 
@@ -609,12 +658,12 @@ function SupportReport.writeCurrentPlayerReport(player)
     end)
     if not okWrite then
         closeWriterQuietly(writer)
-        ClientRuntime.log("support report write failed: " .. tostring(writeErr))
+        ClientRuntime.logError("support report write failed: " .. tostring(writeErr))
         return false, nil, "Failed while writing report file."
     end
 
     local displayPath = resolveDisplayPath(relativePath)
-    ClientRuntime.log("support report written: " .. tostring(displayPath))
+    ClientRuntime.logInfo("support report written: " .. tostring(displayPath))
     return true, displayPath, nil
 end
 

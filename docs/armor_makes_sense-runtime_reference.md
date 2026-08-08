@@ -341,9 +341,10 @@ never produce less breathing burden at the same effort and seal state.
 ### Thermal Pressure Model
 
 The thermal sampler reads vanilla thermoregulator telemetry:
-- core temperature and body heat delta;
-- shivering from the negative secondary heat balance;
-- effective insulation and wind resistance for each thermal node.
+- core temperature, body heat delta/rate, and heat generation;
+- skin temperature, perspiration, vasodilation, fluid demand, and shivering;
+- external air and air-with-wind temperature;
+- effective UI insulation and wind resistance for each thermal node.
 
 Node insulation and wind resistance already reflect vanilla's clothing
 coverage, layers, condition, holes, and wetness. AMS averages each signal by
@@ -351,14 +352,21 @@ the node's `getSkinSurface()` share so small regions do not count as much as
 large ones.
 
 ```lua
-insulationNorm = clamp((insulation - 0.10) / 0.30, 0, 1)
-windNorm       = clamp((windResistance - 0.08) / 0.30, 0, 1)
-thermalResistance = 0.70 * insulationNorm + 0.30 * windNorm
+thermalResistance = 0.70 * insulationUI + 0.30 * windResistanceUI
 
-heatFlow = clamp(bodyHeatDelta / 0.55, 0, 1)
-coreHeat = clamp((coreTemp - 37.55) / 1.20, 0, 1)
-hotDrive = max(heatFlow, coreHeat)
+peripheralHeat = 0.22*skinHot + 0.18*perspiration
+               + 0.08*vasodilation + 0.06*fluidDemand
+coreEvidence   = 0.32*bodyHeat + 0.30*coreHeat
+               + 0.14*coreTrend + 0.12*heatGeneration
+
+ambientContext = clamp((ambientAir - 22) / (38 - 22), 0, 1)
+contextualPeripheral = peripheralHeat * (0.06 + 0.94*ambientContext)
+hotDrive = clamp(contextualPeripheral + 0.35*coreEvidence, 0, 1)
 ```
+
+Peripheral cooling effort is contextualized by ambient temperature. Core and
+body-heat signals can escalate established evidence, but no single saturated
+field can make ordinary summer clothing look like severe armor heat burden.
 
 `hotPressure` is an asymmetric EMA advanced by elapsed game minutes. Its
 per-minute alpha is `0.55` while rising and `0.38` while falling. A new state
@@ -373,18 +381,17 @@ thermalContribution = thermalResistance * thermalStrainScale * ThermalContributi
 
 Cold need is the maximum normalized signal from negative body heat delta, core
 temperature below `36.90C`, and shivering. When cold need reaches `0.16`, AMS
-reports `coldSuitability = thermalResistance * (1 - shivering)`. This is a UI
-and diagnostic signal only; AMS applies neither a cold penalty nor a protective
-endurance bonus.
+records `coldSuitability = thermalResistance * (1 - shivering)` for diagnostics
+only; AMS applies neither a cold penalty nor a protective endurance bonus.
 
 When thermoregulator telemetry is unavailable, thermal state is marked
 unavailable and contributes zero. Disabling the thermal model also makes its
 contribution zero.
 
-Runtime snapshot thermal state:
-- hot if `hotPressure > 0.24`
-- cold-helpful if `coldSuitability > 0.45`
-- otherwise neutral
+Runtime snapshots retain `bodyHeatDelta`, `hotDrive`, `hotPressure`, resistance,
+strain scale, cold suitability, and the resulting contribution. Player UI shows
+retained heat as a relative active-pressure bar only after the contribution
+reaches `0.25`; support reports retain the exact numeric value.
 
 ### Endurance Regen Throttling
 

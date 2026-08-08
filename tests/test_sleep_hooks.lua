@@ -68,7 +68,22 @@ end
 
 package.loaded["ArmorMakesSense_SleepHooks"] = nil
 local SleepHooks = require "ArmorMakesSense_SleepHooks"
-Support.assertEqual(SleepHooks.wrapSleepPlanning(), nil, "partial sleep hook installation remains retryable")
+local originalAutoSleep = ISWorldObjectContextMenu.onSleepWalkToComplete
+local disabledInstall, disabledReason = SleepHooks.wrapSleepPlanning({ EnableSleepPenaltyModel = false })
+Support.assertFalse(disabledInstall, "disabled sleep model installs no planner hooks")
+Support.assertEqual(disabledReason, "disabled", "disabled hook result is explicit")
+Support.assertEqual(
+    ISWorldObjectContextMenu.onSleepWalkToComplete,
+    originalAutoSleep,
+    "disabled sleep model leaves vanilla auto-sleep identity untouched"
+)
+Support.assertFalse(ArmorMakesSense._autoSleepPlannerWrapped, "disabled sleep model records no auto-sleep wrapper")
+
+Support.assertEqual(
+    SleepHooks.wrapSleepPlanning({ EnableSleepPenaltyModel = true }),
+    nil,
+    "partial sleep hook installation remains retryable"
+)
 ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
 
 Support.assertEqual(originalCalls, 1, "vanilla sleep workflow called exactly once")
@@ -84,10 +99,10 @@ wakeWrites = 0
 sleepingEventHours = nil
 sleepingEventCalls = 0
 ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
-Support.assertClose(wakeHour, 8, 1e-9, "disabled penalty preserves vanilla wake time")
-Support.assertEqual(wakeWrites, 1, "disabled penalty performs no second wake-time write")
-Support.assertClose(sleepingEventHours, 2, 1e-9, "disabled penalty preserves vanilla sleeping event")
-Support.assertEqual(sleepingEventCalls, 1, "disabled penalty never reinitializes sleep")
+Support.assertClose(wakeHour, 8, 1e-9, "zero penalty preserves vanilla wake time")
+Support.assertEqual(wakeWrites, 1, "zero penalty performs no second wake-time write")
+Support.assertClose(sleepingEventHours, 2, 1e-9, "zero penalty preserves vanilla sleeping event")
+Support.assertEqual(sleepingEventCalls, 1, "zero penalty never reinitializes sleep")
 
 plannerPenalty = 0.25
 asleep = false
@@ -121,8 +136,8 @@ asleep = false
 wakeWrites = 0
 sentSleepCommand = nil
 ISWorldObjectContextMenu.onSleepWalkToComplete(0, "bed")
-Support.assertEqual(sentSleepCommand, nil, "disabled MP sleep model sends no AMS bed context")
-Support.assertEqual(wakeWrites, 1, "disabled MP sleep model leaves vanilla wake planning untouched")
+Support.assertEqual(sentSleepCommand, nil, "zero MP sleep penalty sends no AMS bed context")
+Support.assertEqual(wakeWrites, 1, "zero MP sleep penalty leaves vanilla wake planning untouched")
 
 plannerPenalty = 0.25
 isClient = function() return false end
@@ -167,7 +182,10 @@ ISSleepDialog = {
     end,
 }
 
-Support.assertTrue(SleepHooks.wrapSleepPlanning(), "dialog hook installs when vanilla class becomes available")
+Support.assertTrue(
+    SleepHooks.wrapSleepPlanning({ EnableSleepPenaltyModel = true }),
+    "dialog hook installs when vanilla class becomes available"
+)
 local dialog = { player = player }
 ISSleepDialog.initialise(dialog)
 Support.assertEqual(dialog.spinBox.selected, 4, "dialog planner extends selected sleep duration")

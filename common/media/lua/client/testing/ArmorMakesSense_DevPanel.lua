@@ -388,16 +388,11 @@ local function drawLiveData(self, snapshot)
     local profile = snapshot.profile or {}
     local age = snapshot.snapshotAgeMinutes
     local ageColor = age == nil and COLOR.warn or (age > 5 and COLOR.warn or COLOR.good)
-    local thermalState = runtime.thermalUiState or raw.thermalUiState
-    if not thermalState then
-        thermalState = (tonumber(runtime.hotPressure) or 0) > 0.24 and "hot"
-            or ((tonumber(runtime.coldSuitability) or 0) > 0.45 and "cold" or "neutral")
-    end
 
     y = drawSection(self, x, y, width, "Runtime")
     y = drawPair(self, x, y, width, "Source", snapshot.source, "Age", age and formatNumber(age, 1) .. "m" or "--", ageColor)
     y = drawPair(self, x, y, width, "Activity", shortText(runtime.activityLabel, 12), "Heat scale", formatNumber(runtime.thermalStrainScale, 3))
-    y = drawPair(self, x, y, width, "Thermal", shortText(thermalState, 10), "Updated", formatNumber(runtime.updatedMinute, 1))
+    y = drawPair(self, x, y, width, "Hot drive", formatNumber(runtime.hotDrive, 3), "Updated", formatNumber(runtime.updatedMinute, 1))
 
     y = drawSection(self, x, y + 3, width, "Player")
     y = drawPair(self, x, y, width, "Endurance", formatPercent(snapshot.endurance), "Fatigue", formatPercent(snapshot.fatigue))
@@ -413,6 +408,7 @@ local function drawLiveData(self, snapshot)
     y = drawPair(self, x, y, width, "MET rate", formatNumber(raw.metabolicRate, 3), "MET demand", formatNumber(raw.metabolicDemand, 3))
     y = drawPair(self, x, y, width, "Effort norm", formatNumber(raw.metabolicNorm, 3), "Effort ramp", formatNumber(raw.breathingEffortRamp, 3))
     y = drawPair(self, x, y, width, "Open load", formatNumber(raw.breathingDynamicLoad, 3), "Sealed load", formatNumber(raw.breathingSealedLoad, 3))
+    y = drawPair(self, x, y, width, "Body heat", formatNumber(runtime.bodyHeatDelta, 3), "Hot drive", formatNumber(runtime.hotDrive, 3))
     y = drawPair(self, x, y, width, "Hot pressure", formatNumber(runtime.hotPressure, 3), "Cold fit", formatNumber(runtime.coldSuitability, 3))
     y = drawPair(self, x, y, width, "Natural dE", formatNumber(raw.enduranceNaturalDelta, 5), "AMS dE", formatNumber(raw.enduranceAppliedDelta, 5))
     y = drawPair(self, x, y, width, "Regen scale", formatNumber(raw.composedEnduranceRegenScale, 3), "AMS drain", formatNumber(raw.amsEnduranceDrainApplied, 5))

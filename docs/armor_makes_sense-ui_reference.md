@@ -44,7 +44,32 @@ key for the duration of rendering and restores the item afterward.
 ## Burden Panel
 
 The Burden panel uses the aggregate equipment profile and the latest runtime
-snapshot.
+snapshot. It is a compact loadout inspector: stable physical burden first,
+currently active secondary pressures second, and item-level cost drivers last.
+
+### Burden Summary
+
+| Element | Display |
+|---|---|
+| Tier | Qualitative physical burden from `Negligible` through `Extreme` |
+| Bar | Physical weight, bulk, and movement restriction on the existing 100-point burden scale |
+
+The summary deliberately does not expose recovery scales, endurance drain
+rates, or effective load. Those exact values remain available in support
+reports and the dev panel.
+
+### Active Pressures
+
+| Row | Meaning |
+|---|---|
+| Retained heat | Appears at `thermalContribution >= 0.25`; its bar reaches full width at the configured 14-point maximum |
+| Restricted breathing | Appears only while respiratory gear and metabolic effort produce a positive contribution; its bar reaches full width at 7 points |
+| Sleep restriction | Appears only while the sleep model is enabled and reports a positive current penalty; its bar reaches full width at a 35% reduction |
+
+If no row is active, the complete section is omitted. Ordinary pressure bars
+use the muted burden color, become amber only after 40% of their presentation
+scale, and become red at 85%. These bars communicate relative pressure without
+publishing precise physiological penalties.
 
 ### Burden Tiers
 
@@ -56,32 +81,21 @@ snapshot.
 | `45 to < 75` | Heavy |
 | `>= 75` | Extreme |
 
-### Thermal Labels
+This shorthand describes physical gear burden only. AMS does not translate
+thermal state into labels such as Warm or Oppressive, and cold suitability is
+diagnostic rather than a player-facing bonus.
 
-| Runtime condition | Label |
-|---|---|
-| `thermalStrainScale >= 0.50` | Oppressive |
-| `thermalStrainScale >= 0.15` | Burdensome |
-| `thermalStrainScale > 0.01` | Warm |
-| `coldSuitability > 0.45` | Helpful |
-| otherwise | Neutral |
+### Cost Drivers
 
-### Breathing, Sleep, and Drivers
-
-- Breathing uses the same airflow and sealed-restriction rules as tooltips.
-- Sleep impact appears at `rigidityLoad >= 10` and displays `Slower recovery`.
-  Exact duration is not shown because the runtime result also depends on
-  fatigue, bed quality, traits, and sandbox settings.
 - Cost drivers include worn items with `physicalLoad >= 1.5`, sorted by physical
-  load descending.
+  load descending. The panel retains the complete list rather than truncating it.
 - MP clients calculate gear burden, breathing restriction, rigidity, and cost
   drivers from the current local worn-item collection so clothing actions are
   reflected immediately. Dynamic physiology and thermal state remain supplied
   by the server snapshot.
 
-Burden, breathing, and sleep visibility thresholds come from
-`ArmorMakesSense_PresentationPolicy.lua`, which is shared by the panel,
-tooltips, and support-report formatting.
+Burden tiers, tooltip breathing tiers, active-pressure visibility, and support
+report formatting helpers come from `ArmorMakesSense_PresentationPolicy.lua`.
 
 ## Refresh Behavior
 
@@ -92,7 +106,7 @@ tooltips, and support-report formatting.
   telemetry. A visible panel requests server telemetry only when the cache is
   missing or older than 30 wall-clock seconds. Missing data displays a waiting
   state.
-- A change in thermal UI state also marks the panel dirty.
+- While visible, runtime rows refresh at most once per half game-minute.
 
 ## Character Information Integration
 
@@ -109,8 +123,9 @@ window from `getPlayerData(playerNum).characterInfo` and attaches directly.
 ## Support Report
 
 The Burden panel can save a support report under `Lua/ams_reports/`. Reports
-include version, options, runtime state, and equipment attribution. In MP, an
-export without a cached server snapshot queues one and asks the player to retry.
+include version, options, runtime age, raw heat evidence, numeric AMS endurance
+effects, option-aware sleep state, and equipment attribution. In MP, an export
+without a cached server snapshot queues one and asks the player to retry.
 
 ## Modules
 

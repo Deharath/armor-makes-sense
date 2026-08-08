@@ -38,56 +38,62 @@ local function registerCompatProvider()
         return
     end
 
+    local options = Options.get()
+    local capabilities = {
+        endurance_coordinator = true,
+    }
+    local callbacks = {
+        buildTraceSnapshot = function(playerObj, _args)
+            local player = playerObj or ClientRuntime.getLocalPlayer()
+            if not player then
+                return {}
+            end
+            return Physiology.buildCompatTraceSnapshot(ClientRuntime.ensureState(player))
+        end,
+    }
+    if options.EnableSleepPenaltyModel then
+        capabilities.sleep_penalty_provider = true
+        capabilities.sleep_planner_penalty_provider = true
+        callbacks.computeSleepPenaltyContribution = function(playerObj, args)
+            local player = playerObj or ClientRuntime.getLocalPlayer()
+            if not player then
+                return {
+                    penaltyFraction = 0,
+                    sleeping = false,
+                }
+            end
+
+            local state = ClientRuntime.ensureState(player)
+            local callbackOptions = Options.get()
+            local profile = LoadModel.computeWornProfile(player)
+            return Physiology.computeSleepPenaltyContribution(
+                player,
+                state,
+                callbackOptions,
+                tonumber(args and args.dtMinutes) or 0,
+                profile,
+                tonumber(args and args.currentFatigue)
+            )
+        end
+        callbacks.estimateSleepPlannerPenalty = function(playerObj, args)
+            local player = playerObj or ClientRuntime.getLocalPlayer()
+            if not player then
+                return { penaltyFraction = 0 }
+            end
+
+            return Physiology.computeSleepPlannerPenalty(
+                player,
+                ClientRuntime.ensureState(player),
+                Options.get(),
+                LoadModel.computeWornProfile(player),
+                tonumber(args and args.currentFatigue)
+            )
+        end
+    end
+
     compat:registerProvider("ArmorMakesSense", {
-        capabilities = {
-            endurance_coordinator = true,
-            sleep_penalty_provider = true,
-            sleep_planner_penalty_provider = true,
-        },
-        callbacks = {
-            computeSleepPenaltyContribution = function(playerObj, args)
-                local player = playerObj or ClientRuntime.getLocalPlayer()
-                if not player then
-                    return {
-                        penaltyFraction = 0,
-                        sleeping = false,
-                    }
-                end
-
-                local state = ClientRuntime.ensureState(player)
-                local options = Options.get()
-                local profile = LoadModel.computeWornProfile(player)
-                return Physiology.computeSleepPenaltyContribution(
-                    player,
-                    state,
-                    options,
-                    tonumber(args and args.dtMinutes) or 0,
-                    profile,
-                    tonumber(args and args.currentFatigue)
-                )
-            end,
-            estimateSleepPlannerPenalty = function(playerObj, args)
-                local player = playerObj or ClientRuntime.getLocalPlayer()
-                if not player then
-                    return { penaltyFraction = 0 }
-                end
-
-                return Physiology.computeSleepPlannerPenalty(
-                    player,
-                    ClientRuntime.ensureState(player),
-                    Options.get(),
-                    LoadModel.computeWornProfile(player),
-                    tonumber(args and args.currentFatigue)
-                )
-            end,
-            buildTraceSnapshot = function(playerObj, _args)
-                local player = playerObj or ClientRuntime.getLocalPlayer()
-                if not player then
-                    return {}
-                end
-                return Physiology.buildCompatTraceSnapshot(ClientRuntime.ensureState(player))
-            end,
-        },
+        capabilities = capabilities,
+        callbacks = callbacks,
     })
 end
 
@@ -108,13 +114,15 @@ local function tryInstallSleepHooks(playerObj)
     if Mod._sleepHooksInstallResolved or not isEligibleLocalPlayer(playerObj) then
         return Mod._sleepHooksInstallResolved
     end
-    local installed = SleepHooks.wrapSleepPlanning()
+    local installed, reason = SleepHooks.wrapSleepPlanning(Options.get())
     if installed == nil then
         ClientRuntime.logOnce("sleep_hooks_deferred", "sleep planner dependencies not ready; installation deferred")
         return false
     end
     Mod._sleepHooksInstallResolved = true
-    if installed == false then
+    if reason == "disabled" then
+        ClientRuntime.log("sleep planner hooks skipped because armor sleep effects are disabled")
+    elseif installed == false then
         ClientRuntime.log("sleep planner hooks delegated to CMS coordinator after confirmed local player creation")
     else
         ClientRuntime.log("sleep planner hooks installed after confirmed local player creation")
@@ -156,7 +164,8 @@ if Events and Events.OnCreatePlayer and type(Events.OnCreatePlayer.Add) == "func
     Events.OnCreatePlayer.Add(onCreatePlayer)
     Mod._mainEventHandlers.OnCreatePlayer = onCreatePlayer
 end
-if Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
+if Options.get().EnableSleepPenaltyModel
+    and Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
     Events.OnPlayerUpdate.Add(onPlayerUpdate)
     Mod._mainEventHandlers.OnPlayerUpdate = onPlayerUpdate
 end

@@ -1,18 +1,13 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
+local Logger = require "ArmorMakesSense_Logger"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local Stats = ArmorMakesSense.Core.Stats or {}
 ArmorMakesSense.Core.Stats = Stats
 
-local warned = {}
-
 local function logErrorOnce(key, message)
-    if warned[key] then
-        return
-    end
-    warned[key] = true
-    print("[ArmorMakesSense][ERROR] " .. tostring(message))
+    Logger.errorOnce("stats:" .. tostring(key), message)
 end
 
 local function shouldBlockWrite()

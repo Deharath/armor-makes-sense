@@ -19,6 +19,8 @@ function Builder.build(mpState, profile, drivers, activityLabel, currentMinute)
         effectiveLoad = tonumber(uiSnapshot.effectiveLoad) or tonumber(wornProfile.physicalLoad) or 0,
         thermalContribution = tonumber(uiSnapshot.thermalContribution) or 0,
         breathingContribution = tonumber(uiSnapshot.breathingContribution) or 0,
+        bodyHeatDelta = tonumber(uiSnapshot.bodyHeatDelta) or 0,
+        hotDrive = tonumber(uiSnapshot.hotDrive) or 0,
         metabolicRate = tonumber(uiSnapshot.metabolicRate) or 1.5,
         metabolicDemand = tonumber(uiSnapshot.metabolicDemand) or 1.5,
         metabolicNorm = tonumber(uiSnapshot.metabolicNorm) or 0,
@@ -34,7 +36,13 @@ function Builder.build(mpState, profile, drivers, activityLabel, currentMinute)
         enduranceAfterAms = tonumber(uiSnapshot.enduranceAfterAms) or 0,
         enduranceNaturalDelta = tonumber(uiSnapshot.enduranceNaturalDelta) or 0,
         enduranceAppliedDelta = tonumber(uiSnapshot.enduranceAppliedDelta) or 0,
-        lastAppliedDtMinutes = tonumber(state.lastAppliedDtMinutes) or 0,
+        amsEnduranceRegenScale = tonumber(uiSnapshot.amsEnduranceRegenScale) or 1,
+        amsEnduranceDrainApplied = tonumber(uiSnapshot.amsEnduranceDrainApplied) or 0,
+        sleepPenaltyFraction = tonumber(state.lastSleepPenaltyFraction) or 0,
+        sleepWakeAdjustment = tonumber(state.lastSleepWakeAdjustment) or 0,
+        lastAppliedDtMinutes = tonumber(state.lastAppliedDtMinutes)
+            or tonumber(uiSnapshot.lastAppliedDtMinutes)
+            or 0,
         catchupPendingMinutes = tonumber(state.pendingCatchupMinutes) or 0,
         updatedMinute = tonumber(uiSnapshot.updatedMinute) or tonumber(currentMinute) or 0,
     }

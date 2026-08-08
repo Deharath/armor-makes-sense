@@ -187,10 +187,42 @@ if rg -q 'updatePlayer' <<<"${client_command_body}"; then
   echo "MP snapshot requests still invoke gameplay simulation" >&2
   exit 1
 fi
-if rg -n 'lastSnapshotSentSecond|thermalHot|thermalCold|thermal_hot|thermal_cold' \
+if rg -n 'lastSnapshotSentSecond|thermalHot|thermalCold|thermal_hot|thermal_cold|thermalTier' \
   "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPSnapshotCodec.lua" \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_SupportReport.lua"; then
+  echo "runtime or support report still carries unused snapshot state or derived thermal labels" >&2
+  exit 1
+fi
+if rg -n 'thermalWord|showThermal\b|UI_AMS_Label_Thermal|UI_AMS_Annotation_(Heat|Cold)' \
+  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua" \
+  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PresentationPolicy.lua" \
+  "${ROOT_DIR}/common/media/lua/shared/Translate/EN/UI.json"; then
+  echo "player-facing UI still converts numeric thermal contribution into qualitative labels" >&2
+  exit 1
+fi
+for quantitative_helper in recoveryPenaltyPercent drainPercentPerMinute sleepPenaltyPercent; do
+  if rg -q "PresentationPolicy\.${quantitative_helper}" \
+    "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
+    echo "player-facing UI exposes diagnostic quantity: ${quantitative_helper}" >&2
+    exit 1
+  fi
+  if ! rg -q "PresentationPolicy\.${quantitative_helper}" \
+    "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_SupportReport.lua"; then
+    echo "support report lost quantitative helper: ${quantitative_helper}" >&2
+    exit 1
+  fi
+done
+for pressure_helper in hasThermalPressure hasBreathingPressure hasSleepPressure; do
+  if ! rg -q "PresentationPolicy\.${pressure_helper}" \
+    "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
+    echo "Burden UI does not use active-pressure visibility helper: ${pressure_helper}" >&2
+    exit 1
+  fi
+done
+if ! rg -q 'Codec\.SCHEMA_VERSION = 6' \
   "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPSnapshotCodec.lua"; then
-  echo "MP runtime still carries unused snapshot state or derived thermal booleans" >&2
+  echo "MP snapshot schema was not bumped for quantitative runtime fields" >&2
   exit 1
 fi
 if rg -n 'lastAsleepFlag|Deliberate duplicate of ArmorMakesSense_Utils|local function safe(Method|Call)' \
@@ -434,6 +466,25 @@ PACKAGING_PATHS=(
 rewrite_pattern='WriteAllLines\(\$mainLua|sed -i .+testing|stripped testing requires from Main'
 if rg -n "${rewrite_pattern}" "${PACKAGING_PATHS[@]}"; then
   echo "release tooling still rewrites Main.lua" >&2
+  exit 1
+fi
+
+if rg -n '\bprint[[:space:]]*\(' "${RUNTIME_PATHS[@]}" \
+  -g '*.lua' \
+  -g '!**/testing/**' \
+  -g '!**/diagnostics/**' \
+  -g '!ArmorMakesSense_Logger.lua'; then
+  echo "release runtime bypasses the centralized logger" >&2
+  exit 1
+fi
+if rg -n 'BOOT_ROLE|BOOT_MP' "${RUNTIME_PATHS[@]}" -g '*.lua' -g '!**/testing/**' -g '!**/diagnostics/**'; then
+  echo "release runtime still contains obsolete boot banners" >&2
+  exit 1
+fi
+boot_identity_count="$(rg -n '\[BOOT\] loaded version=' "${RUNTIME_PATHS[@]}" \
+  -g '*.lua' -g '!**/testing/**' -g '!**/diagnostics/**' | wc -l)"
+if [[ "${boot_identity_count}" -ne 3 ]]; then
+  echo "release runtime must define exactly one boot identity for each SP, MP-client, and MP-server role" >&2
   exit 1
 fi
 

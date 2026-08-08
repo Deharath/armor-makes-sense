@@ -8,21 +8,25 @@ local HOT_PRESSURE_DEADBAND = 0.18
 local HOT_RISE_ALPHA = 0.55
 local HOT_FALL_ALPHA = 0.38
 local COLD_CONTEXT_MIN = 0.16
+local AMBIENT_COLD_C = 22.0
+local AMBIENT_HOT_C = 38.0
+local AMBIENT_PERIPHERAL_FLOOR = 0.06
+local CORE_ESCALATOR_WEIGHT = 0.35
 
-local function normalizePositive(value, pivot, span)
+local function normalizePositive(value, pivot, span, cap)
     local numeric = tonumber(value)
     if numeric == nil or span <= 0 then
         return 0
     end
-    return Utils.clamp((numeric - pivot) / span, 0, 1)
+    return Utils.clamp((numeric - pivot) / span, 0, tonumber(cap) or 1)
 end
 
-local function normalizeNegative(value, pivot, span)
+local function normalizeNegative(value, pivot, span, cap)
     local numeric = tonumber(value)
     if numeric == nil or span <= 0 then
         return 0
     end
-    return Utils.clamp((pivot - numeric) / span, 0, 1)
+    return Utils.clamp((pivot - numeric) / span, 0, tonumber(cap) or 1)
 end
 
 local function smoothstep01(value)
@@ -55,6 +59,7 @@ local function neutralResult(available, bodyTemp)
     return {
         available = available == true,
         bodyTemp = tonumber(bodyTemp),
+        bodyHeatDelta = 0,
         resistance = 0,
         hotDrive = 0,
         hotPressure = 0,
@@ -75,10 +80,12 @@ function ThermalModel.sample(player)
     local totals = {
         insulation = 0,
         windResistance = 0,
+        skinTemp = 0,
     }
     local weights = {
         insulation = 0,
         windResistance = 0,
+        skinTemp = 0,
     }
 
     local function add(key, value, weight)
@@ -99,8 +106,9 @@ function ThermalModel.sample(player)
         local node = Utils.safeMethod(thermoregulator, "getNode", index)
         if node then
             local surface = tonumber(Utils.safeMethod(node, "getSkinSurface"))
-            add("insulation", Utils.safeMethod(node, "getInsulation"), surface)
-            add("windResistance", Utils.safeMethod(node, "getWindresist"), surface)
+            add("insulation", Utils.safeMethod(node, "getInsulationUI"), surface)
+            add("windResistance", Utils.safeMethod(node, "getWindresistUI"), surface)
+            add("skinTemp", Utils.safeMethod(node, "getSkinCelcius"), surface)
         end
     end
 
@@ -111,10 +119,19 @@ function ThermalModel.sample(player)
         return totals[key] / weights[key]
     end
 
+    local primaryTotal = tonumber(Utils.safeMethod(thermoregulator, "getDbg_primTotal")) or 0
     local secondaryTotal = tonumber(Utils.safeMethod(thermoregulator, "getDbg_secTotal")) or 0
     return {
         coreTemp = tonumber(Utils.safeMethod(thermoregulator, "getCoreTemperature")),
         bodyHeatDelta = tonumber(Utils.safeMethod(thermoregulator, "getBodyHeatDelta")),
+        coreRateOfChange = tonumber(Utils.safeMethod(thermoregulator, "getCoreRateOfChange")),
+        heatGeneration = tonumber(Utils.safeMethod(thermoregulator, "getHeatGeneration")),
+        fluidsMultiplier = tonumber(Utils.safeMethod(thermoregulator, "getFluidsMultiplier")),
+        externalAirTemp = tonumber(Utils.safeMethod(thermoregulator, "getExternalAirTemperature")),
+        airAndWindTemp = tonumber(Utils.safeMethod(thermoregulator, "getTemperatureAirAndWind")),
+        skinTemp = average("skinTemp"),
+        perspiration = math.max(secondaryTotal, 0),
+        vasodilation = math.max(primaryTotal, 0),
         shivering = math.max(-secondaryTotal, 0),
         insulation = average("insulation"),
         windResistance = average("windResistance"),
@@ -130,18 +147,60 @@ function ThermalModel.advance(sample, state, elapsedMinutes, options)
         return neutralResult(false, nil)
     end
 
-    local insulation = normalizePositive(sample.insulation, 0.10, 0.30)
-    local windResistance = normalizePositive(sample.windResistance, 0.08, 0.30)
+    local insulation = Utils.clamp(tonumber(sample.insulation) or 0, 0, 1)
+    local windResistance = Utils.clamp(tonumber(sample.windResistance) or 0, 0, 1)
     local resistance = Utils.clamp((insulation * 0.70) + (windResistance * 0.30), 0, 1)
 
-    local heatFlow = normalizePositive(sample.bodyHeatDelta, 0, 0.55)
-    local coreHeat = normalizePositive(sample.coreTemp, 37.55, 1.20)
-    local hotDrive = math.max(heatFlow, coreHeat)
+    -- Vanilla body heat is not, by itself, evidence that equipment is imposing
+    -- an exertion cost. Peripheral cooling effort is contextualized by ambient
+    -- temperature, while core/body-heat evidence only escalates the signal.
+    -- This retains the simple aggregate resistance model without letting one
+    -- saturated thermoregulator field turn ordinary summer clothing into armor.
+    local skinHot = normalizePositive(sample.skinTemp, 33.40, 2.00, 1.8)
+    local perspiration = normalizePositive(sample.perspiration, 0, 0.26, 1.8)
+    local vasodilation = normalizePositive(sample.vasodilation, 0, 0.40, 1.5)
+    local fluids = normalizePositive(sample.fluidsMultiplier, 1.00, 1.20, 1.6)
+    local bodyHeat = normalizePositive(sample.bodyHeatDelta, 0, 0.55, 1.4)
+    local coreHeat = normalizePositive(sample.coreTemp, 37.55, 1.20, 1.6)
+    local coreTrend = normalizePositive(sample.coreRateOfChange, 0, 0.0045, 1.3)
+    local heatGeneration = normalizePositive(sample.heatGeneration, 1.10, 2.20, 1.6)
+
+    local peripheralHeat = Utils.clamp(
+        (skinHot * 0.22)
+            + (perspiration * 0.18)
+            + (vasodilation * 0.08)
+            + (fluids * 0.06),
+        0,
+        1.4
+    )
+    local coreEvidence = Utils.clamp(
+        (bodyHeat * 0.32)
+            + (coreHeat * 0.30)
+            + (coreTrend * 0.14)
+            + (heatGeneration * 0.12),
+        0,
+        1.4
+    )
+    local externalAir = tonumber(sample.externalAirTemp)
+    local airAndWind = tonumber(sample.airAndWindTemp)
+    local ambientAir = math.max(externalAir or 20, airAndWind or 20)
+    local ambientContext = Utils.clamp(
+        (ambientAir - AMBIENT_COLD_C) / math.max(1, AMBIENT_HOT_C - AMBIENT_COLD_C),
+        0,
+        1
+    )
+    local contextualPeripheral = peripheralHeat
+        * (AMBIENT_PERIPHERAL_FLOOR + ((1 - AMBIENT_PERIPHERAL_FLOOR) * ambientContext))
+    local hotDrive = Utils.clamp(
+        contextualPeripheral + (coreEvidence * CORE_ESCALATOR_WEIGHT),
+        0,
+        1
+    )
 
     local modelState = type(state) == "table" and state or nil
     local previous = modelState and tonumber(modelState.hotPressure) or nil
     if previous == nil then
-        previous = coreHeat
+        previous = Utils.clamp(coreHeat, 0, 1)
     end
     local hotPressure = advanceEma(previous, hotDrive, elapsedMinutes)
     if modelState then
@@ -164,6 +223,7 @@ function ThermalModel.advance(sample, state, elapsedMinutes, options)
     return {
         available = true,
         bodyTemp = tonumber(sample.coreTemp),
+        bodyHeatDelta = tonumber(sample.bodyHeatDelta) or 0,
         resistance = resistance,
         hotDrive = hotDrive,
         hotPressure = hotPressure,

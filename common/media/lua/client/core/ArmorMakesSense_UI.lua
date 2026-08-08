@@ -75,22 +75,14 @@ end
 
 local BURDEN_BAR_MAX = 100
 local TOOLTIP_BAR_MAX = 28
+local THERMAL_PRESSURE_BAR_MAX = 14
+local BREATHING_PRESSURE_BAR_MAX = 7
+local SLEEP_PRESSURE_BAR_MAX = 0.35
 
 local function burdenBarFraction(physicalLoad, maxLoad)
     local v = tonumber(physicalLoad) or 0
     if v <= 0 then return 0 end
     return math.min(1.0, v / (maxLoad or BURDEN_BAR_MAX))
-end
-
-local function breathingTierFromResistance(resistance, sealedRestriction)
-    local tier = PresentationPolicy.breathingTier(resistance, sealedRestriction)
-    local labels = {
-        mild = { "UI_AMS_Label_BreathingMild", "Mild" },
-        restricted = { "UI_AMS_Label_BreathingRestricted", "Restricted" },
-        heavy = { "UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted" },
-    }
-    local label = tier and labels[tier] or nil
-    return label and tr(label[1], label[2]) or nil
 end
 
 local function burdenTierFromTotal(physicalLoad)
@@ -165,36 +157,6 @@ local function installClothingUpdateHook()
     end
     Events.OnClothingUpdated.Add(handler)
     UI._eventHandlers.OnClothingUpdated = handler
-end
-
--- -----------------------------------------------------------------------------
--- Panel / tab data model
--- -----------------------------------------------------------------------------
-
-local function resolveThermalEffect(runtimeSnapshot)
-    local thermalScale = tonumber(runtimeSnapshot and runtimeSnapshot.thermalStrainScale) or 0
-    local coldSuitability = tonumber(runtimeSnapshot and runtimeSnapshot.coldSuitability) or 0
-    if thermalScale >= 0.50 then
-        return tr("UI_AMS_Label_ThermalOppressive", "Oppressive"), { 1.0, 0.45, 0.25, 1.0 }, true,
-            tr("UI_AMS_Annotation_HeatOppressive", "Overheating in heavy gear"),
-            { 0.95, 0.40, 0.25, 0.90 }
-    end
-    if thermalScale >= 0.15 then
-        return tr("UI_AMS_Label_ThermalBurdensome", "Burdensome"), { 1.0, 0.74, 0.35, 1.0 }, true,
-            tr("UI_AMS_Annotation_HeatBurdensome", "Heat increasing exertion cost"),
-            { 0.90, 0.65, 0.35, 0.90 }
-    end
-    if thermalScale > 0.01 then
-        return tr("UI_AMS_Label_ThermalWarm", "Warm"), { 1.0, 0.88, 0.55, 1.0 }, false,
-            tr("UI_AMS_Annotation_HeatWarm", "Armor retaining body heat"),
-            { 0.85, 0.78, 0.50, 0.90 }
-    end
-    if coldSuitability > 0.45 then
-        return tr("UI_AMS_Label_ThermalHelpful", "Helpful"), { 0.65, 0.95, 0.65, 1.0 }, false,
-            tr("UI_AMS_Annotation_ColdHelping", "Insulation suited to the cold"),
-            { 0.55, 0.80, 0.55, 0.90 }
-    end
-    return tr("UI_AMS_Label_ThermalNeutral", "Neutral"), { 0.82, 0.82, 0.82, 1.0 }, false, nil, nil
 end
 
 -- -----------------------------------------------------------------------------
@@ -365,54 +327,6 @@ local function ensurePanelClasses()
         return player
     end
 
-    local function shouldShowThermalBlock(thermalBurdensome, thermalAnnotation, showBurden, showBreathing, showSleep)
-        return thermalBurdensome or thermalAnnotation ~= nil or showBurden or showBreathing or showSleep
-    end
-
-    local function buildBreathingDescription(airflowResistance, sealedRestriction)
-        local tier = PresentationPolicy.breathingTier(airflowResistance, sealedRestriction)
-        if tier == "heavy" then
-            return tr("UI_AMS_BreathingDesc_HeavyRestricted", "Severe breathing penalty")
-        elseif tier == "restricted" then
-            return tr("UI_AMS_BreathingDesc_Restricted", "Restricts airflow during exertion")
-        end
-        return tr("UI_AMS_BreathingDesc_Mild", "Slightly restricts airflow")
-    end
-
-    local function buildSleepWord(rigidityLoad)
-        if not PresentationPolicy.hasSleepRestriction(rigidityLoad) then
-            return nil
-        end
-
-        return tr("UI_AMS_Label_SleepSlower", "Slower recovery")
-    end
-
-    local function buildBurdenWords(profile)
-        local burdenTier, burdenTierKey = burdenTierFromTotal(tonumber(profile and profile.physicalLoad) or 0)
-        local breathingWord = breathingTierFromResistance(
-            profile and profile.airflowResistance,
-            profile and profile.sealedRestriction
-        )
-        local breathingDesc = nil
-        if breathingWord then
-            breathingDesc = buildBreathingDescription(
-                profile and profile.airflowResistance,
-                profile and profile.sealedRestriction
-            )
-        end
-        local sleepWord = buildSleepWord(profile and profile.rigidityLoad)
-        return burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord
-    end
-
-    local function hasRenderableContent(data)
-        return (type(data.summaryLines) == "table" and #data.summaryLines > 0)
-            or data.showBurden
-            or data.showThermal
-            or data.showBreathing
-            or data.showSleep
-            or data.showDrivers
-    end
-
     function AMSBurdenPanel:collectSnapshot(force)
         local player = self:resolvePlayer()
         if not player then
@@ -461,19 +375,13 @@ local function ensurePanelClasses()
                 runtime = nil,
                 burdenTier = tr("UI_AMS_Tier_Negligible", "Negligible"),
                 burdenTierKey = "negligible",
-                thermalWord = tr("UI_AMS_Label_ThermalNeutral", "Neutral"),
-                thermalColor = { 0.82, 0.82, 0.82, 1.0 },
-                thermalAnnotation = nil,
-                thermalAnnotationColor = nil,
-                breathingWord = nil,
-                breathingDesc = nil,
-                sleepWord = nil,
-                summaryLines = {},
-                showBurden = false,
-                showThermal = false,
-                showBreathing = false,
-                showSleep = false,
-                showDrivers = false,
+                physicalLoad = 0,
+                thermalContribution = 0,
+                breathingContribution = 0,
+                sleepPenaltyFraction = 0,
+                showThermalPressure = false,
+                showBreathingPressure = false,
+                showSleepPressure = false,
                 drivers = {},
             }
             self.lastRefreshMinute = nowMinute
@@ -482,50 +390,15 @@ local function ensurePanelClasses()
             return
         end
 
-        local profile = nil
-        local burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = nil, nil, nil, nil, nil
-        local costDrivers = {}
         local analysis = LoadModel.analyzeWornGear(player)
-        profile = analysis.profile
-        costDrivers = analysis.costDrivers
-        burdenTier, burdenTierKey, breathingWord, breathingDesc, sleepWord = buildBurdenWords(profile)
-
-        local thermalWord, thermalColor, thermalBurdensome, thermalAnnotation, thermalAnnotationColor = resolveThermalEffect(runtime)
+        local profile = analysis.profile
+        local costDrivers = analysis.costDrivers
         local physical = tonumber(profile.physicalLoad) or 0
-        local driverCount = tonumber(profile.driverCount) or 0
-        local noBurden = driverCount <= 0
-        local compact = (not noBurden)
-            and physical < 15
-            and (not thermalBurdensome)
-            and (not breathingWord)
-        local heatSensitive = (not noBurden) and physical < 15 and thermalBurdensome
-        local showBreathing = breathingWord ~= nil
-        local showSleep = sleepWord ~= nil
-        local showDrivers = #costDrivers > 0
-        local showBurden = (not noBurden)
-        local showThermal = shouldShowThermalBlock(thermalBurdensome, thermalAnnotation, showBurden, showBreathing, showSleep)
-        local summaryLines = {}
-
-        if noBurden then
-            summaryLines[#summaryLines + 1] = {
-                text = tr("UI_AMS_NoBurden", "No armor burden."),
-                tone = "default",
-            }
-        elseif compact then
-            summaryLines[#summaryLines + 1] = {
-                text = tr("UI_AMS_LightMinimal", "Light clothing -- minimal burden."),
-                tone = "default",
-            }
-        elseif heatSensitive then
-            summaryLines[#summaryLines + 1] = {
-                text = tr("UI_AMS_HeatSensitive", "Low weight, but heat-sensitive outfit."),
-                tone = "warm",
-            }
-        end
-
-        if not showBurden and not showBreathing and not showSleep and not thermalBurdensome and not thermalAnnotation then
-            showThermal = false
-        end
+        local burdenTier, burdenTierKey = burdenTierFromTotal(physical)
+        local thermalContribution = tonumber(runtime and runtime.thermalContribution) or 0
+        local breathingContribution = tonumber(runtime and runtime.breathingContribution) or 0
+        local sleepModelEnabled = options.EnableSleepPenaltyModel == true
+        local sleepPenaltyFraction = tonumber(runtime and runtime.sleepPenaltyFraction) or 0
 
         self.snapshot = {
             pendingSnapshot = false,
@@ -533,19 +406,13 @@ local function ensurePanelClasses()
             runtime = runtime,
             burdenTier = burdenTier,
             burdenTierKey = burdenTierKey,
-            thermalWord = thermalWord,
-            thermalColor = thermalColor,
-            thermalAnnotation = thermalAnnotation,
-            thermalAnnotationColor = thermalAnnotationColor,
-            breathingWord = breathingWord,
-            breathingDesc = breathingDesc,
-            sleepWord = sleepWord,
-            summaryLines = summaryLines,
-            showBurden = showBurden,
-            showThermal = showThermal,
-            showBreathing = showBreathing,
-            showSleep = showSleep,
-            showDrivers = showDrivers,
+            physicalLoad = physical,
+            thermalContribution = thermalContribution,
+            breathingContribution = breathingContribution,
+            sleepPenaltyFraction = sleepPenaltyFraction,
+            showThermalPressure = PresentationPolicy.hasThermalPressure(thermalContribution),
+            showBreathingPressure = PresentationPolicy.hasBreathingPressure(breathingContribution),
+            showSleepPressure = PresentationPolicy.hasSleepPressure(sleepPenaltyFraction, sleepModelEnabled),
             drivers = costDrivers,
         }
 
@@ -560,11 +427,6 @@ local function ensurePanelClasses()
         self:drawRect(x, y, width, h, 0.50, 0.12, 0.12, 0.12)
         self:drawRect(x, y, math.floor(width * fill), h, 0.85, color[1], color[2], color[3])
         self:drawRectBorder(x, y, width, h, 0.55, 0.40, 0.40, 0.40)
-    end
-
-    local function drawLabelValue(self, font, x, y, label, labelColor, value, valueColor, labelCol)
-        self:drawText(label, x, y, labelColor[1], labelColor[2], labelColor[3], 1.0, font)
-        self:drawText(value, x + labelCol, y, valueColor[1], valueColor[2], valueColor[3], 1.0, font)
     end
 
     function AMSBurdenPanel:syncSizeToScreen(contentW, contentH)
@@ -613,30 +475,55 @@ local function ensurePanelClasses()
         local y = 14
         local measure = tm
 
-        local labelCol = 0
+        local pressureLabelCol = 0
         if measure then
             local labels = {
-                tr("UI_AMS_Panel_Burden", "Burden") .. ":",
-                tr("UI_AMS_Panel_Thermal", "Thermal") .. ":",
-                tr("UI_AMS_Panel_Breathing", "Breathing") .. ":",
-                tr("UI_AMS_Panel_Sleep", "Sleep") .. ":",
+                tr("UI_AMS_Source_RetainedHeat", "Retained heat") .. ":",
+                tr("UI_AMS_Source_RestrictedBreathing", "Restricted breathing") .. ":",
+                tr("UI_AMS_Pressure_SleepRestriction", "Sleep restriction") .. ":",
             }
             for li = 1, #labels do
                 local lw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, labels[li])) or 60
-                if lw > labelCol then labelCol = lw end
+                if lw > pressureLabelCol then pressureLabelCol = lw end
             end
-            labelCol = labelCol + 12
+            pressureLabelCol = pressureLabelCol + 12
         else
-            labelCol = 90
+            pressureLabelCol = 145
         end
 
-        -- Unified color palette
+        -- Restrained vanilla-adjacent palette: ordinary burden, substantial pressure, extreme pressure.
         local cLabel = { 0.85, 0.82, 0.75 }
         local cValue = { 0.95, 0.92, 0.85 }
         local cHeader = { 0.72, 0.68, 0.58 }
         local cItem = { 0.88, 0.85, 0.78 }
-        local cAnnotation = { 0.72, 0.70, 0.64 }
+        local cBurden = { 0.82, 0.72, 0.48 }
+        local cAmber = { 1.0, 0.78, 0.36 }
+        local cDanger = { 0.95, 0.38, 0.30 }
         local cSep = { 0.35, 0.35, 0.35 }
+        local contentW = self.width - x - 14
+
+        local function pressureColor(fraction)
+            local normalized = clamp01(fraction)
+            if normalized >= 0.85 then return cDanger end
+            if normalized >= 0.40 then return cAmber end
+            return cBurden
+        end
+
+        local function burdenColor(tierKey)
+            if tierKey == "extreme" then return cDanger end
+            if tierKey == "heavy" then return cAmber end
+            return cBurden
+        end
+
+        local function drawPressureRow(label, fraction)
+            self:drawText(label .. ":", x, y, cLabel[1], cLabel[2], cLabel[3], 1.0, font)
+            local barX = x + pressureLabelCol
+            local barW = math.max(60, self.width - barX - 14)
+            local barH = math.max(8, math.floor(fontH * 0.6))
+            local barY = y + math.floor((fontH - barH) / 2) + 1
+            drawBar(self, barX, barY, barW, fraction, pressureColor(fraction), barH)
+            y = y + lineH
+        end
 
         if data.pendingSnapshot then
             self:drawText(
@@ -653,79 +540,56 @@ local function ensurePanelClasses()
             return
         end
 
-        if not hasRenderableContent(data) then
-            self:drawText(tr("UI_AMS_LightMinimal", "Light clothing -- minimal burden."), x, y, cValue[1], cValue[2], cValue[3], 1.0, font)
-            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
-            return
-        end
+        self:drawText(tr("UI_AMS_Label_Burden", "Burden"), x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
+        y = y + lineH + 4
 
-        local summaryLines = data.summaryLines or {}
-        for i = 1, #summaryLines do
-            local row = summaryLines[i]
-            local color = cValue
-            if row.tone == "warm" then
-                color = { 1.0, 0.85, 0.55 }
+        local primaryColor = burdenColor(data.burdenTierKey)
+        self:drawText(tostring(data.burdenTier), x, y, primaryColor[1], primaryColor[2], primaryColor[3], 1.0, font)
+        y = y + lineH
+        local barH = math.max(8, math.floor(fontH * 0.6))
+        drawBar(self, x, y, contentW, burdenBarFraction(data.physicalLoad), primaryColor, barH)
+        y = y + barH + 8
+
+        local showActivePressures = data.showThermalPressure
+            or data.showBreathingPressure
+            or data.showSleepPressure
+        if showActivePressures then
+            y = y + sectionGap
+            self:drawRect(x, y, contentW, 1, 0.18, cSep[1], cSep[2], cSep[3])
+            y = y + sectionGap
+
+            self:drawText(tr("UI_AMS_Section_ActivePressures", "Active Pressures"), x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
+            y = y + lineH + 4
+
+            if data.showThermalPressure then
+                drawPressureRow(
+                    tr("UI_AMS_Source_RetainedHeat", "Retained heat"),
+                    (tonumber(data.thermalContribution) or 0) / THERMAL_PRESSURE_BAR_MAX
+                )
             end
-            self:drawText(tostring(row.text or ""), x, y, color[1], color[2], color[3], 1.0, font)
-            y = y + lineH
-        end
-
-        local contentW = self.width - x - 14
-
-        if #summaryLines > 0 then
-            y = y + 4
-        end
-
-        local renderedPrimary = false
-
-        if data.showBurden then
-            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Burden", "Burden") .. ":", cLabel, data.burdenTier, cValue, labelCol)
-            y = y + lineH
-            local profilePhysical = tonumber(data.profile and data.profile.physicalLoad) or 0
-            local barH = math.max(8, math.floor(fontH * 0.6))
-            drawBar(self, x, y, contentW, burdenBarFraction(profilePhysical), { 0.95, 0.70, 0.25 }, barH)
-            y = y + barH + 8
-            renderedPrimary = true
-        end
-
-        if data.showThermal then
-            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Thermal", "Thermal") .. ":", cLabel, data.thermalWord, data.thermalColor, labelCol)
-            y = y + lineH
-            if data.thermalAnnotation then
-                local ac = data.thermalAnnotationColor or { cAnnotation[1], cAnnotation[2], cAnnotation[3], 0.90 }
-                self:drawText(data.thermalAnnotation, x, y, ac[1], ac[2], ac[3], ac[4], font)
-                y = y + lineH
+            if data.showBreathingPressure then
+                drawPressureRow(
+                    tr("UI_AMS_Source_RestrictedBreathing", "Restricted breathing"),
+                    (tonumber(data.breathingContribution) or 0) / BREATHING_PRESSURE_BAR_MAX
+                )
             end
-            renderedPrimary = true
-        end
-
-        if data.showBreathing then
-            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Breathing", "Breathing") .. ":", cLabel, data.breathingWord, { 1.0, 0.80, 0.40 }, labelCol)
-            y = y + lineH
-            if data.breathingDesc then
-                self:drawText(data.breathingDesc, x, y, cAnnotation[1], cAnnotation[2], cAnnotation[3], 0.90, font)
-                y = y + lineH
+            if data.showSleepPressure then
+                drawPressureRow(
+                    tr("UI_AMS_Pressure_SleepRestriction", "Sleep restriction"),
+                    (tonumber(data.sleepPenaltyFraction) or 0) / SLEEP_PRESSURE_BAR_MAX
+                )
             end
-            renderedPrimary = true
-        end
-
-        if data.showSleep then
-            drawLabelValue(self, font, x, y, tr("UI_AMS_Panel_Sleep", "Sleep") .. ":", cLabel, data.sleepWord, cValue, labelCol)
-            y = y + lineH
-            renderedPrimary = true
         end
 
         local drivers = data.drivers or {}
-        local maxRows = data.showDrivers and #drivers or 0
+        local maxRows = #drivers
         if maxRows <= 0 then
             self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
             return
         end
 
         -- Separator
-        if renderedPrimary then
-            y = y + sectionGap
-        end
+        y = y + sectionGap
         self:drawRect(x, y, contentW, 1, 0.18, cSep[1], cSep[2], cSep[3])
         y = y + sectionGap
 
@@ -784,11 +648,11 @@ local function ensurePanelClasses()
     end
 
     local helpSections = {
-        { key = "UI_AMS_Help_Overview",        fallback = "Overview: Armor costs scale with activity. Standing still or walking costs almost nothing. Running, sprinting, and fighting is where heavy armor makes itself felt. The heavier your outfit, the faster you tire during exertion and the slower you recover afterward." },
-        { key = "UI_AMS_Help_Burden",          fallback = "Burden: The total physical weight and bulk of your worn armor. The bar shows your current load on a fixed scale. Heavier loadouts drain endurance faster during running, sprinting, and melee combat. In heavy armor, your arms also tire faster per swing." },
-        { key = "UI_AMS_Help_Thermal",         fallback = "Thermal: Insulating gear adds exertion cost only after your body remains hot long enough. Short temperature spikes fade without a penalty. In cold conditions, Helpful means the insulation suits the weather; AMS does not add a cold bonus. Vanilla clothing condition and wetness are included in the reading." },
-        { key = "UI_AMS_Help_Breathing",       fallback = "Breathing: Respirators, gas masks, and other sealed headgear restrict airflow. This adds to your exertion cost during physical activity. The severity is shown as Mildly Restricted, Restricted, or Heavily Restricted depending on the gear." },
-        { key = "UI_AMS_Help_Sleep",           fallback = "Sleep: Sleeping in rigid armor slows fatigue recovery. The exact effect depends on your fatigue, bed quality, traits, and sandbox settings. Take off rigid gear before bed." },
+        { key = "UI_AMS_Help_Overview",        fallback = "Overview: The Burden tab shows the physical demand of worn equipment and any additional pressures that are affecting you right now." },
+        { key = "UI_AMS_Help_Burden",          fallback = "Burden: The main tier and bar describe the stable weight, bulk, and movement restriction of your worn gear." },
+        { key = "UI_AMS_Help_Thermal",         fallback = "Retained Heat: This pressure appears only when effective clothing insulation and sustained thermoregulation signals show meaningful retained heat. Short spikes stay hidden." },
+        { key = "UI_AMS_Help_Breathing",       fallback = "Restricted Breathing: This pressure appears only while respirators, gas masks, or other sealed headgear are adding load during exertion." },
+        { key = "UI_AMS_Help_Sleep",           fallback = "Sleep Restriction: This pressure appears only while worn rigid gear is actively reducing sleep recovery." },
         { key = "UI_AMS_Help_CostDrivers",     fallback = "Cost Drivers: Shows which worn items contribute most to your total burden, sorted by impact. If one item dominates the list, swapping it out will make the biggest difference." },
         { key = "UI_AMS_Help_ExportTitleDesc",  fallback = "Support Reports: If something feels wrong, use this to save a snapshot of your current loadout, burden calculations, mod list, and game state to a text file. Attach it when reporting a problem." },
     }
@@ -1078,7 +942,10 @@ local function installCharacterTabHook()
         end)
         if not ok or not attached then
             tabHookFailed = true
-            ClientRuntime.logOnce("ui_burden_tab_fallback", "[UI] Burden tab injection failed; enabling standalone fallback window.")
+            ClientRuntime.logWarnOnce(
+                "ui_burden_tab_fallback",
+                "Burden tab injection failed; using the standalone fallback window"
+            )
             ensureFallbackWindow(true)
             return false
         end

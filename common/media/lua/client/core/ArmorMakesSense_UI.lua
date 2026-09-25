@@ -4,14 +4,10 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 local Core = ArmorMakesSense.Core
 Core.UI = Core.UI or {}
 
+local BurdenPanel = require "core/ArmorMakesSense_BurdenPanel"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
-local LoadModel = require "ArmorMakesSense_LoadModelShared"
-local MP = require "ArmorMakesSense_MPCompat"
-local Options = require "ArmorMakesSense_Options"
-local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
-local Physiology = require "ArmorMakesSense_PhysiologyShared"
-local SupportReport = require "core/ArmorMakesSense_SupportReport"
 local UITooltip = require "core/ArmorMakesSense_UITooltip"
+local Draw = require "core/ArmorMakesSense_Draw"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
 local UI = Core.UI
@@ -46,58 +42,6 @@ local function tr(key, fallback)
     return value
 end
 
-local function wrapTextLines(text, wrapW, font, tm)
-    local words = {}
-    for w in string.gmatch(text or "", "%S+") do
-        words[#words + 1] = w
-    end
-    local lines = {}
-    local line = ""
-    for wi = 1, #words do
-        local testLine = (line == "") and words[wi] or (line .. " " .. words[wi])
-        local testW = (tm and font) and (tonumber(ClientRuntime.safeMethod(tm, "MeasureStringX", font, testLine)) or (#testLine * 8)) or (#testLine * 8)
-        if testW > wrapW and line ~= "" then
-            lines[#lines + 1] = line
-            line = words[wi]
-        else
-            line = testLine
-        end
-    end
-    if line ~= "" then
-        lines[#lines + 1] = line
-    end
-    return lines
-end
-
-local function clamp01(value)
-    return Utils.clamp(tonumber(value) or 0, 0, 1)
-end
-
-local BURDEN_BAR_MAX = 100
-local TOOLTIP_BAR_MAX = 28
-local THERMAL_PRESSURE_BAR_MAX = 14
-local BREATHING_PRESSURE_BAR_MAX = 7
-local SLEEP_PRESSURE_BAR_MAX = 0.35
-
-local function burdenBarFraction(physicalLoad, maxLoad)
-    local v = tonumber(physicalLoad) or 0
-    if v <= 0 then return 0 end
-    return math.min(1.0, v / (maxLoad or BURDEN_BAR_MAX))
-end
-
-local function burdenTierFromTotal(physicalLoad)
-    local tier = PresentationPolicy.burdenTier(physicalLoad)
-    local labels = {
-        negligible = { "UI_AMS_Tier_Negligible", "Negligible" },
-        light = { "UI_AMS_Tier_Light", "Light" },
-        moderate = { "UI_AMS_Tier_Moderate", "Moderate" },
-        heavy = { "UI_AMS_Tier_Heavy", "Heavy" },
-        extreme = { "UI_AMS_Tier_Extreme", "Extreme" },
-    }
-    local label = labels[tier] or labels.negligible
-    return tr(label[1], label[2]), tier
-end
-
 local function getCharacterInfoWindow(playerNum)
     if type(_G.getPlayerData) ~= "function" then
         return nil
@@ -109,19 +53,6 @@ local function getCharacterInfoWindow(playerNum)
     return playerData.characterInfo
 end
 
-local function showExportResultModal(playerNum, ok, detail)
-    if not ISModalDialog then
-        return false
-    end
-    local label = ok
-        and tr("UI_AMS_Help_ExportSaved", "Saved")
-        or tr("UI_AMS_Help_ExportFailed", "Export failed")
-    local body = label .. ":\n" .. tostring(detail or "")
-    local modal = ISModalDialog:new(0, 0, 360, 120, body, false, nil, nil, tonumber(playerNum) or 0)
-    modal:initialise()
-    modal:addToUIManager()
-    return true
-end
 -- -----------------------------------------------------------------------------
 -- Burden refresh hook
 -- -----------------------------------------------------------------------------
@@ -167,9 +98,7 @@ local measureHelpText = nil
 local toggleHelpWindow = nil
 local AMSHelpPanel = nil
 local AMSHelpWindow = nil
-local AMSBurdenPanel = nil
 local AMSBurdenWindow = nil
-local HELP_BUTTON_HEIGHT = 22
 
 toggleHelpWindow = function()
     if helpWindow then
@@ -200,440 +129,8 @@ toggleHelpWindow = function()
 end
 
 local function ensurePanelClasses()
-    if AMSBurdenPanel or not ISPanel then
+    if AMSHelpPanel or not ISPanel then
         return
-    end
-
-    AMSBurdenPanel = ISPanel:derive("AMSBurdenPanel")
-
-    function AMSBurdenPanel:new(x, y, width, height, playerNum)
-        local panel = ISPanel:new(x, y, width, height)
-        setmetatable(panel, self)
-        self.__index = self
-        panel.playerNum = tonumber(playerNum) or 0
-        panel.lastRefreshMinute = -1
-        panel.lastRuntimeRefreshMinute = -1
-        panel.snapshot = nil
-        panel.needsRefresh = true
-        panel.noBackground = true
-        panel.isStandalone = false
-        return panel
-    end
-
-    function AMSBurdenPanel:createChildren()
-        ISPanel.createChildren(self)
-        if ISButton then
-            local gap = 6
-            local helpW = 52
-            local exportW = 110
-            local btnH = 20
-            local rightEdge = self.width - gap
-
-            self.helpBtn = ISButton:new(rightEdge - helpW, 4, helpW, btnH, "? Help", self, AMSBurdenPanel.onHelpClick)
-            self.helpBtn:initialise()
-            self.helpBtn:instantiate()
-            self.helpBtn.borderColor = { r = 0.4, g = 0.4, b = 0.4, a = 0.7 }
-            self.helpBtn.backgroundColor = { r = 0.15, g = 0.15, b = 0.15, a = 0.8 }
-            self:addChild(self.helpBtn)
-
-            self.exportBtn = ISButton:new(rightEdge - helpW - gap - exportW, 4, exportW, btnH,
-                tr("UI_AMS_Help_ExportShort", "Export"),
-                self, AMSBurdenPanel.onExportClick)
-            self.exportBtn:initialise()
-            self.exportBtn:instantiate()
-            self.exportBtn.borderColor = { r = 0.4, g = 0.4, b = 0.4, a = 0.7 }
-            self.exportBtn.backgroundColor = { r = 0.15, g = 0.15, b = 0.15, a = 0.8 }
-            self.exportBtn:setTooltip(tr(
-                "UI_AMS_Help_ExportTitleDesc",
-                "Save a support report with your current loadout, burden calculations, mod list, and game state."
-            ))
-            self:addChild(self.exportBtn)
-        end
-    end
-
-    function AMSBurdenPanel:onHelpClick()
-        toggleHelpWindow()
-    end
-
-    function AMSBurdenPanel:onExportClick()
-        local exportFn = SupportReport.writeCurrentPlayerReport
-        if type(exportFn) ~= "function" then
-            return
-        end
-        local ok, pathOrNil, err = exportFn(self:resolvePlayer())
-        if ok then
-            local savedPath = tostring(pathOrNil or "Lua/ams_reports/")
-            showExportResultModal(self.playerNum, true, savedPath)
-        else
-            local failure = tostring(err or "unknown")
-            showExportResultModal(self.playerNum, false, failure)
-        end
-    end
-
-    function AMSBurdenPanel:onJoypadDown(button, joypadData)
-        if not Joypad then
-            return
-        end
-
-        local playerInfo = type(getPlayerInfoPanel) == "function" and getPlayerInfoPanel(self.playerNum) or nil
-        if button == Joypad.LBumper or button == Joypad.RBumper then
-            if playerInfo and type(playerInfo.onJoypadDown) == "function" then
-                playerInfo:onJoypadDown(button, joypadData)
-            end
-            return
-        end
-
-        if button == Joypad.BButton then
-            if playerInfo and type(playerInfo.toggleView) == "function" then
-                playerInfo:toggleView(tr("UI_AMS_Tab_Burden", "Burden"))
-            elseif self.isStandalone then
-                local parent = self:getParent()
-                if parent and type(parent.setVisible) == "function" then
-                    parent:setVisible(false)
-                end
-            end
-            if type(setJoypadFocus) == "function" then
-                setJoypadFocus(self.playerNum, nil)
-            end
-        end
-    end
-
-    function AMSBurdenPanel:prerender()
-        self:collectSnapshot(false)
-        if self.helpBtn then
-            local gap = 6
-            local helpW = 52
-            local exportW = 110
-            local rightEdge = self.width - gap
-            self.helpBtn:setX(rightEdge - helpW)
-            if self.exportBtn then
-                self.exportBtn:setX(rightEdge - helpW - gap - exportW)
-            end
-        end
-    end
-
-    function AMSBurdenPanel:markDirty()
-        self.needsRefresh = true
-    end
-
-    function AMSBurdenPanel:resolvePlayer()
-        local player = nil
-        if type(getSpecificPlayer) == "function" then
-            player = getSpecificPlayer(self.playerNum)
-        end
-        if not player and type(getPlayer) == "function" then
-            player = getPlayer()
-        end
-        return player
-    end
-
-    function AMSBurdenPanel:collectSnapshot(force)
-        local player = self:resolvePlayer()
-        if not player then
-            self.snapshot = nil
-            return
-        end
-
-        local nowMinute = tonumber(Utils.getWorldAgeMinutes()) or 0
-
-        local refreshRuntime = force
-            or self.needsRefresh
-            or self.snapshot == nil
-            or self.lastRuntimeRefreshMinute < 0
-            or (nowMinute - self.lastRuntimeRefreshMinute) >= 0.5
-
-        if not refreshRuntime then
-            return
-        end
-
-        local isMp = Utils.isMultiplayer()
-        if isMp then
-            local mpRuntime = ArmorMakesSense and ArmorMakesSense.MPClientRuntime or nil
-            local requestSnapshot = mpRuntime and mpRuntime.requestSnapshot or nil
-            if type(requestSnapshot) == "function" then
-                requestSnapshot(
-                    player,
-                    tonumber(MP.SNAPSHOT_UI_REFRESH_SECONDS) or 30
-                )
-            end
-        end
-
-        local state = ClientRuntime.ensureState(player)
-        local options = UI._lastOptions or Options.get()
-        local runtime = Physiology.getUiRuntimeSnapshot(player, state, options)
-
-        if isMp and type(runtime) ~= "table" then
-            self.snapshot = {
-                pendingSnapshot = true,
-                profile = {
-                    physicalLoad = 0,
-                    airflowResistance = 0,
-                    sealedRestriction = 0,
-                    rigidityLoad = 0,
-                    driverCount = 0,
-                },
-                runtime = nil,
-                burdenTier = tr("UI_AMS_Tier_Negligible", "Negligible"),
-                burdenTierKey = "negligible",
-                physicalLoad = 0,
-                thermalContribution = 0,
-                breathingContribution = 0,
-                sleepPenaltyFraction = 0,
-                showThermalPressure = false,
-                showBreathingPressure = false,
-                showSleepPressure = false,
-                drivers = {},
-            }
-            self.lastRefreshMinute = nowMinute
-            self.lastRuntimeRefreshMinute = nowMinute
-            self.needsRefresh = false
-            return
-        end
-
-        local analysis = LoadModel.analyzeWornGear(player)
-        local profile = analysis.profile
-        local costDrivers = analysis.costDrivers
-        local physical = tonumber(profile.physicalLoad) or 0
-        local burdenTier, burdenTierKey = burdenTierFromTotal(physical)
-        local thermalContribution = tonumber(runtime and runtime.thermalContribution) or 0
-        local breathingContribution = tonumber(runtime and runtime.breathingContribution) or 0
-        local sleepModelEnabled = options.EnableSleepPenaltyModel == true
-        local sleepPenaltyFraction = tonumber(runtime and runtime.sleepPenaltyFraction) or 0
-
-        self.snapshot = {
-            pendingSnapshot = false,
-            profile = profile,
-            runtime = runtime,
-            burdenTier = burdenTier,
-            burdenTierKey = burdenTierKey,
-            physicalLoad = physical,
-            thermalContribution = thermalContribution,
-            breathingContribution = breathingContribution,
-            sleepPenaltyFraction = sleepPenaltyFraction,
-            showThermalPressure = PresentationPolicy.hasThermalPressure(thermalContribution),
-            showBreathingPressure = PresentationPolicy.hasBreathingPressure(breathingContribution),
-            showSleepPressure = PresentationPolicy.hasSleepPressure(sleepPenaltyFraction, sleepModelEnabled),
-            drivers = costDrivers,
-        }
-
-        self.lastRefreshMinute = nowMinute
-        self.lastRuntimeRefreshMinute = nowMinute
-        self.needsRefresh = false
-    end
-
-    local function drawBar(self, x, y, width, value, color, barH)
-        local h = barH or 10
-        local fill = clamp01(value)
-        self:drawRect(x, y, width, h, 0.50, 0.12, 0.12, 0.12)
-        self:drawRect(x, y, math.floor(width * fill), h, 0.85, color[1], color[2], color[3])
-        self:drawRectBorder(x, y, width, h, 0.55, 0.40, 0.40, 0.40)
-    end
-
-    function AMSBurdenPanel:syncSizeToScreen(contentW, contentH)
-        if not self.screenRef or self.isStandalone then
-            if self.isStandalone then
-                local targetH = contentH + 8
-                self:setHeight(targetH)
-                local parent = self:getParent()
-                if parent and type(parent.setHeight) == "function" and parent.resizable then
-                    parent:setHeight(targetH + 32)
-                end
-            end
-            return
-        end
-        local screen = self.screenRef
-        local tabPanel = self:getParent()
-        if not tabPanel then return end
-        local tabH = tonumber(tabPanel.tabHeight) or 24
-        local th = 0
-        pcall(function() th = screen:titleBarHeight() end)
-        local rh = 0
-        pcall(function() rh = screen:resizeWidgetHeight() end)
-        local targetW = contentW
-        local targetH = th + tabH + contentH + rh + 8
-        pcall(function() screen:setWidth(targetW) end)
-        pcall(function() screen:setHeight(targetH) end)
-        pcall(function() tabPanel:setWidth(targetW) end)
-        pcall(function() tabPanel:setHeight(targetH - th - rh) end)
-        self:setWidth(targetW)
-        self:setHeight(targetH - th - tabH - rh)
-    end
-
-    function AMSBurdenPanel:render()
-        local data = self.snapshot
-        if not data then
-            self:syncSizeToScreen(self.canonicalW or 480, 30)
-            return
-        end
-
-        local font = UIFont and UIFont.Small or nil
-        local tm = type(getTextManager) == "function" and getTextManager() or nil
-        local fontH = (tm and font) and (tonumber(ClientRuntime.safeMethod(tm, "getFontHeight", font)) or 18) or 18
-        local lineH = fontH + 6
-        local sectionGap = math.max(12, math.floor(lineH * 0.65))
-        local x = 14
-        local y = 14
-        local measure = tm
-
-        local pressureLabelCol = 0
-        if measure then
-            local labels = {
-                tr("UI_AMS_Source_RetainedHeat", "Retained heat") .. ":",
-                tr("UI_AMS_Source_RestrictedBreathing", "Restricted breathing") .. ":",
-                tr("UI_AMS_Pressure_SleepRestriction", "Sleep restriction") .. ":",
-            }
-            for li = 1, #labels do
-                local lw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, labels[li])) or 60
-                if lw > pressureLabelCol then pressureLabelCol = lw end
-            end
-            pressureLabelCol = pressureLabelCol + 12
-        else
-            pressureLabelCol = 145
-        end
-
-        -- Restrained vanilla-adjacent palette: ordinary burden, substantial pressure, extreme pressure.
-        local cLabel = { 0.85, 0.82, 0.75 }
-        local cValue = { 0.95, 0.92, 0.85 }
-        local cHeader = { 0.72, 0.68, 0.58 }
-        local cItem = { 0.88, 0.85, 0.78 }
-        local cBurden = { 0.82, 0.72, 0.48 }
-        local cAmber = { 1.0, 0.78, 0.36 }
-        local cDanger = { 0.95, 0.38, 0.30 }
-        local cSep = { 0.35, 0.35, 0.35 }
-        local contentW = self.width - x - 14
-
-        local function pressureColor(fraction)
-            local normalized = clamp01(fraction)
-            if normalized >= 0.85 then return cDanger end
-            if normalized >= 0.40 then return cAmber end
-            return cBurden
-        end
-
-        local function burdenColor(tierKey)
-            if tierKey == "extreme" then return cDanger end
-            if tierKey == "heavy" then return cAmber end
-            return cBurden
-        end
-
-        local function drawPressureRow(label, fraction)
-            self:drawText(label .. ":", x, y, cLabel[1], cLabel[2], cLabel[3], 1.0, font)
-            local barX = x + pressureLabelCol
-            local barW = math.max(60, self.width - barX - 14)
-            local barH = math.max(8, math.floor(fontH * 0.6))
-            local barY = y + math.floor((fontH - barH) / 2) + 1
-            drawBar(self, barX, barY, barW, fraction, pressureColor(fraction), barH)
-            y = y + lineH
-        end
-
-        if data.pendingSnapshot then
-            self:drawText(
-                tr("UI_AMS_WaitingSnapshot", "Waiting for server snapshot..."),
-                x,
-                y,
-                cValue[1],
-                cValue[2],
-                cValue[3],
-                1.0,
-                font
-            )
-            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
-            return
-        end
-
-        self:drawText(tr("UI_AMS_Label_Burden", "Burden"), x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
-        y = y + lineH + 4
-
-        local primaryColor = burdenColor(data.burdenTierKey)
-        self:drawText(tostring(data.burdenTier), x, y, primaryColor[1], primaryColor[2], primaryColor[3], 1.0, font)
-        y = y + lineH
-        local barH = math.max(8, math.floor(fontH * 0.6))
-        drawBar(self, x, y, contentW, burdenBarFraction(data.physicalLoad), primaryColor, barH)
-        y = y + barH + 8
-
-        local showActivePressures = data.showThermalPressure
-            or data.showBreathingPressure
-            or data.showSleepPressure
-        if showActivePressures then
-            y = y + sectionGap
-            self:drawRect(x, y, contentW, 1, 0.18, cSep[1], cSep[2], cSep[3])
-            y = y + sectionGap
-
-            self:drawText(tr("UI_AMS_Section_ActivePressures", "Active Pressures"), x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
-            y = y + lineH + 4
-
-            if data.showThermalPressure then
-                drawPressureRow(
-                    tr("UI_AMS_Source_RetainedHeat", "Retained heat"),
-                    (tonumber(data.thermalContribution) or 0) / THERMAL_PRESSURE_BAR_MAX
-                )
-            end
-            if data.showBreathingPressure then
-                drawPressureRow(
-                    tr("UI_AMS_Source_RestrictedBreathing", "Restricted breathing"),
-                    (tonumber(data.breathingContribution) or 0) / BREATHING_PRESSURE_BAR_MAX
-                )
-            end
-            if data.showSleepPressure then
-                drawPressureRow(
-                    tr("UI_AMS_Pressure_SleepRestriction", "Sleep restriction"),
-                    (tonumber(data.sleepPenaltyFraction) or 0) / SLEEP_PRESSURE_BAR_MAX
-                )
-            end
-        end
-
-        local drivers = data.drivers or {}
-        local maxRows = #drivers
-        if maxRows <= 0 then
-            self:syncSizeToScreen(self.canonicalW or 480, y + lineH)
-            return
-        end
-
-        -- Separator
-        y = y + sectionGap
-        self:drawRect(x, y, contentW, 1, 0.18, cSep[1], cSep[2], cSep[3])
-        y = y + sectionGap
-
-        -- Section: Cost Drivers
-        self:drawText(tr("UI_AMS_Section_CostDrivers", "Cost Drivers"), x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
-        y = y + lineH + 4
-        local topPhysical = maxRows > 0 and (tonumber(drivers[1].physical) or 0) or 1
-
-        local maxNameW = 0
-        for i = 1, maxRows do
-            local tw = measure and tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, drivers[i].label))
-                or (string.len(drivers[i].label) * 7)
-            if tw > maxNameW then maxNameW = tw end
-        end
-        local nameGap = 12
-        local barX = x + 4 + math.min(maxNameW, contentW * 0.55) + nameGap
-        local barW = math.max(60, self.width - barX - 14)
-
-        for i = 1, maxRows do
-            local row = drivers[i]
-            local nameW = barX - nameGap - x - 4
-            local displayLabel = row.label
-            if measure then
-                local tw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, displayLabel)) or 0
-                if tw > nameW then
-                    local base = row.label
-                    local len = string.len(base)
-                    while len > 1 do
-                        len = len - 1
-                        displayLabel = string.sub(base, 1, len) .. "..."
-                        tw = tonumber(ClientRuntime.safeMethod(measure, "MeasureStringX", font, displayLabel)) or 0
-                        if tw <= nameW then break end
-                    end
-                end
-            end
-            self:drawText(displayLabel, x + 6, y, cItem[1], cItem[2], cItem[3], 1.0, font)
-            local ratio = (tonumber(row.physical) or 0) / math.max(1, topPhysical)
-            local driverBarH = math.max(6, math.floor(fontH * 0.5))
-            local barY = y + math.floor((fontH - driverBarH) / 2) + 1
-            drawBar(self, barX, barY, barW, ratio, { 0.82, 0.72, 0.48 }, driverBarH)
-            y = y + lineH
-        end
-
-        self:syncSizeToScreen(self.canonicalW or 480, y)
     end
 
     -- Help panel: renders help text sections using drawText
@@ -648,13 +145,16 @@ local function ensurePanelClasses()
     end
 
     local helpSections = {
-        { key = "UI_AMS_Help_Overview",        fallback = "Overview: The Burden tab shows the physical demand of worn equipment and any additional pressures that are affecting you right now." },
-        { key = "UI_AMS_Help_Burden",          fallback = "Burden: The main tier and bar describe the stable weight, bulk, and movement restriction of your worn gear." },
-        { key = "UI_AMS_Help_Thermal",         fallback = "Retained Heat: This pressure appears only when effective clothing insulation and sustained thermoregulation signals show meaningful retained heat. Short spikes stay hidden." },
-        { key = "UI_AMS_Help_Breathing",       fallback = "Restricted Breathing: This pressure appears only while respirators, gas masks, or other sealed headgear are adding load during exertion." },
-        { key = "UI_AMS_Help_Sleep",           fallback = "Sleep Restriction: This pressure appears only while worn rigid gear is actively reducing sleep recovery." },
-        { key = "UI_AMS_Help_CostDrivers",     fallback = "Cost Drivers: Shows which worn items contribute most to your total burden, sorted by impact. If one item dominates the list, swapping it out will make the biggest difference." },
-        { key = "UI_AMS_Help_ExportTitleDesc",  fallback = "Support Reports: If something feels wrong, use this to save a snapshot of your current loadout, burden calculations, mod list, and game state to a text file. Attach it when reporting a problem." },
+        { key = "UI_AMS_Help_Overview", fallback = "Overview: The Burden tab shows what your worn gear costs you right now, compared to wearing nothing. The line at the top is the one thing worth knowing." },
+        { key = "UI_AMS_Help_Burden", fallback = "Load: How heavy your gear is for your body. Mass on the legs, feet and arms counts more than mass on the torso, and stiff or bulky gear adds to it. Heavier and stronger characters carry the same gear more easily. The kg figure is the effective load after that weighting." },
+        { key = "UI_AMS_Help_Endurance", fallback = "Endurance: Load makes every exertion cost more and slows recovery: a little while standing, more while walking. Very heavy loads drain endurance even at a walk. Sitting recovers normally unless heat is building up." },
+        { key = "UI_AMS_Help_Thermal", fallback = "Heat: Insulating gear traps body heat. When you are running hot, recovery slows everywhere, including at rest, and exertion costs more. Heat clears once you cool down or take the gear off. In the cold, the same gear keeps you warm." },
+        { key = "UI_AMS_Help_Breathing", fallback = "Breathing: Gas masks, respirators and sealed suits make hard exertion cost more endurance. Walking and resting are unaffected." },
+        { key = "UI_AMS_Help_Melee", fallback = "Melee: Heavy arm and hand armor slows your swings, and armored arms tire faster in a fight." },
+        { key = "UI_AMS_Help_Sleep", fallback = "Sleep: Sleeping in stiff gear such as armor and pads slows how fast sleep clears fatigue. Take it off before bed." },
+        { key = "UI_AMS_Help_Map", fallback = "Body Map: Shows where the weight sits. Hover a gear row to see only that item, hover Load, Melee, Breathing or Sleep to see the gear behind it, or hover a body part to highlight the gear on it." },
+        { key = "UI_AMS_Help_Gear", fallback = "Heaviest Gear: The worn items that add the most effective load, heaviest first. Matching left and right pieces share a row. When one item matters most, the tab tells you what taking it off would change." },
+        { key = "UI_AMS_Help_ExportTitleDesc", fallback = "Support Reports: If something feels wrong, save a snapshot of your loadout, burden calculations, mod list and game state to a text file, and attach it when reporting a problem." },
     }
 
     local HELP_SECTION_GAP = 10
@@ -680,7 +180,7 @@ local function ensurePanelClasses()
             if colonPos then
                 y = y + lineH
                 local body = string.sub(text, colonPos + 2)
-                local lines = wrapTextLines(body, wrapW, font, tm)
+                local lines = Draw.wrap(font, body, wrapW)
                 y = y + (#lines * lineH)
             else
                 y = y + lineH
@@ -732,7 +232,7 @@ local function ensurePanelClasses()
                 local body = string.sub(text, colonPos + 2)
                 self:drawText(header, x, y, cHeader[1], cHeader[2], cHeader[3], 1.0, font)
                 y = y + lineH
-                local lines = wrapTextLines(body, wrapW, font, tm)
+                local lines = Draw.wrap(font, body, wrapW)
                 for li = 1, #lines do
                     self:drawText(lines[li], x + 4, y, cBody[1], cBody[2], cBody[3], 1.0, font)
                     y = y + lineH
@@ -787,7 +287,7 @@ local function ensurePanelClasses()
             setmetatable(window, self)
             self.__index = self
             window.playerNum = tonumber(playerNum) or 0
-            window.resizable = true
+            window.resizable = false
             window.title = tr("UI_AMS_Tab_Burden", "Burden")
             window.panel = nil
             return window
@@ -795,15 +295,19 @@ local function ensurePanelClasses()
 
         function AMSBurdenWindow:createChildren()
             ISCollapsableWindow.createChildren(self)
-            self.panel = AMSBurdenPanel:new(8, 24, self.width - 16, self.height - 32, self.playerNum)
+            self.panel = BurdenPanel.new(8, 24, self.width - 16, self.height - 32, self.playerNum)
             self.panel.isStandalone = true
             self.panel:initialise()
             self.panel:instantiate()
-            self.panel:setAnchorRight(true)
             self.panel:setAnchorBottom(false)
             self:addChild(self.panel)
         end
     end
+end
+
+BurdenPanel.onHelp = function()
+    ensurePanelClasses()
+    toggleHelpWindow()
 end
 
 -- -----------------------------------------------------------------------------
@@ -838,9 +342,38 @@ local function hideFallbackWindow()
     end
 end
 
+-- Vanilla sizes its views to at least the width of its own five tabs. With
+-- Burden (or any other mod's tab) added, narrower views would overflow the
+-- strip into scroll arrows. Every vanilla view keeps max(self.width, content)
+-- (Health keeps tabtotalwidth), so raising the floor once is enough.
+local function fitViewsToTabStrip(screen)
+    local host = screen._amsBurdenTabHost
+    if not (host and type(host.viewList) == "table" and type(host.getWidthOfAllTabs) == "function") then
+        return
+    end
+    local minW = host:getWidthOfAllTabs() + 2
+    if screen._amsTabStripWidth == minW then
+        return
+    end
+    screen._amsTabStripWidth = minW
+    local spacing = (tonumber(_G.UI_BORDER_SPACING) or 10) + 1
+    for _, entry in ipairs(host.viewList) do
+        local view = entry.view
+        if view and view ~= screen._amsBurdenPanel then
+            if tonumber(view.tabtotalwidth) then
+                view.tabtotalwidth = math.max(view.tabtotalwidth, minW - spacing)
+            end
+            if (tonumber(view.width) or 0) < minW and type(view.setWidth) == "function" then
+                view:setWidth(minW)
+            end
+        end
+    end
+    host.scrollX, host.smoothScrollX, host.smoothScrollTargetX = 0, 0, nil
+end
+
 local function attachBurdenTabToScreen(screen)
     ensurePanelClasses()
-    if not AMSBurdenPanel then
+    if not ISPanel then
         return false, "ISPanel unavailable"
     end
 
@@ -855,10 +388,9 @@ local function attachBurdenTabToScreen(screen)
         if host then
             local hostW = tonumber(host.width) or (tonumber(screen.width) or 600) - 24
             local hostH = tonumber(host.height) or (tonumber(screen.height) or 420) - 64
-            local panel = AMSBurdenPanel:new(0, 0, hostW, hostH, screen.playerNum or 0)
+            local panel = BurdenPanel.new(0, 0, hostW, hostH, screen.playerNum or 0)
             panel:initialise()
             panel:instantiate()
-            panel:setAnchorRight(true)
 
             local title = tr("UI_AMS_Tab_Burden", "Burden")
             local added = false
@@ -876,42 +408,8 @@ local function attachBurdenTabToScreen(screen)
             if added then
                 screen._amsBurdenPanel = panel
                 screen._amsBurdenAttached = true
-                panel.screenRef = screen
                 screen._amsBurdenTabHost = host
-
-                local tabStripW = 0
-                pcall(function()
-                    tabStripW = tonumber(host:getWidthOfAllTabs()) or 0
-                end)
-                if tabStripW <= 0 then tabStripW = 480 end
-                panel.canonicalW = tabStripW
-
-                local tabSafetyPad = 2
-                local minWindowW = math.max(tabStripW + tabSafetyPad, tonumber(screen.width) or 0)
-                screen._amsMinCharacterInfoWidth = minWindowW
-                host._amsMinTabHostWidth = minWindowW
-
-                if not screen._amsOriginalSetWidth and type(screen.setWidth) == "function" then
-                    screen._amsOriginalSetWidth = screen.setWidth
-                    screen.setWidth = function(self, width, ...)
-                        local clamped = math.max(tonumber(width) or 0, tonumber(self._amsMinCharacterInfoWidth) or 0)
-                        return self:_amsOriginalSetWidth(clamped, ...)
-                    end
-                end
-                if not host._amsOriginalSetWidth and type(host.setWidth) == "function" then
-                    host._amsOriginalSetWidth = host.setWidth
-                    host.setWidth = function(self, width, ...)
-                        local clamped = math.max(tonumber(width) or 0, tonumber(self._amsMinTabHostWidth) or 0)
-                        return self:_amsOriginalSetWidth(clamped, ...)
-                    end
-                end
-
-                pcall(function() host:setWidth(minWindowW) end)
-                pcall(function() screen:setWidth(minWindowW) end)
-                host.scrollX = 0
-                host.smoothScrollX = 0
-                host.smoothScrollTargetX = nil
-
+                fitViewsToTabStrip(screen)
                 return true
             end
         end
@@ -998,6 +496,9 @@ function UI.update(player, profile, options)
     local attach = screenClass and screenClass._amsAttachBurdenTab or nil
     if existing and not existing._amsBurdenAttached and type(attach) == "function" then
         attach(existing)
+    end
+    if existing and existing._amsBurdenAttached then
+        fitViewsToTabStrip(existing)
     end
 
     if tabHookFailed then

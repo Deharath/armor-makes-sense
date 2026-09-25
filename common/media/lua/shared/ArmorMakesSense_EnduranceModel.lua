@@ -4,6 +4,16 @@ ArmorMakesSense.EnduranceModel = ArmorMakesSense.EnduranceModel or {}
 local Utils = require "ArmorMakesSense_UtilsShared"
 local EnduranceModel = ArmorMakesSense.EnduranceModel
 
+-- AMS never invents its own endurance curve. It observes vanilla's change
+-- since the previous tick and scales it: recovery is slowed, drain is
+-- amplified. Sitting stays free of physical cost; only heat touches it.
+--
+-- Drain is amplified by one load-proportional factor whatever the pace:
+-- vanilla already drains faster paces harder, and the extra metabolic cost
+-- of a carried load is close to a fixed share of the movement cost
+-- (Pandolf). This keeps drain independent of the activity sampled at the
+-- tick, which can differ from what the player did during the minute.
+
 local function requiredNumber(options, key)
     local value = tonumber(options and options[key])
     if value == nil then
@@ -12,110 +22,82 @@ local function requiredNumber(options, key)
     return value
 end
 
-local function calculateAmsRegenScale(options, input)
-    if input.previous == nil or input.loadNorm <= 0 or input.naturalDelta <= 0 then
-        return 1
-    end
-    local postureScale = input.isIdle and input.isSitting and 0.90 or 1.0
-    local topoffScale = Utils.clamp(0.55 + ((1 - input.current) * 0.45), 0.55, 1)
-    local regenActivityScale = 1
-    if input.activityLabel == "walk" then
-        regenActivityScale = input.current <= 0.58 and 0.70 or 0.40
-    end
-    local penalty = Utils.clamp(
-        requiredNumber(options, "EnduranceRegenPenalty")
-            * (0.45 + (0.35 * input.loadNorm))
-            * postureScale
-            * topoffScale
-            * regenActivityScale
-            * input.activityLoadScale,
-        0,
-        0.85
-    )
-    return 1 - penalty
-end
-
-local function activityDrainScale(input)
-    if input.activityLabel == "walk" then
-        local stressed = input.current <= 0.60 or input.enduranceMoodle >= 2
-        if stressed and input.loadNorm >= 2.0 then
-            return 0.06
-        end
-        return 0
-    end
-    if input.activityLabel == "idle" then
-        return 0
-    end
-    if input.activityLabel == "run" then
-        return 0.335
-    end
-    if input.activityLabel == "sprint" then
-        return 0.58
-    end
-    return 0
-end
-
-function EnduranceModel.calculate(options, rawInput)
+function EnduranceModel.scales(options, input)
     if type(options) ~= "table" then
         error("resolved options table required", 2)
     end
-    rawInput = rawInput or {}
-    local input = {
-        previous = tonumber(rawInput.previous),
-        current = Utils.clamp(tonumber(rawInput.current) or 0, 0, 1),
-        naturalDelta = tonumber(rawInput.naturalDelta) or 0,
-        loadNorm = Utils.clamp(tonumber(rawInput.loadNorm) or 0, 0, 2.8),
-        activityLoadScale = math.max(0, tonumber(rawInput.activityLoadScale) or 1),
-        activityLabel = tostring(rawInput.activityLabel or "idle"),
-        isIdle = tostring(rawInput.activityLabel or "idle") == "idle",
-        isSitting = rawInput.isSitting == true,
-        enduranceMoodle = tonumber(rawInput.enduranceMoodle) or -1,
-        dtMinutes = math.max(0, tonumber(rawInput.dtMinutes) or 0),
-        nmsRegenScale = Utils.clamp(tonumber(rawInput.nmsRegenScale) or 1, 0, 1),
-        nmsDrain = math.max(0, tonumber(rawInput.nmsDrain) or 0),
-    }
-    local canApply = input.dtMinutes > 0
-    local amsRegenScale = canApply and calculateAmsRegenScale(options, input) or 1
-    local composedRegenScale = amsRegenScale * input.nmsRegenScale
-    local controlled = input.current
+    input = input or {}
+    local loadFraction = math.max(0, tonumber(input.loadFraction) or 0)
+    local heat = Utils.clamp(tonumber(input.heat) or 0, 0, 1)
+    local breathing = Utils.clamp(tonumber(input.breathing) or 0, 0, 1)
+    local activityLabel = tostring(input.activityLabel or "idle")
+    local resting = input.resting == true
 
-    if canApply and input.previous ~= nil and input.naturalDelta > 0
-        and (input.loadNorm > 0 or input.nmsRegenScale < 0.9999) then
-        controlled = input.previous + (input.naturalDelta * composedRegenScale)
+    local physicalRegen = 1
+    if activityLabel == "walk" and not resting then
+        physicalRegen = math.max(
+            requiredNumber(options, "WalkRegenFloor"),
+            1 - (requiredNumber(options, "WalkRegenLoadWeight") * loadFraction)
+        )
+    elseif not resting then
+        physicalRegen = math.max(0, 1 - (requiredNumber(options, "StandRegenLoadWeight") * loadFraction * loadFraction))
     end
-
-    local amsDrain = 0
-    local drainScale = activityDrainScale(input)
-    if canApply and input.loadNorm > 0 and drainScale > 0 then
-        local drainPerMinute = requiredNumber(options, "BaseEnduranceDrainPerMinute")
-            * (1 + (1.6 * input.loadNorm))
-            * drainScale
-            * input.activityLoadScale
-        amsDrain = drainPerMinute * input.dtMinutes
-        controlled = controlled - amsDrain
-    end
-    if canApply then
-        controlled = controlled - input.nmsDrain
-    end
-
-    if canApply and input.previous ~= nil and input.isIdle and input.naturalDelta > 0
-        and input.nmsDrain <= 0 then
-        controlled = math.max(input.previous, math.min(input.current, controlled))
-    end
-    controlled = Utils.clamp(controlled, 0, 1)
+    local thermalRegen = 1 - (requiredNumber(options, "ThermalRegenPenaltyMax") * heat)
+    local physicalDrain = requiredNumber(options, "DrainLoadWeight") * loadFraction
+    local thermalDrain = requiredNumber(options, "ThermalDrainWeight") * heat
+    local breathingDrain = requiredNumber(options, "BreathingDrainWeight") * breathing
 
     return {
-        canApply = canApply,
-        controlledEndurance = controlled,
-        enduranceDelta = controlled - input.current,
-        amsRegenScale = amsRegenScale,
-        nmsRegenScale = input.nmsRegenScale,
-        composedRegenScale = composedRegenScale,
-        amsDrainApplied = amsDrain,
-        nmsDrainApplied = canApply and input.nmsDrain or 0,
-        totalDrainApplied = amsDrain + (canApply and input.nmsDrain or 0),
-        activityDrainScale = drainScale,
+        regenScale = math.max(0, physicalRegen) * thermalRegen,
+        walkDrainFraction = math.max(0, -physicalRegen),
+        drainScale = 1 + physicalDrain + thermalDrain + breathingDrain,
+        physicalRegen = physicalRegen,
+        thermalRegen = thermalRegen,
+        physicalDrain = physicalDrain,
+        thermalDrain = thermalDrain,
+        breathingDrain = breathingDrain,
     }
+end
+
+function EnduranceModel.calculate(options, rawInput)
+    rawInput = rawInput or {}
+    local scales = EnduranceModel.scales(options, rawInput)
+    local current = Utils.clamp(tonumber(rawInput.current) or 0, 0, 1)
+    local previous = tonumber(rawInput.previous)
+    local nmsRegenScale = Utils.clamp(tonumber(rawInput.nmsRegenScale) or 1, 0, 1)
+    local nmsDrain = math.max(0, tonumber(rawInput.nmsDrain) or 0)
+    local result = {
+        canApply = previous ~= nil,
+        controlledEndurance = current,
+        naturalDelta = 0,
+        amsDelta = 0,
+        regenScale = scales.regenScale,
+        composedRegenScale = scales.regenScale * nmsRegenScale,
+        drainScale = scales.drainScale,
+        nmsRegenScale = nmsRegenScale,
+        nmsDrainApplied = 0,
+        scales = scales,
+    }
+    if previous == nil then
+        return result
+    end
+
+    local naturalDelta = current - previous
+    local controlled = current
+    if naturalDelta > 0 then
+        controlled = previous
+            + (naturalDelta * scales.regenScale * nmsRegenScale)
+            - (naturalDelta * scales.walkDrainFraction)
+    elseif naturalDelta < 0 then
+        controlled = previous + (naturalDelta * scales.drainScale)
+    end
+    controlled = Utils.clamp(controlled - nmsDrain, 0, 1)
+
+    result.naturalDelta = naturalDelta
+    result.controlledEndurance = controlled
+    result.amsDelta = controlled - current
+    result.nmsDrainApplied = nmsDrain
+    return result
 end
 
 return EnduranceModel

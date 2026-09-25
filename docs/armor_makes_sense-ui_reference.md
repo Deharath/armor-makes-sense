@@ -1,136 +1,148 @@
 # Armor Makes Sense - UI Reference
 
+AMS shows every readout as a strip of four pips (tooltips) or four cells
+(Burden tab). Pips count lit bands from
+`shared/ArmorMakesSense_PresentationPolicy.lua`; drawing lives in
+`client/core/ArmorMakesSense_Draw.lua` and is shared by the tooltip and the
+Burden tab. Exact numbers are left to the support report and the dev panel.
+
+## Pip Bands
+
+A pip lights once the value reaches its band threshold.
+
+| Strip | Input | Pip 1 | Pip 2 | Pip 3 | Pip 4 |
+|---|---|---|---|---|---|
+| Load | `loadFraction` (share of body mass) | 0.02 | 0.07 | 0.13 | 0.25 |
+| Item | one item's `burdenKg` | 1.5 | 3.0 | 4.5 | 6.0 |
+| Heat | `heat` (insulation × heat strain) | 0.05 | 0.20 | 0.40 | 0.65 |
+| Breathing | `breathingSeverity` of worn gear | 0.10 | 0.35 | 0.60 | 0.90 |
+| Sleep | `sleepPenaltyFraction` | 0.03 | 0.10 | 0.20 | 0.30 |
+| Melee | `armKg` (swing-chain effective kg) | 1.5 | 3.0 | 5.0 | 8.0 |
+
+Load pips also name a tier: 0 Negligible, 1 Light, 2 Moderate, 3 Heavy,
+4 Extreme. Strips use their channel color at 1–2 pips, amber at 3 and red at 4.
+The tier label is dim at 0 pips, plain at 1–2, then amber and red. The Burden
+tab fills cells continuously with `Policy.fill`: whole cells for passed bands
+and a partial cell for progress toward the next, so `floor(fill)` always equals
+the pip count.
+
+The item bands start above 1.0 kg because vanilla leaves most shoes and
+trousers at the default script weight: every pair of shoes is exactly 1.0 kg of
+burden, which should not read as a cost.
+
 ## Tooltip Integration
 
-`client/core/ArmorMakesSense_UITooltip.lua` extends `ISToolTipInv.render`.
-During the owner's synchronous render call, AMS temporarily wraps the exposed
-item `DoTooltip` entry and routes eligible non-container wearables through
-42.20's `DoTooltipEmbedded` contract. Vanilla and AMS populate one shared
-`ObjectTooltip.Layout`, which is rendered and measured once before the original
-method is restored. When `EuryTooltipController` is installed, AMS registers as
-a row provider and leaves the owner's ordinary tooltip path intact.
-If the vanilla tooltip class is not ready during the first UI update, AMS
-defers installation and retries on a later update.
+`client/core/ArmorMakesSense_UITooltip.lua` wraps `ISToolTipInv.render`. For
+eligible wearables (non-container items with a body location) it publishes the
+item/tooltip pair and relies on one persistent `DoTooltip` wrapper per item
+class. The wrapper takes over only while that pair is active. It renders
+vanilla's rows through `DoTooltipEmbedded`, then draws the AMS pip block
+underneath and extends the tooltip height and width. Outside an AMS render, or
+for any other tooltip, the wrapper calls vanilla directly. That makes it safe
+next to other mods that wrap `DoTooltip`. Measure-only passes size the tooltip
+without drawing.
 
-| Row | Display condition |
+| Row | Shown when |
 |---|---|
-| Burden | `physicalLoad >= 1.5` |
-| Breathing | `airflowResistance >= 0.8` |
+| Burden | item burden reaches the first item band (1.5 kg) |
+| Breathing | breathing channel enabled and item severity reaches the first breathing band |
 
-The standalone extension uses a burden bar with a per-item maximum of `28`.
-Because the row belongs to vanilla's own layout, the longest vanilla label and
-value determine the shared label boundary, progress width, font-dependent bar
-height, line spacing, and final tooltip bounds. Only the colored fill varies
-with the item's burden fraction. The standalone path reads the Java layout
-offset and tooltip padding through PZ's class-field reflection helpers because
-direct Lua access to those primitive fields can expose zero rather than the
-values used by Java.
-The shared-controller provider expresses the same fraction as a percentage
-because that controller's row contract is text-based.
+The label column clears the widest vanilla clothing label, so AMS pips line up
+with vanilla values. If the vanilla tooltip class is not ready at the first UI
+update, installation is deferred and retried.
 
-Breathing labels:
+When `EuryTooltipController` is installed, AMS registers as a row provider.
+It leaves the owner render alone and exposes the same rows as `n/4` text.
 
-| Respiratory signal | Label |
+Shoulderpads are reslotted by AMS, so vanilla's "no backpack" note is wrong for
+them. The render wrapper hides that one tooltip key for the duration of the
+render and restores it afterwards, even if the owner render errors.
+
+## Burden Tab
+
+The tab answers "what is my gear costing me, and what would fix it". Content is
+built by the pure view model `BurdenView.build` and drawn by `BurdenPanel`.
+
+| Area | Content |
 |---|---|
-| `0.8 <= airflowResistance < 2.0` and unsealed | Mild |
-| `airflowResistance >= 2.0` and unsealed | Restricted |
-| `sealedRestriction > 0` | Heavily Restricted |
+| Verdict | One sentence at the top, colored by severity. Priority: walking drains endurance > overheating > extreme load > heavy load > heavily restricted breathing > warm > moderate load > light load > poor sleep > keeping warm > free. |
+| Body map | Vanilla `ISBodyPartPanel` silhouette colored by effective kg per body part (dark at 0, amber around 1.5 kg, red at 3 kg), with a color scale underneath. Hovering narrows it to a cause: a gear row shows that item; the Load, Melee, Breathing or Sleep row shows the gear feeding it (swing-chain gear, masks and sealed gear, stiff gear by rigid kg) and lights those gear rows; a body part shows its kg and lights the gear on it. |
+| Load | Tier, four cells, total effective kg. The detail line shows the clothing allowance while under it, otherwise the body mass and Strength the load is rated against. |
+| Endurance | Two lines: Recovery (standing, walking) and Exertion (running, sprinting). Each pace reads "normal", a signed percent against vanilla, or "drains" when walking recovery goes below zero. |
+| Heat | Heat state and cells. While running hot, the detail line gives the recovery penalty at rest. In the cold, a positive "Keeping you warm" state. Omitted when the thermal model is disabled. |
+| Breathing | Restriction state and cells. Omitted when the breathing model is disabled. |
+| Melee | Arm load state from `armKg`, with the summed swing slowdown from `SpeedRebalance.combatSpeedModifier` and whether arm strain applies. |
+| Sleep | What stiff gear (vanilla discomfort above 0) would cost if the character slept now. Omitted when the sleep penalty is disabled. |
+| Heaviest gear | Up to six rows of worn items at or above 1.5 effective kg: item icon, name, cells and kg. Pieces with the same display name and burden (left and right shin guards are separate item types) share one row with a count and combined kg; cells rate one piece. Lighter items are summed on one line. |
+| Tip | At Moderate load or above, the one piece whose removal drops the load tier most: "Without the X: Y load." |
 
-Shoulder-pad backpack-conflict text is cleared from the reslotted script item by
-the speed and slot rebalance pass. Existing item instances can retain their
-copied vanilla tooltip, so the tooltip owner also suppresses that one obsolete
-key for the duration of rendering and restores the item afterward.
+Rows whose cells would be empty (no heat, clear breathing) collapse to their
+header line so active channels stand out.
 
-## Burden Panel
+Endurance percentages are previews for each pace with the current loadout and
+heat, not the activity of the moment.
 
-The Burden panel uses the aggregate equipment profile and the latest runtime
-snapshot. It is a compact loadout inspector: stable physical burden first,
-currently active secondary pressures second, and item-level cost drivers last.
+Translation placeholders: B42 loads translation files as Java format strings,
+so `getText` returns `%1` as `%1$s`. `BurdenView.tr` substitutes both forms.
 
-### Burden Summary
-
-| Element | Display |
-|---|---|
-| Tier | Qualitative physical burden from `Negligible` through `Extreme` |
-| Bar | Physical weight, bulk, and movement restriction on the existing 100-point burden scale |
-
-The summary deliberately does not expose recovery scales, endurance drain
-rates, or effective load. Those exact values remain available in support
-reports and the dev panel.
-
-### Active Pressures
-
-| Row | Meaning |
-|---|---|
-| Retained heat | Appears at `thermalContribution >= 0.25`; its bar reaches full width at the configured 14-point maximum |
-| Restricted breathing | Appears only while respiratory gear and metabolic effort produce a positive contribution; its bar reaches full width at 7 points |
-| Sleep restriction | Appears only while the sleep model is enabled and reports a positive current penalty; its bar reaches full width at a 35% reduction |
-
-If no row is active, the complete section is omitted. Ordinary pressure bars
-use the muted burden color, become amber only after 40% of their presentation
-scale, and become red at 85%. These bars communicate relative pressure without
-publishing precise physiological penalties.
-
-### Burden Tiers
-
-| Physical load | Tier |
-|---|---|
-| `< 7` | Negligible |
-| `7 to < 20` | Light |
-| `20 to < 45` | Moderate |
-| `45 to < 75` | Heavy |
-| `>= 75` | Extreme |
-
-This shorthand describes physical gear burden only. AMS does not translate
-thermal state into labels such as Warm or Oppressive, and cold suitability is
-diagnostic rather than a player-facing bonus.
-
-### Cost Drivers
-
-- Cost drivers include worn items with `physicalLoad >= 1.5`, sorted by physical
-  load descending. The panel retains the complete list rather than truncating it.
-- MP clients calculate gear burden, breathing restriction, rigidity, and cost
-  drivers from the current local worn-item collection so clothing actions are
-  reflected immediately. Dynamic physiology and thermal state remain supplied
-  by the server snapshot.
-
-Burden tiers, tooltip breathing tiers, active-pressure visibility, and support
-report formatting helpers come from `ArmorMakesSense_PresentationPolicy.lua`.
+Body parts come from `item:getCoveredParts()` (BloodBodyPartType indices,
+cached per item type). Back (17) folds into the upper torso. Items without
+covered parts fall back to a body-location table; locations containing "left"
+or "right" load only that side. An item's burden is spread evenly over its
+parts.
 
 ## Refresh Behavior
 
-- A local player's `OnClothingUpdated` marks the UI dirty; remote-player events
-  are ignored and the hook sends no network request.
-- SP reads the local profile and runtime snapshot.
-- MP combines the current local worn profile with dynamic `mpServerSnapshot`
-  telemetry. A visible panel requests server telemetry only when the cache is
-  missing or older than 30 wall-clock seconds. Missing data displays a waiting
-  state.
-- While visible, runtime rows refresh at most once per half game-minute.
+- A local player's `OnClothingUpdated` marks the tab dirty. Remote-player
+  events are ignored, and the hook sends no network request.
+- While visible, the tab refreshes on dirty or at most once per half
+  game-minute.
+- SP: `Physiology.project` builds a read-only preview from the current worn
+  profile and the live thermal state.
+- MP: burden, drivers and per-pace scales come from the local worn items, so
+  clothing changes show immediately. `Physiology.projectWithServerThermal`
+  combines them with the thermal fields of the cached server snapshot. The tab
+  requests a new snapshot when the cache is older than
+  `MP.SNAPSHOT_UI_REFRESH_SECONDS` (30 s). Until the first snapshot arrives,
+  only the Heat row waits; everything else is shown from local gear.
 
 ## Character Information Integration
 
 AMS patches `ISCharacterInfoWindow.createChildren` to add the Burden tab. If
-42.20 created the window before AMS installed its hook, AMS resolves the live
+the window already exists when AMS installs its hook, AMS resolves the live
 window from `getPlayerData(playerNum).characterInfo` and attaches directly.
 
-- The character window is widened when required to keep the tab strip visible.
-- Controller LB/RB input from the Burden tab delegates to vanilla tab switching.
-- Controller B closes the active Burden view or focus.
-- `AMSBurdenWindow` provides a standalone fallback if tab injection is
-  unavailable.
+- Like vanilla views, the tab sets its exact size every frame with
+  `setWidthAndParentWidth` / `setHeightAndParentHeight`, unconditionally:
+  other tabs resize the shared window while Burden is hidden. The channel column is
+  measured from its rows (up to 380 px) beside the 123 px body map, so the
+  window fits the content and the buttons never clip. Details wrap; long item
+  names are truncated.
+- Adding a tab widens the strip past vanilla's five-tab width, which would put
+  scroll arrows on narrower views. After attaching (and on each UI update, in
+  case another mod adds a tab later), AMS raises every view's width floor to
+  `getWidthOfAllTabs() + 2`: vanilla views keep `max(self.width, content)`, and
+  Health keeps `tabtotalwidth`. The Burden tab uses the same floor, and its
+  channel column stretches to fill it.
+- Controller LB/RB input from the Burden tab uses vanilla tab switching.
+- Controller B closes the Burden view or focus.
+- `AMSBurdenWindow` is a standalone fallback when tab injection is unavailable.
 
 ## Support Report
 
-The Burden panel can save a support report under `Lua/ams_reports/`. Reports
-include version, options, runtime age, raw heat evidence, numeric AMS endurance
-effects, option-aware sleep state, and equipment attribution. In MP, an export
-without a cached server snapshot queues one and asks the player to retry.
+The Burden tab can save a support report under `Lua/ams_reports/`. Reports
+include version, options, runtime age, raw thermal evidence, numeric endurance
+scales, sleep penalty, and per-item burden attribution. In MP, an export without
+a cached server snapshot requests one and asks the player to retry.
 
 ## Modules
 
-- `client/core/ArmorMakesSense_UITooltip.lua`: wearable-item tooltip integration
-- `client/core/ArmorMakesSense_UI.lua`: Burden tab, help, and export UI
+- `client/core/ArmorMakesSense_Draw.lua`: colors, text metrics, pip strips
+- `client/core/ArmorMakesSense_UITooltip.lua`: wearable tooltip rows
+- `client/core/ArmorMakesSense_BurdenView.lua`: Burden tab view model (verdict, rows, gear, body parts, tip)
+- `client/core/ArmorMakesSense_BurdenPanel.lua`: Burden tab drawing, body map, sizing, export button
+- `client/core/ArmorMakesSense_UI.lua`: character-tab hook, fallback window, help window
 - `client/core/ArmorMakesSense_SupportReport.lua`: report data and formatting
-- `client/ArmorMakesSense_MPClientRuntime.lua`: MP cache and UI invalidation
-- `shared/ArmorMakesSense_PhysiologyShared.lua`: SP runtime snapshot model
+- `client/ArmorMakesSense_MPClientRuntime.lua`: MP snapshot cache and UI invalidation
+- `shared/ArmorMakesSense_PresentationPolicy.lua`: pip bands and tiers
+- `shared/ArmorMakesSense_PhysiologyShared.lua`: runtime and preview snapshots

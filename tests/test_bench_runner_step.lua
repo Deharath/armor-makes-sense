@@ -1,24 +1,17 @@
 local Support = dofile((os.getenv("AMS_ROOT") or ".") .. "/tests/support.lua")
 
 ArmorMakesSense = {
-    Testing = {
-        BenchUtils = {
-            clamp = Support.clamp,
-            safeMethod = Support.safeMethod,
-            toBoolArg = function(value) return value == true end,
-            nowMinutes = function() return 0 end,
-            boolTag = function(value)
-                if value == nil then return "na" end
-                return value and "true" or "false"
-            end,
-            metricOrNa = function(value, decimals)
-                local number = tonumber(value)
-                if number == nil then return "na" end
-                return string.format("%." .. tostring(decimals or 5) .. "f", number)
-            end,
-        },
-    },
+    Utils = { clamp = Support.clamp, safeMethod = Support.safeMethod },
+    Testing = {},
 }
+dofile(
+    (os.getenv("AMS_ROOT") or ".")
+        .. "/common/media/lua/client/testing/ArmorMakesSense_BenchUtils.lua"
+)
+dofile(
+    (os.getenv("AMS_ROOT") or ".")
+        .. "/common/media/lua/client/testing/ArmorMakesSense_BenchRunnerEnv.lua"
+)
 local Step = dofile(
     (os.getenv("AMS_ROOT") or ".")
         .. "/common/media/lua/client/testing/ArmorMakesSense_BenchRunnerStep.lua"
@@ -45,13 +38,13 @@ local function combatActivity(swings)
 end
 
 local activity = combatActivity(24)
-local summary = { armStiffnessDelta = 2.4, loadNormRuntime = 0.8 }
+local summary = { armStrainGain = 2.4, armStiffnessDelta = 1.9, loadFraction = 0.8 }
 local result = Step.evaluateStepGates({ scenario = scenario, activityResult = activity }, summary)
 Support.assertTrue(result.validity_gates_passed, "complete combat sample passes")
-Support.assertClose(summary.stiffnessPerSwing, 0.1, 1e-9, "combat outcome is normalized per swing")
+Support.assertClose(summary.stiffnessPerSwing, 0.1, 1e-9, "per-swing strain uses the decay-free gain")
 
 activity = combatActivity(23)
-result = Step.evaluateStepGates({ scenario = scenario, activityResult = activity }, { loadNormRuntime = 0.8 })
+result = Step.evaluateStepGates({ scenario = scenario, activityResult = activity }, { loadFraction = 0.8 })
 Support.assertFalse(result.validity_gates_passed, "partial combat swing target is rejected")
 Support.assertEqual(result.gate_failed, "achieved_swings", "combat completion gate")
 
@@ -74,15 +67,15 @@ local movementActivity = {
     set_integrity = "match",
     step_validity = "valid",
 }
-result = Step.evaluateStepGates({ scenario = movementScenario, activityResult = movementActivity }, { loadNormRuntime = 0 })
+result = Step.evaluateStepGates({ scenario = movementScenario, activityResult = movementActivity }, { loadFraction = 0 })
 Support.assertTrue(result.validity_gates_passed, "movement sample at requested intensity passes")
 movementActivity.clock_rewind_sec = 60
-result = Step.evaluateStepGates({ scenario = movementScenario, activityResult = movementActivity }, { loadNormRuntime = 0 })
+result = Step.evaluateStepGates({ scenario = movementScenario, activityResult = movementActivity }, { loadFraction = 0 })
 Support.assertFalse(result.validity_gates_passed, "movement sample after a clock rewind is rejected")
 Support.assertEqual(result.gate_failed, "clock_continuity", "clock continuity gate")
 movementActivity.clock_rewind_sec = 0
 movementActivity.target_activity_pct = 0.70
-result = Step.evaluateStepGates({ scenario = movementScenario, activityResult = movementActivity }, { loadNormRuntime = 0 })
+result = Step.evaluateStepGates({ scenario = movementScenario, activityResult = movementActivity }, { loadFraction = 0 })
 Support.assertFalse(result.validity_gates_passed, "movement at the wrong intensity is rejected")
 Support.assertEqual(result.gate_failed, "target_activity_uptime", "movement intensity gate")
 
@@ -148,10 +141,9 @@ Support.assertEqual(sleepRegistrations, 1, "real sleep registers with the vanill
 
 local carryState = {
     thermalModelState = { hotPressure = 1 },
-    uiRuntimeSnapshot = { loadNorm = 1 },
+    uiRuntimeSnapshot = { loadFraction = 1 },
     lastEnduranceObserved = 0.5,
-    lastUpdateGameMinutes = 99,
-    pendingCatchupMinutes = 4,
+    lastTickMinute = 99,
 }
 Step.resetPrepareStateCarryover({}, carryState, {
     ctx = function(name)
@@ -167,8 +159,7 @@ Step.resetPrepareStateCarryover({}, carryState, {
 Support.assertEqual(carryState.thermalModelState, nil, "thermal carryover cleared")
 Support.assertEqual(carryState.uiRuntimeSnapshot, nil, "runtime telemetry carryover cleared")
 Support.assertClose(carryState.lastEnduranceObserved, 0.9, 1e-9, "endurance observation rebased")
-Support.assertClose(carryState.lastUpdateGameMinutes, 20, 1e-9, "runtime clock rebased after time pin")
-Support.assertClose(carryState.pendingCatchupMinutes, 0, 1e-9, "runtime catchup cleared after time pin")
+Support.assertEqual(carryState.lastTickMinute, nil, "next physiology tick rebases after time pin")
 
 local now = 10
 local waitExec = {
@@ -219,6 +210,8 @@ Support.assertTrue(formatOk, formatError or "benchmark log formatting accepts mi
 Support.assertTrue(#logged >= 2, "benchmark sample and step logs emitted")
 Support.assertTrue(string.find(logged[1], "airflow_resistance_runtime=na", 1, true) ~= nil, "sample log includes breathing airflow")
 Support.assertTrue(string.find(logged[1], "sealed_restriction_runtime=na", 1, true) ~= nil, "sample log includes breathing seal")
+Support.assertTrue(string.find(logged[1], "burden_kg=na", 1, true) ~= nil, "sample log includes burden")
+Support.assertTrue(string.find(logged[1], "load_fraction=", 1, true) ~= nil, "sample log includes load fraction")
 
 local midNow = 20
 local midExec = {
@@ -228,7 +221,7 @@ local midExec = {
     repeatIndex = 1,
     blockIndex = 1,
     setDef = { id = "mask_gas", class = "mask" },
-    scenarioId = "breathing_treadmill_run",
+    scenarioId = "breathing_run",
     scenario = {
         blocks = {
             {
@@ -300,5 +293,144 @@ local processStatus, processError = Step.processStep(completeExec, {}, {}, {
 })
 Support.assertEqual(processStatus, "done", processError or "complete step execution")
 Support.assertTrue(completeExec.stepResult.ok, "complete step builds a result")
+
+local sampleSeq = 0
+local baselineExec = {
+    runId = "baseline-reset",
+    index = 1,
+    total = 1,
+    repeatIndex = 1,
+    blockIndex = 1,
+    setDef = { id = "naked", class = "baseline" },
+    scenarioId = "recovery_like",
+    scenario = {
+        blocks = {
+            { kind = "sample_once", tag = "before" },
+            { kind = "sample_once", tag = "mid" },
+            { kind = "sample_once", tag = "after_drain", baseline = true },
+            { kind = "sample_once", tag = "after_recovery" },
+        },
+    },
+    activityResult = { exit_reason = "completed", step_validity = "valid" },
+    envSnapshot = {},
+}
+local baselineStatus, baselineError = Step.processStep(baselineExec, {}, {}, {
+    collectMetrics = function()
+        sampleSeq = sampleSeq + 1
+        return { seq = sampleSeq }
+    end,
+    sampleLog = function() end,
+    summarizeStep = function() return {} end,
+    snapshotWornHash = function() return "0:" end,
+    evaluateStepGates = function() end,
+    buildStepResult = function() return { ok = true } end,
+    logStepDone = function() end,
+    clearExecWeatherOverride = function() end,
+})
+Support.assertEqual(baselineStatus, "done", baselineError or "baseline step completes")
+Support.assertEqual(baselineExec.startMetrics.seq, 3, "baseline sample restarts step deltas")
+Support.assertEqual(baselineExec.endMetrics.seq, 4, "last sample ends the step")
+
+-- Tick ledger: realized scale is observed endurance change over vanilla change,
+-- summed only across production ticks inside the measured window.
+local ledgerEndurance = 0.80
+Step.setContext({ getEndurance = function() return ledgerEndurance end })
+local ledgerState = { uiRuntimeSnapshot = { updatedMinute = 100, naturalDelta = -0.5, amsDelta = -0.5 } }
+local ledgerExec = {}
+Step.openLedger(ledgerExec, {}, ledgerState)
+Step.observeLedger(ledgerExec, {}, ledgerState)
+Support.assertEqual(ledgerExec.ledger.ticks, 0, "tick already seen at open is not counted")
+for i = 1, 4 do
+    ledgerEndurance = ledgerEndurance - 0.015
+    ledgerState.uiRuntimeSnapshot = { updatedMinute = 100 + i, naturalDelta = -0.01, amsDelta = -0.005 }
+    Step.observeLedger(ledgerExec, {}, ledgerState)
+    Step.observeLedger(ledgerExec, {}, ledgerState)
+end
+local ledgerSummary = Step.summarizeLedger(ledgerExec.ledger)
+Support.assertEqual(ledgerSummary.tickCount, 4, "one ledger entry per production tick")
+Support.assertClose(ledgerSummary.realizedScale, 1.5, 1e-9, "realized scale is observed over vanilla change")
+Support.assertClose(ledgerSummary.tickClosure, 0, 1e-9, "ticks account for the whole endurance change")
+Support.assertEqual(ledgerSummary.tickGaps, 0, "consecutive minutes have no gaps")
+Support.assertEqual(Step.summarizeLedger(nil).tickCount, 0, "no ledger reports zero ticks")
+
+ledgerState.uiRuntimeSnapshot = { updatedMinute = 110, naturalDelta = -0.01, amsDelta = 0 }
+Step.observeLedger(ledgerExec, {}, ledgerState)
+Support.assertEqual(ledgerExec.ledger.gaps, 1, "skipped production minutes are counted")
+
+-- A step that starts at full endurance has almost no vanilla change; its ratio
+-- is noise and is not reported.
+local quietExec = {}
+ledgerState.uiRuntimeSnapshot = { updatedMinute = 200, naturalDelta = 0, amsDelta = 0 }
+Step.openLedger(quietExec, {}, ledgerState)
+ledgerEndurance = ledgerEndurance - 0.0008
+ledgerState.uiRuntimeSnapshot = { updatedMinute = 201, naturalDelta = -0.0004, amsDelta = -0.0004 }
+Step.observeLedger(quietExec, {}, ledgerState)
+local quietSummary = Step.summarizeLedger(quietExec.ledger)
+Support.assertEqual(quietSummary.tickCount, 1, "quiet tick is still counted")
+Support.assertEqual(quietSummary.realizedScale, nil, "sub-threshold vanilla change has no realized scale")
+
+-- Arm strain gain sums per-frame increases and adds back the frame decay, so
+-- it does not depend on how much game time passes between swings.
+local Env = ArmorMakesSense.Testing.BenchRunnerEnv
+local realReadArm = Env.readArmStiffness
+local armValue = 0
+local worldMinutes = 10
+Env.readArmStiffness = function() return armValue end
+Step.setContext({
+    getEndurance = function() return ledgerEndurance end,
+    getWorldAgeMinutes = function() return worldMinutes end,
+})
+local strainExec = {}
+Step.openLedger(strainExec, {}, ledgerState)
+for _, value in ipairs({ 2.0, 1.9, 1.8, 3.7, 3.6 }) do
+    armValue = value
+    worldMinutes = worldMinutes + 0.05
+    Step.observeLedger(strainExec, {}, ledgerState)
+    Step.observeLedger(strainExec, {}, ledgerState)
+end
+local strainSummary = Step.summarizeLedger(strainExec.ledger)
+Support.assertClose(strainSummary.armStrainGain, 4.0, 1e-9, "two swings of 2.0 each despite decay")
+Support.assertClose(strainSummary.gameSecPerFrame, 3.0, 1e-9, "game seconds per frame ignore same-frame repeats")
+Env.readArmStiffness = realReadArm
+Step.setContext({})
+
+-- Disturbed steps re-run instead of logging a result, until the retry budget
+-- is spent; then they are logged and rejected.
+local function runDisturbed(retryCount)
+    local logged = 0
+    local exec = {
+        runId = "retry",
+        index = 3,
+        total = 5,
+        repeatIndex = 1,
+        blockIndex = 1,
+        retryCount = retryCount,
+        disturbed = "key_17",
+        setDef = { id = "heavy", class = "heavy" },
+        scenarioId = "treadmill_run",
+        scenario = { blocks = { { kind = "sample_once", tag = "after" } } },
+        activityResult = { exit_reason = "completed", step_validity = "valid" },
+        envSnapshot = {},
+    }
+    local status = Step.processStep(exec, {}, {}, {
+        collectMetrics = function() return {} end,
+        sampleLog = function() end,
+        summarizeStep = function() return { loadFraction = 0.5 } end,
+        snapshotWornHash = function() return "0:" end,
+        evaluateStepGates = Step.evaluateStepGates,
+        buildStepResult = function() return { ok = true } end,
+        logStepDone = function() logged = logged + 1 end,
+        clearExecWeatherOverride = function() end,
+    })
+    return status, exec, logged
+end
+local retryStatus, retryExec, retryLogged = runDisturbed(0)
+Support.assertEqual(retryStatus, "done", "disturbed step hands back to the runner")
+Support.assertTrue(retryExec.retry, "disturbed step asks for a re-run")
+Support.assertEqual(retryLogged, 0, "re-run steps do not log a result")
+retryStatus, retryExec, retryLogged = runDisturbed(Step.MAX_INPUT_RETRIES)
+Support.assertEqual(retryExec.retry, nil, "retry budget is bounded")
+Support.assertEqual(retryLogged, 1, "exhausted step logs its result")
+Support.assertEqual(retryExec.activityResult.gate_failed, "input_disturbed", "exhausted step is rejected")
 
 print("ams benchmark combat gate checks passed")

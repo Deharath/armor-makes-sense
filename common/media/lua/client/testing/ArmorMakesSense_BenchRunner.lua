@@ -37,31 +37,10 @@ for name, mod in pairs(REQUIRED_MODULES) do
 end
 
 local RUN_COUNTER = 0
-local NORM_FLOOR = 0.05
-local VALIDITY_DEFAULTS = {
-    movement_uptime_min = 0.70,
-    target_activity_uptime_min = 0.85,
-    attack_success_ratio_min = 0.50,
-    valid_sample_ratio_min = 0.85,
-    completion_ratio_min = 0.50,
-}
-
-local REPORT_DEFAULTS = {
-    stability_cv_warn = 0.15,
-    separation_ratio_denominator_min = 0.005,
-    separation_ratio_min = 1.2,
-}
-
 local FITNESS_STIFFNESS_GROUPS = { "arms", "chest", "abs", "legs" }
 local REAL_SLEEP_FATIGUE_WAKE_THRESHOLD_DEFAULT = 0.02
 local REAL_SLEEP_SAFETY_HOURS_DEFAULT = 16.0
 local REAL_SLEEP_ENTRY_GRACE_SECONDS = 90.0
-local BENCH_WEAPON_CANDIDATES = {
-    "Base.BaseballBat",
-    "Base.Crowbar",
-    "Base.Machete",
-    "Base.Sword",
-}
 
 -- -----------------------------------------------------------------------------
 -- Context propagation and shared utility imports
@@ -70,7 +49,6 @@ local BENCH_WEAPON_CANDIDATES = {
 local clamp = BenchUtils.clamp
 local safeMethod = BenchUtils.safeMethod
 local toBoolArg = BenchUtils.toBoolArg
-local boolTag = BenchUtils.boolTag
 
 local function ctx(name)
     return C[name]
@@ -92,6 +70,10 @@ end
 
 local function nowMinutes()
     return BenchUtils.nowMinutes(ctx)
+end
+
+local function nowMs()
+    return type(getTimestampMs) == "function" and tonumber(getTimestampMs()) or 0
 end
 
 local function normalizeRestoreSpeed(value)
@@ -116,26 +98,13 @@ local getRuntimeBenchRunner = BenchRunnerRuntime.getRuntimeBenchRunner
 local setRuntimeBenchRunner = BenchRunnerRuntime.setRuntimeBenchRunner
 local getAnyActiveRuntimeBenchRunner = BenchRunnerRuntime.getAnyActiveRuntimeBenchRunner
 local syncStateBenchRunnerHandle = BenchRunnerRuntime.syncStateBenchRunnerHandle
-local registerNativeTickPump = BenchRunnerRuntime.registerNativeTickPump
 local unregisterNativeTickPump = BenchRunnerRuntime.unregisterNativeTickPump
-
-local function setIsoPlayerTestAIMode(enabled)
-    local classRef = type(rawget) == "function" and rawget(_G, "IsoPlayer") or (_G and _G.IsoPlayer)
-    if classRef == nil then return false end
-    local target = enabled == true
-    local ok = pcall(function() classRef.isTestAIMode = target end)
-    if not ok then return false end
-    local readOk, value = pcall(function() return classRef.isTestAIMode end)
-    if readOk and type(value) == "boolean" then return value == target end
-    return true
-end
 
 -- -----------------------------------------------------------------------------
 -- Snapshot stream delegates
 -- -----------------------------------------------------------------------------
 
 local benchSnapshotAppend = BenchRunnerSnapshot.benchSnapshotAppend
-local streamLine = BenchRunnerSnapshot.streamLine
 local streamAppend = BenchRunnerSnapshot.streamAppend
 
 local function openStreamWriter(runner)
@@ -147,78 +116,27 @@ local function streamActive(runner)
 end
 
 local function finalizeBenchLog(runner, reason)
-    return BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutes, NORM_FLOOR)
+    return BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutes)
 end
 
 -- -----------------------------------------------------------------------------
 -- Environment module delegates
 -- -----------------------------------------------------------------------------
 
-local distance2D = BenchRunnerEnv.distance2D
 local readPlayerCoords = BenchRunnerEnv.readPlayerCoords
-local snapPlayerToCoords = BenchRunnerEnv.snapPlayerToCoords
-local readClimateSnapshot = BenchRunnerEnv.readClimateSnapshot
 local getThermoregulator = BenchRunnerEnv.getThermoregulator
-local readThermoregulatorMetrics = BenchRunnerEnv.readThermoregulatorMetrics
-local readClothingCondition = BenchRunnerEnv.readClothingCondition
-local applyNativeActivityMode = BenchRunnerEnv.applyNativeActivityMode
-local stabilizeNativeCombatStance = BenchRunnerEnv.stabilizeNativeCombatStance
 local clearNativeMovementState = BenchRunnerEnv.clearNativeMovementState
 
--- -----------------------------------------------------------------------------
--- Native driver dependency bundle
--- -----------------------------------------------------------------------------
-
-local metricOrNa
-local setNativeTimeOfDay
-local buildPatrolWaypoints
-local logNativeProbe
-local equipRequestedWeapon
-local logWeaponSelection
-
-local function nativeDeps()
-    return {
-        ctx = ctx,
-        clamp = clamp,
-        toBoolArg = toBoolArg,
-        nowMinutes = nowMinutes,
-        safeMethod = safeMethod,
-        boolTag = boolTag,
-        metricOrNa = metricOrNa,
-        benchSnapshotAppend = benchSnapshotAppend,
-        runtimeRunKey = runtimeRunKey,
-        getRuntimeBenchRunner = getRuntimeBenchRunner,
-        registerNativeTickPump = registerNativeTickPump,
-        unregisterNativeTickPump = unregisterNativeTickPump,
-        setIsoPlayerTestAIMode = setIsoPlayerTestAIMode,
-        distance2D = distance2D,
-        readPlayerCoords = readPlayerCoords,
-        snapPlayerToCoords = snapPlayerToCoords,
-        readClimateSnapshot = readClimateSnapshot,
-        applyNativeActivityMode = applyNativeActivityMode,
-        stabilizeNativeCombatStance = stabilizeNativeCombatStance,
-        clearNativeMovementState = clearNativeMovementState,
-        buildPatrolWaypoints = buildPatrolWaypoints,
-        equipRequestedWeapon = equipRequestedWeapon,
-        logWeaponSelection = logWeaponSelection,
-        logNativeProbe = logNativeProbe,
-    }
-end
-
-setNativeTimeOfDay = BenchRunnerEnv.setNativeTimeOfDay
+local setNativeTimeOfDay = BenchRunnerEnv.setNativeTimeOfDay
 
 local readWeatherSpec = BenchRunnerEnv.readWeatherSpec
 local applyWeatherOverrides = BenchRunnerEnv.applyWeatherOverrides
 local refreshWeatherOverrides = BenchRunnerEnv.refreshWeatherOverrides
-local clearWeatherOverrides = BenchRunnerEnv.clearWeatherOverrides
 local clearExecWeatherOverride = BenchRunnerEnv.clearExecWeatherOverride
 
-buildPatrolWaypoints = BenchRunnerEnv.buildPatrolWaypoints
-
-local normalizeLoad = BenchRunnerEnv.normalizeLoad
 local collectMetrics = BenchRunnerEnv.collectMetrics
 
-metricOrNa = BenchUtils.metricOrNa
+local metricOrNa = BenchUtils.metricOrNa
 
 local sampleLog = BenchRunnerStep.sampleLog
 
@@ -251,261 +169,15 @@ local summarizeStep = BenchRunnerStep.summarizeStep
 -- Scenario and threshold helpers
 -- -----------------------------------------------------------------------------
 
-local resolveScenarioGateProfile = BenchRunnerStep.resolveScenarioGateProfile
-
-local function resolveThreshold(value, fallback, minValue)
-    local parsed = tonumber(value)
-    if parsed == nil then
-        parsed = fallback
-    end
-    if minValue ~= nil and parsed < minValue then
-        return minValue
-    end
-    return parsed
-end
-
 local evaluateStepGates = BenchRunnerStep.evaluateStepGates
 
 local logStepDone = BenchRunnerStep.logStepDone
 
-logNativeProbe = function(exec, driver, sample)
-    local log = ctx("log")
-    local line = string.format(
-        "[AMS_NATIVE_PROBE] id=%s scenario=%s mode=%s elapsed_sec=%.2f x=%s y=%s moved=%s just_moved=%s is_npc=%s is_aiming=%s has_path=%s goal=%s moving_path=%s started=%s should_move=%s path_len=%s",
-        tostring(exec and exec.runId or "na"),
-        tostring(exec and exec.scenarioId or "na"),
-        tostring(driver and driver.movementMode or "na"),
-        tonumber(sample and sample.elapsedSec) or 0,
-        metricOrNa(sample and sample.x, 3),
-        metricOrNa(sample and sample.y, 3),
-        metricOrNa(sample and sample.moved, 4),
-        boolTag(sample and sample.justMoved),
-        boolTag(sample and sample.isNPC),
-        boolTag(sample and sample.isAiming),
-        boolTag(sample and sample.hasPath),
-        boolTag(sample and sample.goalLocation),
-        boolTag(sample and sample.movingUsingPath),
-        boolTag(sample and sample.startedMoving),
-        boolTag(sample and sample.shouldBeMoving),
-        metricOrNa(sample and sample.pathLength, 3)
-    )
-    local runner = exec and exec.runner or nil
-    if streamActive(runner) then
-        streamLine(runner, line)
-    elseif type(log) == "function" then
-        log(line)
-    end
-end
-
-local function pickThresholdValue(thresholds, key, fallback, minValue)
-    local value = nil
-    if type(thresholds) == "table" and thresholds[key] ~= nil then
-        value = thresholds[key]
-    end
-    return resolveThreshold(value, fallback, minValue)
-end
-
-local function resolveValidityThresholds(plan)
-    local thresholds = type(plan and plan.thresholds) == "table" and plan.thresholds or {}
-    return {
-        movement_uptime_min = pickThresholdValue(thresholds, "movement_uptime_min", VALIDITY_DEFAULTS.movement_uptime_min, 0.0),
-        target_activity_uptime_min = pickThresholdValue(thresholds, "target_activity_uptime_min", VALIDITY_DEFAULTS.target_activity_uptime_min, 0.0),
-        attack_success_ratio_min = pickThresholdValue(thresholds, "attack_success_ratio_min", VALIDITY_DEFAULTS.attack_success_ratio_min, 0.0),
-        valid_sample_ratio_min = pickThresholdValue(thresholds, "valid_sample_ratio_min", VALIDITY_DEFAULTS.valid_sample_ratio_min, 0.0),
-        completion_ratio_min = pickThresholdValue(thresholds, "completion_ratio_min", VALIDITY_DEFAULTS.completion_ratio_min, 0.0),
-    }
-end
-
-local function resolveReportThresholds(plan)
-    local thresholds = type(plan and plan.thresholds) == "table" and plan.thresholds or {}
-    return {
-        stability_cv_warn = pickThresholdValue(thresholds, "stability_cv_warn", REPORT_DEFAULTS.stability_cv_warn, 0.0),
-        separation_ratio_denominator_min = pickThresholdValue(thresholds, "separation_ratio_denominator_min", REPORT_DEFAULTS.separation_ratio_denominator_min, 0.000001),
-        separation_ratio_min = pickThresholdValue(thresholds, "separation_ratio_min", REPORT_DEFAULTS.separation_ratio_min, 0.0),
-    }
-end
-
-local function resolveBenchLogVerbose(opts)
-    if type(opts) ~= "table" then
-        return false
-    end
-    local modeRaw = opts.benchLogMode
-    if modeRaw ~= nil then
-        local mode = string.lower(tostring(modeRaw))
-        if mode == "verbose" or mode == "full" then
-            return true
-        end
-        if mode == "compact" or mode == "summary" then
-            return false
-        end
-    end
-    return toBoolArg(opts.benchVerbose)
-end
-
-local function resolveMidActivitySampling(opts)
-    if type(opts) ~= "table" then
-        return false, false, 5.0
-    end
-
-    local verboseRaw = opts.midActivityVerbose
-    if verboseRaw == nil then
-        verboseRaw = opts.mid_activity_verbose
-    end
-    local enabledRaw = opts.midActivitySamples
-    if enabledRaw == nil then
-        enabledRaw = opts.mid_activity_samples
-    end
-    if enabledRaw == nil then
-        enabledRaw = opts.midSamples
-    end
-    if enabledRaw == nil and verboseRaw ~= nil then
-        enabledRaw = verboseRaw
-    end
-
-    local everySec = tonumber(opts.midActivityEverySec)
-        or tonumber(opts.mid_activity_every_sec)
-        or tonumber(opts.midSampleEverySec)
-        or tonumber(opts.mid_sample_every_sec)
-        or tonumber(opts.midSampleSec)
-        or 5.0
-
-    local verboseEnabled = verboseRaw ~= nil and toBoolArg(verboseRaw) or false
-    return toBoolArg(enabledRaw), verboseEnabled, clamp(everySec, 0.25, 120.0)
-end
-
-local function resolveCombatSpeedReq(opts)
-    local raw = nil
-    if type(opts) == "table" then
-        raw = opts.combat_speed_req
-        if raw == nil then
-            raw = opts.combatSpeedReq
-        end
-    end
-    local value = tonumber(raw)
-    if not value or value <= 0 then
+local function resolvePinnedTimeOfDay(value)
+    if value == false then
         return nil
     end
-    return value
-end
-
-local function resolvePinnedTimeOfDay(opts)
-    local raw = nil
-    if type(opts) == "table" then
-        raw = opts.pinnedTimeOfDay
-        if raw == nil then
-            raw = opts.pinned_time_of_day
-        end
-    end
-
-    if raw == false then
-        return nil
-    end
-
-    if type(raw) == "string" then
-        local text = string.lower(tostring(raw))
-        if text == "" or text == "false" or text == "off" or text == "none" or text == "nil" or text == "skip" then
-            return nil
-        end
-    end
-
-    local value = tonumber(raw)
-    if value == nil then
-        return 10.0
-    end
-    return clamp(value, 0.0, 23.99)
-end
-
-local function resolveNativeOptions(opts)
-    if type(opts) ~= "table" then
-        return {}
-    end
-    local out = {}
-    if opts.nativeProbe ~= nil then
-        out.nativeProbe = opts.nativeProbe
-    elseif opts.native_probe ~= nil then
-        out.nativeProbe = opts.native_probe
-    end
-    if opts.nativeProbeEverySec ~= nil then
-        out.nativeProbeEverySec = opts.nativeProbeEverySec
-    elseif opts.native_probe_every_sec ~= nil then
-        out.nativeProbeEverySec = opts.native_probe_every_sec
-    end
-    if opts.nativeAttackCooldownSec ~= nil then
-        out.nativeAttackCooldownSec = opts.nativeAttackCooldownSec
-    elseif opts.native_attack_cooldown_sec ~= nil then
-        out.nativeAttackCooldownSec = opts.native_attack_cooldown_sec
-    elseif opts.nativeAttackEverySec ~= nil then
-        out.nativeAttackEverySec = opts.nativeAttackEverySec
-    end
-    return out
-end
-
-local function resolveWeaponFlag(value)
-    local raw = tostring(value or "")
-    if raw == "" then
-        return nil
-    end
-    local key = string.lower(raw)
-    local aliases = {
-        bat = "Base.BaseballBat",
-        baseballbat = "Base.BaseballBat",
-        crowbar = "Base.Crowbar",
-        machete = "Base.Machete",
-        machette = "Base.Machete",
-        sword = "Base.Sword",
-    }
-    if aliases[key] then
-        return aliases[key]
-    end
-    if string.find(raw, ".", 1, true) then
-        return raw
-    end
-    return nil
-end
-
-equipRequestedWeapon = function(player, requestedWeapon)
-    local equip = ctx("equipBestMeleeWeapon")
-    if type(equip) ~= "function" then
-        return nil, nil
-    end
-    local fullType = resolveWeaponFlag(requestedWeapon)
-    if fullType then
-        return equip(player, { fullType }), fullType
-    end
-    return equip(player, BENCH_WEAPON_CANDIDATES), nil
-end
-
-local function activeWeaponName(player)
-    if not player then
-        return "none"
-    end
-    local weapon = safeMethod(player, "getUseHandWeapon") or safeMethod(player, "getPrimaryHandItem")
-    if not weapon then
-        return "none"
-    end
-    local fullType = tostring(safeMethod(weapon, "getFullType") or safeMethod(weapon, "getType") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-    return tostring(safeMethod(weapon, "getDisplayName") or "unknown")
-end
-
-logWeaponSelection = function(exec, mode, requestedWeapon, requestedResolved, equippedWeapon, player)
-    local log = ctx("log")
-    if type(log) ~= "function" then
-        return
-    end
-    log(string.format(
-        "[AMS_BENCH_WEAPON] id=%s set=%s scenario=%s mode=%s requested=%s requested_resolved=%s equipped=%s active=%s",
-        tostring(exec and exec.runId or "na"),
-        tostring(exec and exec.setDef and exec.setDef.id or "na"),
-        tostring(exec and exec.scenarioId or "na"),
-        tostring(mode or "na"),
-        tostring(requestedWeapon or "auto"),
-        tostring(requestedResolved or "auto"),
-        tostring(equippedWeapon or "none"),
-        tostring(activeWeaponName(player))
-    ))
+    return clamp(tonumber(value) or 10.0, 0.0, 23.99)
 end
 
 local function runActivity(player, state, exec, block)
@@ -515,7 +187,7 @@ local function runActivity(player, state, exec, block)
         setEnv = setEnv,
         safeMethod = safeMethod,
         startNativeDriver = function(playerArg, execArg, blockArg)
-            return BenchRunnerNative.startNativeDriver(playerArg, execArg, blockArg, nativeDeps())
+            return BenchRunnerNative.startNativeDriver(playerArg, execArg, blockArg)
         end,
         realSleepFatigueWakeThresholdDefault = REAL_SLEEP_FATIGUE_WAKE_THRESHOLD_DEFAULT,
         realSleepSafetyHoursDefault = REAL_SLEEP_SAFETY_HOURS_DEFAULT,
@@ -531,6 +203,7 @@ local function isPendingComplete(player, state, pendingType, exec)
         safeMethod = safeMethod,
         realSleepFatigueWakeThresholdDefault = REAL_SLEEP_FATIGUE_WAKE_THRESHOLD_DEFAULT,
         realSleepEntryGraceSeconds = REAL_SLEEP_ENTRY_GRACE_SECONDS,
+        realSleepSafetyHoursDefault = REAL_SLEEP_SAFETY_HOURS_DEFAULT,
     })
 end
 
@@ -561,10 +234,10 @@ local function processStep(exec, player, state)
     return BenchRunnerStep.processStep(exec, player, state, {
         refreshWeatherOverrides = refreshWeatherOverrides,
         tickNativeDriver = function(playerArg, execArg)
-            return BenchRunnerNative.tickNativeDriver(playerArg, execArg, nativeDeps())
+            return BenchRunnerNative.tickNativeDriver(playerArg, execArg)
         end,
         finalizeNativeActivity = function(playerArg, execArg, driverArg, outcomeArg, reasonArg)
-            return BenchRunnerNative.finalizeNativeActivity(playerArg, execArg, driverArg, outcomeArg, reasonArg, nativeDeps())
+            return BenchRunnerNative.finalizeNativeActivity(playerArg, execArg, driverArg, outcomeArg, reasonArg)
         end,
         snapshotWornHash = snapshotWornHash,
         clearExecWeatherOverride = clearExecWeatherOverride,
@@ -592,18 +265,6 @@ local function processStep(exec, player, state)
     })
 end
 
-local function hasAsyncScenarios(plan)
-    if not BenchScenarios then
-        return false
-    end
-    for _, scenarioId in ipairs(plan.scenarios or {}) do
-        if BenchScenarios.isAsyncScenario and BenchScenarios.isAsyncScenario(scenarioId) then
-            return true
-        end
-    end
-    return false
-end
-
 -- -----------------------------------------------------------------------------
 -- Report assembly and run finalization
 -- -----------------------------------------------------------------------------
@@ -618,9 +279,6 @@ end
 
 local function buildBenchmarkReport(runner)
     return BenchRunnerReport.buildBenchmarkReport(runner, {
-        resolveThreshold = resolveThreshold,
-        resolveScenarioGateProfile = resolveScenarioGateProfile,
-        reportDefaults = REPORT_DEFAULTS,
         benchScenarios = BenchScenarios,
         metricOrNa = metricOrNa,
     })
@@ -648,9 +306,12 @@ local function finalizeRun(player, state, runner, reason)
     if not runner then
         return
     end
+    if type(ctx("hideBenchCurtain")) == "function" then
+        ctx("hideBenchCurtain")()
+    end
     local runKey = runtimeRunKey(runner)
     unregisterNativeTickPump()
-    pcall(setIsoPlayerTestAIMode, false)
+    pcall(BenchRunnerEnv.setIsoPlayerTestAIMode, false)
     local pendingExec = getRuntimePending(runKey)
     if pendingExec then
         clearExecWeatherOverride(pendingExec)
@@ -679,12 +340,13 @@ local function finalizeRun(player, state, runner, reason)
     end
 
     local doneLine = string.format(
-        "[AMS_BENCH_DONE] id=%s preset=%s steps=%d reason=%s restore_success=%s",
+        "[AMS_BENCH_DONE] id=%s preset=%s steps=%d reason=%s restore_success=%s wall_sec=%.1f",
         tostring(runner.id),
         tostring(runner.preset),
         tonumber(runner.index) or 0,
         doneReason,
-        tostring(restoreSuccess)
+        tostring(restoreSuccess),
+        math.max(0, nowMs() - (tonumber(runner.wallStartMs) or nowMs())) / 1000.0
     )
     if streamActive(runner) then
         streamAppend(runner, doneLine, "done")
@@ -722,7 +384,6 @@ local function finalizeRun(player, state, runner, reason)
         running = false,
         reason = doneReason,
         steps = tonumber(runner.index) or 0,
-        mode = tostring(runner.mode or "lab"),
     }
     if state then
         state.benchRunner = nil
@@ -774,26 +435,18 @@ function BenchRunner.run(presetId, opts)
         return false
     end
 
-    if tostring(plan.mode or "lab") == "lab" and hasAsyncScenarios(plan) then
-        if type(ctx("logError")) == "function" then
-            ctx("logError")("[AMS_BENCH_ERROR] async scenarios require mode=sim")
-        end
-        return false
-    end
-
     local state = type(ctx("ensureState")) == "function" and ctx("ensureState")(player) or {}
 
     local runId = makeRunId()
     setRuntimePending(runId, nil)
     setRuntimeBenchRunner(runId, nil)
     local repeats = math.max(1, math.floor(tonumber(plan.repeats) or 1))
-    local validityThresholds = resolveValidityThresholds(plan)
-    local reportThresholds = resolveReportThresholds(plan)
-    local benchLogVerbose = resolveBenchLogVerbose(runOpts)
-    local midSampleEnabled, midSampleVerbose, midSampleEverySec = resolveMidActivitySampling(runOpts)
-    local combatSpeedReq = resolveCombatSpeedReq(runOpts)
-    local pinnedTimeOfDay = resolvePinnedTimeOfDay(runOpts)
-    local nativeOptions = resolveNativeOptions(runOpts)
+    local benchLogVerbose = runOpts.benchVerbose == true
+    local midSampleEnabled = runOpts.midActivitySamples == true
+    local midSampleVerbose = runOpts.midActivityVerbose == true
+    local midSampleEverySec = clamp(tonumber(runOpts.midActivityEverySec) or 5.0, 0.25, 120.0)
+    local pinnedTimeOfDay = resolvePinnedTimeOfDay(runOpts.pinnedTimeOfDay)
+    local nativeOptions = { nativeAttackCooldownSec = runOpts.nativeAttackCooldownSec }
     local benchLogMode = benchLogVerbose and "verbose" or "compact"
     local speedOriginal = tonumber(type(ctx("getCurrentGameSpeed")) == "function" and ctx("getCurrentGameSpeed")() or 1.0) or 1.0
     local baselineOutfit = type(ctx("snapshotWornItems")) == "function" and ctx("snapshotWornItems")(player) or {}
@@ -812,7 +465,6 @@ function BenchRunner.run(presetId, opts)
         running = true,
         reason = "active",
         steps = 0,
-        mode = tostring(plan.mode or "lab"),
         logMode = benchLogMode,
     }
 
@@ -821,7 +473,7 @@ function BenchRunner.run(presetId, opts)
     end
 
     local benchStartLine = string.format(
-        "[AMS_BENCH_START] id=%s preset=%s setsApplied=%d scenariosApplied=%d repeats=%d speedReq=%.2f speedOrig=%.2f envLocksAllowed=true version=%s label=%s log_mode=%s mid_sample_enabled=%s mid_sample_verbose=%s mid_sample_every_sec=%s norm_floor=%.2f baselineOutfitHash=%s",
+        "[AMS_BENCH_START] id=%s preset=%s setsApplied=%d scenariosApplied=%d repeats=%d speedReq=%.2f speedOrig=%.2f envLocksAllowed=true version=%s label=%s log_mode=%s mid_sample_enabled=%s mid_sample_verbose=%s mid_sample_every_sec=%s baselineOutfitHash=%s",
         runId,
         tostring(plan.presetId),
         #plan.sets,
@@ -835,7 +487,6 @@ function BenchRunner.run(presetId, opts)
         tostring(midSampleEnabled),
         tostring(midSampleVerbose),
         metricOrNa(midSampleEverySec, 2),
-        NORM_FLOOR,
         baselineHash
     )
     local log = ctx("log")
@@ -873,7 +524,6 @@ function BenchRunner.run(presetId, opts)
         id = runId,
         preset = plan.presetId,
         label = tostring(plan.label or ""),
-        mode = tostring(plan.mode or "lab"),
         startedAt = BenchRunner._state.startedAt,
         scriptVersion = tostring(ctx("scriptVersion") or "0.0.0"),
         scriptBuild = tostring(ctx("scriptBuild") or "na"),
@@ -885,7 +535,6 @@ function BenchRunner.run(presetId, opts)
         scenariosApplied = #plan.scenarios,
         restoreSpeed = speedOriginal,
         speedReq = tonumber(plan.speed) or 0,
-        normFloor = NORM_FLOOR,
         baselineOutfit = baselineOutfit,
         fixedRunAnchor = {
             x = tonumber(runStartX) or 0,
@@ -894,11 +543,9 @@ function BenchRunner.run(presetId, opts)
         },
         envTemp = envSnapshot.temp,
         envWet = envSnapshot.wet,
-        combatSpeedReq = combatSpeedReq,
         pinnedTimeOfDay = pinnedTimeOfDay,
         nativeOptions = nativeOptions,
-        validityThresholds = validityThresholds,
-        reportThresholds = reportThresholds,
+        thresholds = plan.thresholds,
         setOrder = setOrder,
         scenarioOrder = scenarioOrder,
         logVerbose = benchLogVerbose,
@@ -929,6 +576,8 @@ function BenchRunner.run(presetId, opts)
         lastStepValidity = "none",
         lastExitReason = "none",
         stepResults = {},
+        retryCounts = {},
+        wallStartMs = nowMs(),
     }
 
     setRuntimeBenchRunner(runId, runner)
@@ -952,15 +601,12 @@ function BenchRunner.run(presetId, opts)
         end
     end
 
-    if tostring(plan.mode or "lab") == "lab" then
-        while true do
-            local activeRunner = getRuntimeBenchRunner(runId)
-            if not activeRunner or activeRunner.active ~= true then
-                break
-            end
-            BenchRunner.tick(player, state)
-        end
-        return true
+    if type(ctx("showBenchCurtain")) == "function" then
+        ctx("showBenchCurtain")({
+            status = BenchRunner.curtainStatus,
+            onDisturb = BenchRunner.noteDisturbance,
+            onStop = BenchRunner.stop,
+        })
     end
 
     return true
@@ -1007,7 +653,6 @@ function BenchRunner.tick(player, state)
             running = true,
             reason = "active",
             steps = runner.index,
-            mode = tostring(runner.mode or "lab"),
         }
     end
 
@@ -1037,6 +682,12 @@ function BenchRunner.tick(player, state)
                 ctx("logError")("[AMS_BENCH_ERROR] id=" .. tostring(runner.id) .. " step=" .. tostring(pendingExec.scenarioId) .. " msg=" .. tostring(err))
             end
             finalizeRun(player, state, runner, "partial")
+            return
+        end
+        if pendingExec.retry then
+            runner.retryCounts[pendingExec.index] = (tonumber(runner.retryCounts[pendingExec.index]) or 0) + 1
+            setRuntimePending(runner.id, nil)
+            updateStateActive()
             return
         end
         if pendingExec.stepResult then
@@ -1097,6 +748,7 @@ function BenchRunner.tick(player, state)
         scenario = scenario,
         index = nextIndex,
         total = runner.total,
+        retryCount = tonumber(runner.retryCounts[nextIndex]) or 0,
         repeatIndex = tonumber(step.repeatIndex) or 1,
         repeats = tonumber(step.repeats) or tonumber(runner.repeats) or 1,
         blockIndex = 1,
@@ -1118,10 +770,9 @@ function BenchRunner.tick(player, state)
             wet = runner.envWet,
         },
         weatherOverride = nil,
-        combatSpeedReq = tonumber(runner.combatSpeedReq) or nil,
         pinnedTimeOfDay = runner.pinnedTimeOfDay,
         nativeOptions = runner.nativeOptions,
-        validityThresholds = runner.validityThresholds or {},
+        validityThresholds = runner.thresholds or {},
         benchLogVerbose = runner.logVerbose == true,
         midSampleEnabled = runner.midSampleEnabled == true,
         midSampleVerbose = runner.midSampleVerbose == true,
@@ -1160,45 +811,36 @@ function BenchRunner.tick(player, state)
     updateStateActive()
 end
 
-function BenchRunner.status()
-    local player = type(ctx("getLocalPlayer")) == "function" and ctx("getLocalPlayer")() or nil
-    local state = player and type(ctx("ensureState")) == "function" and ctx("ensureState")(player) or nil
-    local activeHandle = state and state.benchRunner or nil
-    local activeRunner = getRuntimeBenchRunner(activeHandle)
-    local s = BenchRunner._state
-    if activeRunner then
-        syncStateBenchRunnerHandle(state, activeRunner)
-        s = {
-            id = activeRunner.id,
-            preset = activeRunner.preset,
-            startedAt = activeRunner.startedAt,
-            running = true,
-            reason = "active",
-            steps = activeRunner.index or 0,
-            mode = tostring(activeRunner.mode or "lab"),
-        }
-    elseif activeHandle and activeHandle.active then
-        state.benchRunner = nil
+local function activeRunnerAndPending()
+    local runner = getAnyActiveRuntimeBenchRunner()
+    if not runner or runner.active ~= true then
+        return nil, nil
     end
-    if not s then
-        if type(ctx("log")) == "function" then
-            ctx("log")("[AMS_BENCH_STATUS] inactive")
-        end
-        return false
+    return runner, getRuntimePending(runner.id)
+end
+
+-- Input only spoils a step once its measured window is open (ledger started).
+function BenchRunner.noteDisturbance(reason)
+    local _, pendingExec = activeRunnerAndPending()
+    if pendingExec and pendingExec.ledger and not pendingExec.disturbed then
+        pendingExec.disturbed = tostring(reason or "input")
     end
-    if type(ctx("log")) == "function" then
-        ctx("log")(string.format(
-            "[AMS_BENCH_STATUS] id=%s preset=%s running=%s startedAt=%.2f endedAt=%s reason=%s steps=%d",
-            tostring(s.id or ""),
-            tostring(s.preset or ""),
-            tostring(s.running),
-            tonumber(s.startedAt) or 0,
-            s.endedAt and string.format("%.2f", tonumber(s.endedAt) or 0) or "na",
-            tostring(s.reason or "na") .. ":" .. tostring(s.mode or "lab"),
-            tonumber(s.steps) or 0
-        ))
+end
+
+function BenchRunner.curtainStatus()
+    local runner, pendingExec = activeRunnerAndPending()
+    if not runner then
+        return nil
     end
-    return true
+    return {
+        preset = runner.preset,
+        completed = tonumber(runner.index) or 0,
+        total = tonumber(runner.total) or 0,
+        setId = pendingExec and pendingExec.setDef and pendingExec.setDef.id or nil,
+        scenarioId = pendingExec and pendingExec.scenarioId or nil,
+        attempt = (tonumber(pendingExec and pendingExec.retryCount) or 0) + 1,
+        disturbed = pendingExec and pendingExec.disturbed or nil,
+    }
 end
 
 function BenchRunner.stop()
@@ -1219,63 +861,6 @@ function BenchRunner.stop()
     local s = BenchRunner._state
     if type(ctx("log")) == "function" then
         ctx("log")(string.format("[AMS_BENCH_STOP] id=%s", tostring(s and s.id or "na")))
-    end
-    return true
-end
-
-function BenchRunner.setList(presetId)
-    if not BenchCatalog then
-        return false
-    end
-    local ids = BenchCatalog.listSetIds(presetId)
-    if type(ctx("log")) == "function" then
-        ctx("log")(string.format("[AMS_BENCH_SET_LIST] preset=%s sets=%s", tostring(presetId or "benchmark_core_v1"), table.concat(ids, ",")))
-    end
-    return true
-end
-
-function BenchRunner.scenarioList(presetId)
-    if not BenchCatalog then
-        return false
-    end
-    local ids = BenchCatalog.listScenarioIds(presetId)
-    if type(ctx("log")) == "function" then
-        ctx("log")(string.format("[AMS_BENCH_SCENARIO_LIST] preset=%s scenarios=%s", tostring(presetId or "benchmark_core_v1"), table.concat(ids, ",")))
-    end
-    return true
-end
-
-function BenchRunner.wearSet(presetId, setId)
-    if not BenchCatalog then
-        return false
-    end
-    local player = type(ctx("getLocalPlayer")) == "function" and ctx("getLocalPlayer")() or nil
-    if not player then
-        if type(ctx("logError")) == "function" then
-            ctx("logError")("[AMS_BENCH_ERROR] no local player")
-        end
-        return false
-    end
-
-    local wanted = tostring(setId or "")
-    if wanted == "" then
-        if type(ctx("logError")) == "function" then
-            ctx("logError")("[AMS_BENCH_ERROR] wear set needs set id")
-        end
-        return false
-    end
-
-    local setDef = BenchCatalog.getSet(wanted)
-    if not setDef then
-        if type(ctx("logError")) == "function" then
-            ctx("logError")("[AMS_BENCH_ERROR] unknown set '" .. wanted .. "'")
-        end
-        return false
-    end
-
-    local worn, missing = equipSet(player, setDef)
-    if type(ctx("log")) == "function" then
-        ctx("log")(string.format("[AMS_BENCH_SET] preset=%s set=%s class=%s worn=%d missing=%d", tostring(presetId or "benchmark_core_v1"), wanted, tostring(setDef.class), worn, missing))
     end
     return true
 end

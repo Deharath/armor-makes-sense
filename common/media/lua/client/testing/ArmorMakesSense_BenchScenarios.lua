@@ -19,216 +19,128 @@ function BenchScenarios.setContext(context)
     C = context or {}
 end
 
-local function thermalTransientScenario(id, runSeconds)
-    return {
-        id = id,
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "await_runtime_tick", timeout_sec = 120 },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = runSeconds, activity = "run", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after_run" },
-            { kind = "wait_window", requested_sec = 3 * 60, runtime_aligned = true },
-            { kind = "sample_once", tag = "after_3m_rest" },
-            { kind = "lock_weather_end" },
-        },
-    }
-end
-
-local function breathingTreadmillScenario(id, runSeconds, activity)
+local function treadmillBlock(activity, requestedSec, extra)
     local block = {
         kind = "run_activity",
         mode = "native_treadmill_simple",
-        requested_sec = runSeconds,
+        requested_sec = requestedSec,
         activity = activity,
         anchor_mode = "fixed_run",
         reset_to_anchor = true,
         forward_dir = "east",
         sterile_radius = 600.0,
         enforce_outdoors = false,
-        mid_activity_samples = true,
-        mid_activity_every_sec = 30,
-        mid_activity_tag = "breathing_live",
     }
     if activity == "sprint" then
         block.repath_sec = 0.20
         block.forward_rearm_retry_sec = 0.08
+        -- Sprint start-up and re-arms cost real frames; at 16x a 2-minute sprint
+        -- spans only 12-40 frames and misses its sprint-uptime gate.
+        block.speed_req = 8
     end
+    for key, value in pairs(extra or {}) do
+        block[key] = value
+    end
+    return block
+end
+
+local function scenario(id, weatherProfile, measured, opts)
+    opts = opts or {}
+    local blocks = {
+        { kind = "prepare_state" },
+        { kind = "equip_set" },
+        { kind = "lock_weather_start", weather_profile = weatherProfile },
+    }
+    if opts.fatigue ~= nil then
+        blocks[#blocks + 1] = { kind = "set_fatigue", value = opts.fatigue }
+    end
+    if opts.align ~= false then
+        blocks[#blocks + 1] = { kind = "await_runtime_tick", timeout_sec = 120 }
+    end
+    blocks[#blocks + 1] = { kind = "sample_once", tag = "before" }
+    for _, block in ipairs(measured) do
+        blocks[#blocks + 1] = block
+    end
+    blocks[#blocks + 1] = { kind = "lock_weather_end" }
     return {
         id = id,
-        movement_uptime_min = activity == "sprint" and 0.25 or 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "await_runtime_tick", timeout_sec = 120 },
-            { kind = "sample_once", tag = "before" },
-            block,
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
+        movement_uptime_min = opts.movement_uptime_min,
+        blocks = blocks,
     }
 end
 
-local SCENARIOS = {
-    sleep_real_neutral_v1 = {
-        id = "sleep_real_neutral_v1",
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "set_fatigue", value = 0.8 },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "real_sleep", requested_sec = 16 * 60 * 60, hours = 16, fatigue_wake_threshold = 0.02, temp_c = 37.0, wetness_pct = 0.0, mid_activity_samples = true, mid_activity_every_sec = 10 * 60 },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_walk = {
-        id = "native_treadmill_walk",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "walk", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_run = {
-        id = "native_treadmill_run",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "run", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_sprint = {
-        id = "native_treadmill_sprint",
-        movement_uptime_min = 0.25,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 2 * 60, activity = "sprint", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false, repath_sec = 0.20, forward_rearm_retry_sec = 0.08 },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    breathing_treadmill_walk = breathingTreadmillScenario("breathing_treadmill_walk", 6 * 60, "walk"),
-    breathing_treadmill_run = breathingTreadmillScenario("breathing_treadmill_run", 6 * 60, "run"),
-    breathing_treadmill_sprint = breathingTreadmillScenario("breathing_treadmill_sprint", 2 * 60, "sprint"),
-    thermal_transient_run_60s = thermalTransientScenario("thermal_transient_run_60s", 60),
-    thermal_transient_run_180s = thermalTransientScenario("thermal_transient_run_180s", 180),
-    thermal_transient_run_360s = thermalTransientScenario("thermal_transient_run_360s", 360),
-    native_treadmill_walk_hot = {
-        id = "native_treadmill_walk_hot",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "thermal_hot" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "walk", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_run_hot = {
-        id = "native_treadmill_run_hot",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "thermal_hot" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "run", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_walk_cold = {
-        id = "native_treadmill_walk_cold",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "thermal_cold" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "walk", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_run_cold = {
-        id = "native_treadmill_run_cold",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "thermal_cold" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "run", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_walk_cold_nowind = {
-        id = "native_treadmill_walk_cold_nowind",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "thermal_cold_nowind" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "walk", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_treadmill_run_cold_nowind = {
-        id = "native_treadmill_run_cold_nowind",
-        movement_uptime_min = 0.50,
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "thermal_cold_nowind" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_treadmill_simple", requested_sec = 6 * 60, activity = "run", anchor_mode = "fixed_run", reset_to_anchor = true, forward_dir = "east", sterile_radius = 600.0, enforce_outdoors = false },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-    native_standing_combat_air = {
-        id = "native_standing_combat_air",
-        blocks = {
-            { kind = "prepare_state" },
-            { kind = "equip_set" },
-            { kind = "lock_weather_start", weather_profile = "baseline_neutral" },
-            { kind = "sample_once", tag = "before" },
-            { kind = "run_activity", mode = "native_combat_air", requested_swings = 24, requested_sec = 420, timeout_sec = 420, sterile_radius = 8.0, expected_hit_events = 0, combat_stand_still = true },
-            { kind = "sample_once", tag = "after" },
-            { kind = "lock_weather_end" },
-        },
-    },
-}
+local function treadmillScenario(id, activity, requestedSec, weatherProfile, extra)
+    return scenario(id, weatherProfile or "baseline_neutral", {
+        treadmillBlock(activity, requestedSec, extra),
+        { kind = "sample_once", tag = "after" },
+    }, { movement_uptime_min = activity == "sprint" and 0.25 or 0.50 })
+end
 
-local ASYNC_MODES = {
-    real_sleep = true,
-    native_treadmill_simple = true,
-    native_combat_air = true,
-}
+local function breathingScenario(id, activity, requestedSec)
+    return treadmillScenario(id, activity, requestedSec, "baseline_neutral", {
+        mid_activity_samples = true,
+        mid_activity_every_sec = 30,
+        mid_activity_tag = "breathing_live",
+    })
+end
+
+local function thermalTransientScenario(id, runSeconds)
+    return scenario(id, "baseline_neutral", {
+        treadmillBlock("run", runSeconds),
+        { kind = "sample_once", tag = "after_run" },
+        { kind = "wait_window", requested_sec = 3 * 60, runtime_aligned = true },
+        { kind = "sample_once", tag = "after_3m_rest" },
+    }, { movement_uptime_min = 0.50 })
+end
+
+-- Sprint to open an endurance deficit, then measure only the recovery window.
+-- The "baseline" sample restarts the step deltas so endDelta is recovery alone.
+local function recoveryScenario(id, recovery)
+    local measured = {
+        treadmillBlock("sprint", 2 * 60),
+        { kind = "await_runtime_tick", timeout_sec = 120 },
+        { kind = "sample_once", tag = "after_drain", baseline = true },
+    }
+    if recovery == "walk" then
+        measured[#measured + 1] = treadmillBlock("walk", 5 * 60)
+    else
+        measured[#measured + 1] = { kind = "wait_window", requested_sec = 5 * 60, runtime_aligned = true }
+    end
+    measured[#measured + 1] = { kind = "sample_once", tag = "after_recovery" }
+    return scenario(id, "baseline_neutral", measured, { movement_uptime_min = 0.25 })
+end
+
+local SCENARIOS = {}
+local function add(def)
+    SCENARIOS[def.id] = def
+end
+
+add(treadmillScenario("treadmill_walk", "walk", 6 * 60))
+add(treadmillScenario("treadmill_run", "run", 6 * 60))
+add(treadmillScenario("treadmill_sprint", "sprint", 2 * 60))
+for _, weather in ipairs({ "hot", "cold", "cold_nowind" }) do
+    add(treadmillScenario("treadmill_walk_" .. weather, "walk", 6 * 60, "thermal_" .. weather))
+    add(treadmillScenario("treadmill_run_" .. weather, "run", 6 * 60, "thermal_" .. weather))
+end
+add(breathingScenario("breathing_walk", "walk", 6 * 60))
+add(breathingScenario("breathing_run", "run", 6 * 60))
+add(breathingScenario("breathing_sprint", "sprint", 2 * 60))
+add(thermalTransientScenario("thermal_transient_run_60s", 60))
+add(thermalTransientScenario("thermal_transient_run_180s", 180))
+add(thermalTransientScenario("thermal_transient_run_360s", 360))
+add(recoveryScenario("recovery_stand", "stand"))
+add(recoveryScenario("recovery_walk", "walk"))
+add(scenario("combat_air", "baseline_neutral", {
+    -- Completes on swing count; the timeout only catches a stuck driver. The
+    -- tick ledger and the per-frame strain gain are speed-invariant, but swing
+    -- detection needs several frames per swing, so combat stays at 8x.
+    { kind = "run_activity", mode = "native_combat_air", requested_swings = 12, timeout_sec = 1200, speed_req = 8, sterile_radius = 8.0, expected_hit_events = 0, combat_stand_still = true },
+    { kind = "sample_once", tag = "after" },
+}, { align = false }))
+add(scenario("sleep_neutral", "baseline_neutral", {
+    { kind = "run_activity", mode = "real_sleep", requested_sec = 16 * 60 * 60, hours = 16, fatigue_wake_threshold = 0.02, temp_c = 37.0, wetness_pct = 0.0, mid_activity_samples = true, mid_activity_every_sec = 10 * 60 },
+    { kind = "sample_once", tag = "after" },
+}, { fatigue = 0.8, align = false }))
 
 local BLOCK_KINDS = {
     prepare_state = true,
@@ -258,23 +170,6 @@ end
 
 function BenchScenarios.exists(id)
     return SCENARIOS[tostring(id or "")] ~= nil
-end
-
-function BenchScenarios.isAsyncScenario(id)
-    local scenario = BenchScenarios.get(id)
-    if not scenario then
-        return false
-    end
-    for _, block in ipairs(scenario.blocks or {}) do
-        local kind = tostring(block.kind or "")
-        if kind == "await_runtime_tick" or kind == "wait_window" then
-            return true
-        end
-        if kind == "run_activity" and ASYNC_MODES[tostring(block.mode or "")] then
-            return true
-        end
-    end
-    return false
 end
 
 function BenchScenarios.validate(ids)

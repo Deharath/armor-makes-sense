@@ -6,24 +6,25 @@ local Utils = require "ArmorMakesSense_UtilsShared"
 SandboxVars = nil
 local defaults = Options.get()
 Support.assertEqual(defaults.EnableThermalModel, true, "default boolean option")
-Support.assertClose(defaults.ActivityIdle, 0.35, 1e-9, "default numeric option")
+Support.assertClose(defaults.PhysicalLoadScale, 1.0, 1e-9, "default numeric option")
+Support.assertEqual(defaults.EnableBreathingModel, true, "breathing toggle default")
 
 SandboxVars = {
     ArmorMakesSense = {
         EnableThermalModel = "false",
-        ActivityIdle = "0.6",
-        DtMaxMinutes = "invalid",
+        PhysicalLoadScale = "0.6",
+        MaxStepMinutes = "invalid",
         UnknownOption = 99,
     },
 }
 local overridden = Options.get()
 Support.assertEqual(overridden.EnableThermalModel, false, "boolean override")
-Support.assertClose(overridden.ActivityIdle, 0.6, 1e-9, "numeric override")
-Support.assertEqual(overridden.DtMaxMinutes, defaults.DtMaxMinutes, "invalid numeric keeps default")
+Support.assertClose(overridden.PhysicalLoadScale, 0.6, 1e-9, "numeric override")
+Support.assertEqual(overridden.MaxStepMinutes, defaults.MaxStepMinutes, "invalid numeric keeps default")
 Support.assertEqual(overridden.UnknownOption, nil, "unknown option ignored")
 
-overridden.ActivityIdle = 99
-Support.assertClose(Options.get().ActivityIdle, 0.6, 1e-9, "option snapshots are independent")
+overridden.PhysicalLoadScale = 99
+Support.assertClose(Options.get().PhysicalLoadScale, 0.6, 1e-9, "option snapshots are independent")
 
 getTimestampMs = function() return 12345 end
 getTimestamp = function() return 99 end

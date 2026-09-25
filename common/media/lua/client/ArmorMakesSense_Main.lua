@@ -2,7 +2,6 @@ ArmorMakesSense = ArmorMakesSense or {}
 
 require "ArmorMakesSense_Config"
 require "ArmorMakesSense_Compat"
-require "ArmorMakesSense_ArmorClassifier"
 local SlotCompat = require "ArmorMakesSense_SlotCompat"
 local SpeedRebalance = require "ArmorMakesSense_SpeedRebalance"
 
@@ -13,7 +12,6 @@ local MPClientRuntime = require "ArmorMakesSense_MPClientRuntime"
 local Options = require "ArmorMakesSense_Options"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local Runtime = require "core/ArmorMakesSense_Runtime"
-local SleepHooks = require "ArmorMakesSense_SleepHooks"
 local UI = require "core/ArmorMakesSense_UI"
 
 local Mod = ArmorMakesSense
@@ -30,7 +28,6 @@ end
 for eventName, handler in pairs(previousMainHandlers) do
     removeEventHandler(eventName, handler)
 end
-Mod._sleepHooksInstallResolved = false
 
 local function registerCompatProvider()
     local compat = ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
@@ -54,40 +51,24 @@ local function registerCompatProvider()
     if options.EnableSleepPenaltyModel then
         capabilities.sleep_penalty_provider = true
         capabilities.sleep_planner_penalty_provider = true
-        callbacks.computeSleepPenaltyContribution = function(playerObj, args)
+        callbacks.computeSleepPenaltyContribution = function(playerObj, _args)
             local player = playerObj or ClientRuntime.getLocalPlayer()
-            if not player then
-                return {
-                    penaltyFraction = 0,
-                    sleeping = false,
-                }
-            end
-
-            local state = ClientRuntime.ensureState(player)
             local callbackOptions = Options.get()
-            local profile = LoadModel.computeWornProfile(player)
-            return Physiology.computeSleepPenaltyContribution(
+            return Physiology.sleepPenaltyContribution(
                 player,
-                state,
                 callbackOptions,
-                tonumber(args and args.dtMinutes) or 0,
-                profile,
-                tonumber(args and args.currentFatigue)
+                player and LoadModel.computeWornProfile(player, callbackOptions) or nil
             )
         end
-        callbacks.estimateSleepPlannerPenalty = function(playerObj, args)
+        callbacks.estimateSleepPlannerPenalty = function(playerObj, _args)
             local player = playerObj or ClientRuntime.getLocalPlayer()
-            if not player then
-                return { penaltyFraction = 0 }
-            end
-
-            return Physiology.computeSleepPlannerPenalty(
+            local callbackOptions = Options.get()
+            local contribution = Physiology.sleepPenaltyContribution(
                 player,
-                ClientRuntime.ensureState(player),
-                Options.get(),
-                LoadModel.computeWornProfile(player),
-                tonumber(args and args.currentFatigue)
+                callbackOptions,
+                player and LoadModel.computeWornProfile(player, callbackOptions) or nil
             )
+            return { penaltyFraction = contribution.penaltyFraction }
         end
     end
 
@@ -110,26 +91,6 @@ local function isEligibleLocalPlayer(playerObj)
     return ClientRuntime.isLocalPlayer(playerObj)
 end
 
-local function tryInstallSleepHooks(playerObj)
-    if Mod._sleepHooksInstallResolved or not isEligibleLocalPlayer(playerObj) then
-        return Mod._sleepHooksInstallResolved
-    end
-    local installed, reason = SleepHooks.wrapSleepPlanning(Options.get())
-    if installed == nil then
-        ClientRuntime.logOnce("sleep_hooks_deferred", "sleep planner dependencies not ready; installation deferred")
-        return false
-    end
-    Mod._sleepHooksInstallResolved = true
-    if reason == "disabled" then
-        ClientRuntime.log("sleep planner hooks skipped because armor sleep effects are disabled")
-    elseif installed == false then
-        ClientRuntime.log("sleep planner hooks delegated to CMS coordinator after confirmed local player creation")
-    else
-        ClientRuntime.log("sleep planner hooks installed after confirmed local player creation")
-    end
-    return true
-end
-
 local function onCreatePlayer(_playerIndex, playerObj)
     local player = playerObj or ClientRuntime.getLocalPlayer()
     if not isEligibleLocalPlayer(player) then
@@ -140,16 +101,6 @@ local function onCreatePlayer(_playerIndex, playerObj)
     if not ArmorMakesSense._speedRebalanceLoaded then
         SpeedRebalance.registerEvents()
     end
-    tryInstallSleepHooks(player)
-end
-
-local function onPlayerUpdate(playerObj)
-    if Mod._sleepHooksInstallResolved then
-        removeEventHandler("OnPlayerUpdate", Mod._mainEventHandlers.OnPlayerUpdate)
-        Mod._mainEventHandlers.OnPlayerUpdate = nil
-        return
-    end
-    tryInstallSleepHooks(playerObj)
 end
 
 registerCompatProvider()
@@ -163,11 +114,6 @@ end
 if Events and Events.OnCreatePlayer and type(Events.OnCreatePlayer.Add) == "function" then
     Events.OnCreatePlayer.Add(onCreatePlayer)
     Mod._mainEventHandlers.OnCreatePlayer = onCreatePlayer
-end
-if Options.get().EnableSleepPenaltyModel
-    and Events and Events.OnPlayerUpdate and type(Events.OnPlayerUpdate.Add) == "function" then
-    Events.OnPlayerUpdate.Add(onPlayerUpdate)
-    Mod._mainEventHandlers.OnPlayerUpdate = onPlayerUpdate
 end
 
 return Mod

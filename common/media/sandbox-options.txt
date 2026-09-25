@@ -1,11 +1,29 @@
 VERSION = 1,
 
+option ArmorMakesSense.PhysicalLoadScale
+{
+    type = double,
+    min = 0.0,
+    max = 3.0,
+    default = 1.0,
+    page = ArmorMakesSense,
+    translation = ArmorMakesSense_PhysicalLoadScale,
+}
+
 option ArmorMakesSense.EnableThermalModel
 {
     type = boolean,
     default = true,
     page = ArmorMakesSense,
     translation = ArmorMakesSense_EnableThermalModel,
+}
+
+option ArmorMakesSense.EnableBreathingModel
+{
+    type = boolean,
+    default = true,
+    page = ArmorMakesSense,
+    translation = ArmorMakesSense_EnableBreathingModel,
 }
 
 option ArmorMakesSense.EnableMuscleStrainModel

@@ -9,10 +9,10 @@ local multiplayer = false
 local state = {
     uiRuntimeSnapshot = {
         activityLabel = "run",
-        loadNorm = 0.4,
-        effectiveLoad = 2.5,
+        loadFraction = 0.4,
+        burdenKg = 3.2,
         updatedMinute = 100,
-        enduranceAppliedDelta = -0.01,
+        amsDelta = -0.01,
     },
 }
 
@@ -28,11 +28,12 @@ DevPanel.setContext({
     analyzeWornGear = function()
         return {
             profile = {
-                physicalLoad = 3.2,
+                burdenKg = 3.2,
                 driverCount = 1,
             },
             costDrivers = {
-                { label = "Vest", physical = 3.2 },
+                { label = "Light", burdenKg = 1.1 },
+                { label = "Vest", burdenKg = 3.2 },
             },
         }
     end,
@@ -53,25 +54,47 @@ _G.tonumber = luaTonumber
 Support.assertTrue(okSnapshot, snapshot)
 Support.assertEqual(snapshot.source, "SP LOCAL", "developer panel authority source")
 Support.assertClose(snapshot.snapshotAgeMinutes, 5, 1e-9, "developer panel snapshot age")
-Support.assertClose(snapshot.profile.physicalLoad, 3.2, 1e-9, "developer panel worn profile")
+Support.assertClose(snapshot.profile.burdenKg, 3.2, 1e-9, "developer panel worn profile")
 Support.assertClose(snapshot.endurance, 0.75, 1e-9, "developer panel player stat")
-Support.assertEqual(snapshot.drivers[1].label, "Vest", "developer panel cost driver")
+Support.assertEqual(snapshot.drivers[1].label, "Vest", "developer panel sorts drivers by burden")
+Support.assertClose(snapshot.runtime.loadFraction, 0.4, 1e-9, "developer panel runtime snapshot")
 
 multiplayer = true
 state.mpServerSnapshot = {
     activityLabel = "walk",
-    physicalLoad = 4.5,
+    burdenKg = 4.5,
+    rigidKg = 2,
     thermalResistance = 0.7,
     driverCount = 1,
     updatedMinute = 104,
     drivers = {
-        { label = "Server Vest", physical = 4.5 },
+        { label = "Server Vest", burdenKg = 4.5 },
     },
 }
 snapshot = DevPanel.buildSnapshot()
 Support.assertEqual(snapshot.source, "MP SERVER", "developer panel multiplayer authority")
-Support.assertClose(snapshot.profile.physicalLoad, 4.5, 1e-9, "developer panel authoritative burden")
-Support.assertClose(snapshot.localProfile.physicalLoad, 3.2, 1e-9, "developer panel local comparison")
+Support.assertClose(snapshot.profile.burdenKg, 4.5, 1e-9, "developer panel authoritative burden")
+Support.assertClose(snapshot.localProfile.burdenKg, 3.2, 1e-9, "developer panel local comparison")
 Support.assertEqual(snapshot.drivers[1].label, "Server Vest", "developer panel authoritative driver")
+
+Support.assertClose(snapshot.profile.rigidKg, 2, 1e-9, "developer panel authoritative rigid mass")
+
+multiplayer = false
+state.uiRuntimeSnapshot = nil
+local projected = 0
+DevPanel.setContext({
+    getLocalPlayer = function() return player end,
+    isMultiplayer = function() return false end,
+    getRuntimeState = function() return state end,
+    getUiRuntimeSnapshot = function() return nil end,
+    projectRuntime = function()
+        projected = projected + 1
+        return { burdenKg = 9, updatedMinute = 105 }
+    end,
+    getWorldAgeMinutes = function() return 105 end,
+})
+snapshot = DevPanel.buildSnapshot()
+Support.assertEqual(projected, 1, "SP panel projects before the first tick")
+Support.assertClose(snapshot.runtime.burdenKg, 9, 1e-9, "projected runtime used")
 
 print("ams development panel model checks passed")

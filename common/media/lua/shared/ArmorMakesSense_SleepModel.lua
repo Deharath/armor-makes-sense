@@ -1,66 +1,61 @@
 ArmorMakesSense = ArmorMakesSense or {}
 ArmorMakesSense.SleepModel = ArmorMakesSense.SleepModel or {}
 
+local Compat = require "ArmorMakesSense_Compat"
+local Stats = require "ArmorMakesSense_StatsShared"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local SleepModel = ArmorMakesSense.SleepModel
 
-local BED_MULTIPLIERS = {
-    averageBedPillow = 1.05,
-    goodBed = 1.10,
-    goodBedPillow = 1.15,
-    badBed = 0.90,
-    badBedPillow = 0.95,
-    floor = 0.60,
-    floorPillow = 0.75,
-}
+-- Rigid armor slows fatigue recovery while asleep. AMS observes vanilla's
+-- recovery between authoritative ticks and gives back a share of it; sleep
+-- planning, wake time and bed choice stay entirely vanilla.
 
-function SleepModel.vanillaRecoveryRatePerHour(input)
-    input = input or {}
-    local fatigue = tonumber(input.fatigue)
-    if fatigue == nil or fatigue <= 0 then
+function SleepModel.penaltyFraction(options, rigidKg)
+    if not Utils.toBoolean(options and options.EnableSleepPenaltyModel) then
         return 0
     end
-    local sleepMultiplier = input.insomniac and 0.5 or 1
-    if input.nightOwl then
-        sleepMultiplier = sleepMultiplier * 1.4
+    local rigid = math.max(0, tonumber(rigidKg) or 0)
+    if rigid <= 0 then
+        return 0
     end
-    local traitMultiplier = input.needsLessSleep and 0.75 or (input.needsMoreSleep and 1.18 or 1)
-    local bedMultiplier = BED_MULTIPLIERS[tostring(input.bedType or "")] or 1
-    if fatigue <= 0.3 then
-        return (0.3 / (7 * traitMultiplier)) * sleepMultiplier * bedMultiplier
-    end
-    return (0.7 / (5 * traitMultiplier)) * sleepMultiplier * bedMultiplier
+    local maxPenalty = Utils.clamp(tonumber(options.SleepPenaltyMax) or 0.5, 0, 0.95)
+    return math.min(maxPenalty, rigid * math.max(0, tonumber(options.SleepPenaltyPerRigidKg) or 0.025))
 end
 
-function SleepModel.calculatePenalty(options, input)
-    if type(options) ~= "table" then
-        error("resolved options table required", 2)
+-- When CMS coordinates fatigue it charges the AMS fraction itself through
+-- the computeSleepPenaltyContribution callback.
+function SleepModel.cmsOwnsFatigue()
+    return type(Compat) == "table"
+        and type(Compat.hasCapability) == "function"
+        and Compat:hasCapability("CaffeineMakesSense", "fatigue_coordinator") == true
+end
+
+function SleepModel.step(player, state, options, profile)
+    local asleep = Utils.toBoolean(Utils.safeMethod(player, "isAsleep"))
+    local fatigue = Stats.getFatigue(player)
+    local fraction = asleep and SleepModel.penaltyFraction(options, profile and profile.rigidKg) or 0
+    local extraFatigue = 0
+    local previous = tonumber(state.lastFatigueObserved)
+
+    if asleep and state.sleepWasAsleep == true and fatigue ~= nil and previous ~= nil
+        and fraction > 0 and not SleepModel.cmsOwnsFatigue() then
+        local recovered = previous - fatigue
+        if recovered > 0 then
+            extraFatigue = recovered * fraction
+            fatigue = Utils.clamp(fatigue + extraFatigue, 0, 1)
+            Stats.setFatigue(player, fatigue)
+        end
     end
-    input = input or {}
-    local rate = tonumber(options.SleepRigidityFatigueRate)
-    if rate == nil then
-        error("missing resolved sleep option: SleepRigidityFatigueRate", 2)
-    end
-    local rigidityNorm = Utils.softNorm(tonumber(input.rigidityLoad) or 0, 80, 2)
-    local fatigue = tonumber(input.fatigue)
-    local vanillaRate = SleepModel.vanillaRecoveryRatePerHour(input)
-    if rigidityNorm <= 0 or fatigue == nil or vanillaRate <= 0 then
-        return { penaltyFraction = 0, vanillaRecoveryRatePerHour = vanillaRate, rigidityNorm = rigidityNorm }
-    end
-    local counteractRate = rigidityNorm * math.max(0, rate) * math.max(0.1, 1 - fatigue)
+
+    state.lastFatigueObserved = fatigue
+    state.sleepWasAsleep = asleep
+    state.sleepPenaltyFraction = fraction
+    state.lastSleepExtraFatigue = extraFatigue
     return {
-        penaltyFraction = Utils.clamp(counteractRate / vanillaRate, 0, 0.95),
-        vanillaRecoveryRatePerHour = vanillaRate,
-        rigidityNorm = rigidityNorm,
-        counteractRatePerHour = counteractRate,
+        sleeping = asleep,
+        penaltyFraction = fraction,
+        extraFatigue = extraFatigue,
     }
-end
-
-function SleepModel.calculateAppliedPenalty(options, input)
-    local result = SleepModel.calculatePenalty(options, input)
-    local dtHours = math.max(0, tonumber(input and input.dtMinutes) or 0) / 60
-    result.extraFatigue = result.vanillaRecoveryRatePerHour * dtHours * result.penaltyFraction
-    return result
 end
 
 return SleepModel

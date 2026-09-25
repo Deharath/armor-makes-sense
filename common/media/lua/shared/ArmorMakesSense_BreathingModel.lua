@@ -7,38 +7,32 @@ local METABOLIC_REST = 1.5
 local METABOLIC_WALK = 3.1
 local METABOLIC_RUN = 6.9
 local METABOLIC_MAX = 9.5
-
-local function requiredNumber(options, key)
-    local value = tonumber(options and options[key])
-    if value == nil then
-        error("missing resolved breathing option: " .. tostring(key), 3)
-    end
-    return value
-end
+-- Airflow resistance of a filtered, sealed gas mask (BreathingClassifier).
+local FULL_RESTRICTION = 3.75
 
 local function smoothstep01(value)
     local t = Utils.clamp(tonumber(value) or 0, 0, 1)
     return t * t * (3 - (2 * t))
 end
 
-local function resolveEffort(input)
-    local metabolicRate = math.max(0, tonumber(input.metabolicRate) or METABOLIC_REST)
-    local activityLabel = tostring(input.activityLabel or "idle")
-    local movementDemand = METABOLIC_REST
+local function movementDemand(activityLabel)
     if activityLabel == "sprint" then
-        movementDemand = METABOLIC_MAX
-    elseif activityLabel == "run" then
-        movementDemand = METABOLIC_RUN
-    elseif activityLabel == "walk" then
-        movementDemand = METABOLIC_WALK
+        return METABOLIC_MAX
     end
-    local metabolicDemand = math.max(metabolicRate, movementDemand)
-    local metabolicNorm = Utils.clamp(
-        (metabolicDemand - METABOLIC_REST) / (METABOLIC_MAX - METABOLIC_REST),
-        0,
-        1
-    )
-    return metabolicNorm, metabolicDemand, metabolicRate
+    if activityLabel == "run" then
+        return METABOLIC_RUN
+    end
+    if activityLabel == "walk" then
+        return METABOLIC_WALK
+    end
+    return METABOLIC_REST
+end
+
+-- Restriction severity of the worn respiratory gear, 0..1.
+function BreathingModel.severity(airflowResistance, sealedRestriction)
+    local airflow = math.max(0, tonumber(airflowResistance) or 0)
+    local sealed = Utils.clamp(tonumber(sealedRestriction) or 0, 0, 1)
+    return Utils.clamp(airflow / FULL_RESTRICTION, 0, 1) * (0.75 + (0.25 * sealed))
 end
 
 function BreathingModel.calculate(options, input)
@@ -46,47 +40,21 @@ function BreathingModel.calculate(options, input)
         error("resolved options table required", 2)
     end
     input = input or {}
-    local airflowResistance = math.max(0, tonumber(input.airflowResistance) or 0)
-    local sealedRestriction = Utils.clamp(tonumber(input.sealedRestriction) or 0, 0, 1)
-    local metabolicNorm, metabolicDemand, metabolicRate = resolveEffort(input)
-    if airflowResistance <= 0 then
-        return {
-            contribution = 0,
-            airflowResistance = 0,
-            sealedRestriction = sealedRestriction,
-            metabolicRate = metabolicRate,
-            metabolicDemand = metabolicDemand,
-            metabolicNorm = metabolicNorm,
-            effortRamp = 0,
-            dynamicLoad = 0,
-            sealedDynamicLoad = 0,
-        }
-    end
-
-    local effortOnset = Utils.clamp(requiredNumber(options, "BreathingEffortOnset"), 0, 0.95)
+    local severity = BreathingModel.severity(input.airflowResistance, input.sealedRestriction)
+    local metabolicRate = math.max(0, tonumber(input.metabolicRate) or METABOLIC_REST)
+    local demand = math.max(metabolicRate, movementDemand(tostring(input.activityLabel or "idle")))
+    local effortNorm = Utils.clamp((demand - METABOLIC_REST) / (METABOLIC_MAX - METABOLIC_REST), 0, 1)
+    local onset = Utils.clamp(tonumber(options.BreathingEffortOnset) or 0.2, 0, 0.95)
     local effortRamp = 0
-    if metabolicNorm > effortOnset then
-        effortRamp = smoothstep01((metabolicNorm - effortOnset) / math.max(0.05, 1 - effortOnset))
+    if effortNorm > onset then
+        effortRamp = smoothstep01((effortNorm - onset) / math.max(0.05, 1 - onset))
     end
-
-    local dynamicLoad = airflowResistance
-        * requiredNumber(options, "BreathingDynamicLoadWeight")
-        * effortRamp
-    local sealedDynamicLoad = airflowResistance
-        * requiredNumber(options, "BreathingSealedDynamicLoadWeight")
-        * effortRamp
-        * sealedRestriction
-
+    local enabled = Utils.toBoolean(options.EnableBreathingModel)
     return {
-        contribution = dynamicLoad + sealedDynamicLoad,
-        airflowResistance = airflowResistance,
-        sealedRestriction = sealedRestriction,
-        metabolicRate = metabolicRate,
-        metabolicDemand = metabolicDemand,
-        metabolicNorm = metabolicNorm,
+        severity = severity,
         effortRamp = effortRamp,
-        dynamicLoad = dynamicLoad,
-        sealedDynamicLoad = sealedDynamicLoad,
+        pressure = enabled and (severity * effortRamp) or 0,
+        metabolicRate = metabolicRate,
     }
 end
 

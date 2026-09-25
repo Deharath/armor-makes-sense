@@ -50,16 +50,13 @@ function Strain.computeArmorStrainExtra(options, profile)
         return 0
     end
     local maxExtra = Utils.clamp(tonumber(options.MuscleStrainMaxExtra) or 0.15, 0, 0.35)
-    local startLoad = Utils.clamp(tonumber(options.MuscleStrainLoadStart) or 3.0, 0, 200)
-    local fullLoad = Utils.clamp(tonumber(options.MuscleStrainLoadFull) or 22.0, 1, 200)
-    if fullLoad <= startLoad then
-        fullLoad = startLoad + 1.0
-    end
-    local load = Utils.clamp(tonumber(profile.swingChainLoad) or tonumber(profile.physicalLoad) or 0, 0, 600)
-    if load <= startLoad then
+    local startKg = math.max(0, tonumber(options.MuscleStrainArmKgStart) or 1)
+    local fullKg = math.max(startKg + 0.1, tonumber(options.MuscleStrainArmKgFull) or 8)
+    local armKg = math.max(0, tonumber(profile.armKg) or 0)
+    if armKg <= startKg then
         return 0
     end
-    local t = Utils.clamp((load - startLoad) / (fullLoad - startLoad), 0, 1)
+    local t = Utils.clamp((armKg - startKg) / (fullKg - startKg), 0, 1)
     return maxExtra * (t * math.sqrt(t))
 end
 
@@ -78,7 +75,7 @@ function Strain.applyArmorStrainOverlay(player, weapon, options, cachedProfile)
         return 0, vanillaStrainFactor
     end
 
-    local profile = type(cachedProfile) == "table" and cachedProfile or LoadModel.computeWornProfile(player)
+    local profile = type(cachedProfile) == "table" and cachedProfile or LoadModel.computeWornProfile(player, options)
     local extra = Strain.computeArmorStrainExtra(options, profile)
     if extra <= 0 then
         return 0, vanillaStrainFactor

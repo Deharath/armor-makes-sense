@@ -14,13 +14,14 @@ pcall(require, "ISUI/ISButton")
 pcall(require, "ISUI/ISComboBox")
 
 local PANEL_W = 780
-local PANEL_H = 540
+local PANEL_H = 620
 local PAD = 14
 local DIVIDER_X = 382
 local TOOLS_X = 398
 local TOOLS_W = PANEL_W - TOOLS_X - PAD
 local ROW_H = 18
 local BUTTON_H = 22
+local SAVED_PROFILE = "dev_panel"
 
 local FONT_MEDIUM = UIFont and UIFont.Medium or "Medium"
 local FONT_SMALL = UIFont and UIFont.Small or "Small"
@@ -65,7 +66,7 @@ local function copySortedDrivers(drivers)
         out[#out + 1] = drivers[i]
     end
     table.sort(out, function(a, b)
-        return (tonumber(a and a.physical) or 0) > (tonumber(b and b.physical) or 0)
+        return (tonumber(a and a.burdenKg) or 0) > (tonumber(b and b.burdenKg) or 0)
     end)
     return out
 end
@@ -83,23 +84,24 @@ function DevPanel.buildSnapshot()
     local multiplayer = safeInvoke(ctx("isMultiplayer")) == true
     local state = safeInvoke(ctx("getRuntimeState"), player) or {}
     local hasAuthoritativeSnapshot = multiplayer and type(state.mpServerSnapshot) == "table"
-    local options = safeInvoke(ctx("getOptions")) or {}
-    local runtime = safeInvoke(ctx("getUiRuntimeSnapshot"), player, state, options) or {}
+    local runtime = safeInvoke(ctx("getUiRuntimeSnapshot"), state)
+    if type(runtime) ~= "table" and not multiplayer then
+        runtime = safeInvoke(ctx("projectRuntime"), player, state)
+    end
+    runtime = type(runtime) == "table" and runtime or {}
     local analysis = safeInvoke(ctx("analyzeWornGear"), player) or {}
-    local localProfile = analysis.profile or safeInvoke(ctx("computeWornProfile"), player) or {}
+    local localProfile = analysis.profile or {}
     local profile = localProfile
     if hasAuthoritativeSnapshot and next(runtime) ~= nil then
         profile = {
-            physicalLoad = runtime.physicalLoad,
-            thermalResistance = runtime.thermalResistance,
+            burdenKg = runtime.burdenKg,
+            armKg = runtime.armKg,
+            rigidKg = runtime.rigidKg,
             airflowResistance = runtime.airflowResistance,
             sealedRestriction = runtime.sealedRestriction,
-            rigidityLoad = runtime.rigidityLoad,
             driverCount = runtime.driverCount,
         }
     end
-    local rawRuntime = multiplayer and state.mpServerSnapshot or state.uiRuntimeSnapshot
-    rawRuntime = type(rawRuntime) == "table" and rawRuntime or runtime
     local nowMinute = tonumber(safeValue(ctx("getWorldAgeMinutes"))) or 0
     local updatedMinute = tonumber(runtime.updatedMinute)
 
@@ -110,7 +112,6 @@ function DevPanel.buildSnapshot()
         hasAuthoritativeSnapshot = hasAuthoritativeSnapshot,
         state = state,
         runtime = runtime,
-        rawRuntime = rawRuntime,
         profile = profile,
         localProfile = localProfile,
         drivers = copySortedDrivers(hasAuthoritativeSnapshot and runtime.drivers or analysis.costDrivers),
@@ -197,8 +198,12 @@ local function addCombo(panel, x, y, width, options)
     combo:initialise()
     panel:addChild(combo)
     for i = 1, #(options or {}) do
-        local value = tostring(options[i])
-        combo:addOptionWithData(value, value)
+        local option = options[i]
+        if type(option) == "table" then
+            combo:addOptionWithData(option.text, option.data)
+        else
+            combo:addOptionWithData(tostring(option), tostring(option))
+        end
     end
     if #(options or {}) > 0 then
         combo.selected = 1
@@ -240,10 +245,16 @@ function AMSDevOverlay:createChildren()
     self.spOnlyControls[#self.spOnlyControls + 1] = reset
     addButton(self, TOOLS_X + twoButtonW + buttonGap, y, twoButtonW, "Write mark", AMSDevOverlay.onMark)
     y = y + BUTTON_H + buttonGap
-    addButton(self, TOOLS_X, y, twoButtonW, "Probe current gear", AMSDevOverlay.onProbe)
-    addButton(self, TOOLS_X + twoButtonW + buttonGap, y, twoButtonW, "Export report", AMSDevOverlay.onReport)
+    local threeButtonW = math.floor((TOOLS_W - buttonGap * 2) / 3)
+    addButton(self, TOOLS_X, y, threeButtonW, "Probe gear", AMSDevOverlay.onProbe)
+    addButton(self, TOOLS_X + threeButtonW + buttonGap, y, threeButtonW, "Discomfort audit", AMSDevOverlay.onDiscomfortAudit)
+    addButton(self, TOOLS_X + (threeButtonW + buttonGap) * 2, y, TOOLS_W - (threeButtonW + buttonGap) * 2, "Export report", AMSDevOverlay.onReport)
 
-    local profiles = safeInvoke(ctx("listBuiltInGearProfiles")) or {}
+    local profiles = { { text = "saved outfit", data = SAVED_PROFILE } }
+    local builtIns = safeInvoke(ctx("listBuiltInGearProfiles")) or {}
+    for i = 1, #builtIns do
+        profiles[#profiles + 1] = builtIns[i]
+    end
     self.gearCombo = addCombo(self, TOOLS_X, 247, TOOLS_W, profiles)
     local gearWear = addButton(self, TOOLS_X, 275, 112, "Wear virtual", AMSDevOverlay.onWearGear)
     local gearClear = addButton(self, TOOLS_X + 118, 275, 94, "Clear", AMSDevOverlay.onClearGear)
@@ -307,6 +318,10 @@ function AMSDevOverlay:onProbe()
     self:runCommand("Gear probe", "uiProbeCurrentGear")
 end
 
+function AMSDevOverlay:onDiscomfortAudit()
+    self:runCommand("Discomfort audit", "discomfortAudit")
+end
+
 function AMSDevOverlay:onReport()
     local player = safeValue(ctx("getLocalPlayer"))
     local ok, path, err = safeInvoke(ctx("writeSupportReport"), player)
@@ -330,7 +345,7 @@ function AMSDevOverlay:onWearGear()
         self:setStatus("No gear profile selected", COLOR.warn)
         return
     end
-    self:runCommand("Wore " .. tostring(profile), "gearWear", profile, "virtual")
+    self:runCommand("Wore " .. tostring(profile), "gearWear", profile)
 end
 
 function AMSDevOverlay:onClearGear()
@@ -338,7 +353,7 @@ function AMSDevOverlay:onClearGear()
 end
 
 function AMSDevOverlay:onSaveGear()
-    self:runCommand("Saved current gear", "gearSave", "dev_panel")
+    self:runCommand("Saved current gear", "gearSave", SAVED_PROFILE)
 end
 
 function AMSDevOverlay:onRunBench()
@@ -384,44 +399,47 @@ local function drawLiveData(self, snapshot)
     end
 
     local runtime = snapshot.runtime or {}
-    local raw = snapshot.rawRuntime or {}
     local profile = snapshot.profile or {}
     local age = snapshot.snapshotAgeMinutes
     local ageColor = age == nil and COLOR.warn or (age > 5 and COLOR.warn or COLOR.good)
 
     y = drawSection(self, x, y, width, "Runtime")
     y = drawPair(self, x, y, width, "Source", snapshot.source, "Age", age and formatNumber(age, 1) .. "m" or "--", ageColor)
-    y = drawPair(self, x, y, width, "Activity", shortText(runtime.activityLabel, 12), "Heat scale", formatNumber(runtime.thermalStrainScale, 3))
-    y = drawPair(self, x, y, width, "Hot drive", formatNumber(runtime.hotDrive, 3), "Updated", formatNumber(runtime.updatedMinute, 1))
+    y = drawPair(self, x, y, width, "Activity", shortText(runtime.activityLabel, 12), "Posture", shortText(runtime.postureLabel, 12))
+    y = drawPair(self, x, y, width, "Step dt", formatNumber(runtime.dtMinutes, 2), "Updated", formatNumber(runtime.updatedMinute, 1))
 
     y = drawSection(self, x, y + 3, width, "Player")
     y = drawPair(self, x, y, width, "Endurance", formatPercent(snapshot.endurance), "Fatigue", formatPercent(snapshot.fatigue))
     y = drawPair(self, x, y, width, "Body temp", formatNumber(snapshot.bodyTemp, 2) .. " C", "Wetness", formatNumber(snapshot.wetness, 1))
+    y = drawPair(self, x, y, width, "Body kg", formatNumber(runtime.bodyKg, 1), "Strength", formatNumber(runtime.strength, 0))
 
     y = drawSection(self, x, y + 3, width, snapshot.hasAuthoritativeSnapshot and "Burden (server)" or "Burden (local)")
-    y = drawPair(self, x, y, width, "Physical", formatNumber(profile.physicalLoad, 3), "Resistance", formatNumber(runtime.thermalResistance, 3))
+    y = drawPair(self, x, y, width, "Burden kg", formatNumber(profile.burdenKg, 2), "Load frac", formatNumber(runtime.loadFraction, 3))
+    y = drawPair(self, x, y, width, "Arm kg", formatNumber(profile.armKg, 2), "Rigid kg", formatNumber(profile.rigidKg, 2))
     y = drawPair(self, x, y, width, "Airflow", formatNumber(profile.airflowResistance, 3), "Sealed", formatNumber(profile.sealedRestriction, 3))
-    y = drawPair(self, x, y, width, "Rigidity", formatNumber(profile.rigidityLoad, 3), "Drivers", tostring(profile.driverCount or 0))
-    y = drawPair(self, x, y, width, "Effective", formatNumber(runtime.effectiveLoad, 3), "Normalized", formatNumber(runtime.loadNorm, 3))
-    y = drawSection(self, x, y + 3, width, "Applied effects")
-    y = drawPair(self, x, y, width, "Thermal add", formatNumber(raw.thermalContribution, 4), "Breathing", formatNumber(raw.breathingContribution, 4))
-    y = drawPair(self, x, y, width, "MET rate", formatNumber(raw.metabolicRate, 3), "MET demand", formatNumber(raw.metabolicDemand, 3))
-    y = drawPair(self, x, y, width, "Effort norm", formatNumber(raw.metabolicNorm, 3), "Effort ramp", formatNumber(raw.breathingEffortRamp, 3))
-    y = drawPair(self, x, y, width, "Open load", formatNumber(raw.breathingDynamicLoad, 3), "Sealed load", formatNumber(raw.breathingSealedLoad, 3))
-    y = drawPair(self, x, y, width, "Body heat", formatNumber(runtime.bodyHeatDelta, 3), "Hot drive", formatNumber(runtime.hotDrive, 3))
-    y = drawPair(self, x, y, width, "Hot pressure", formatNumber(runtime.hotPressure, 3), "Cold fit", formatNumber(runtime.coldSuitability, 3))
-    y = drawPair(self, x, y, width, "Natural dE", formatNumber(raw.enduranceNaturalDelta, 5), "AMS dE", formatNumber(raw.enduranceAppliedDelta, 5))
-    y = drawPair(self, x, y, width, "Regen scale", formatNumber(raw.composedEnduranceRegenScale, 3), "AMS drain", formatNumber(raw.amsEnduranceDrainApplied, 5))
-    y = drawPair(self, x, y, width, "Sleep loss", formatNumber(snapshot.state.lastSleepPenaltyFraction, 3), "Wake adj", formatNumber(snapshot.state.lastSleepWakeAdjustment, 4))
+    y = drawPair(self, x, y, width, "Drivers", tostring(profile.driverCount or 0), "Mass kg", formatNumber(profile.massKg, 2))
 
-    y = drawSection(self, x, y + 3, width, "Top physical drivers")
+    y = drawSection(self, x, y + 3, width, "Pressures")
+    y = drawPair(self, x, y, width, "Heat", formatNumber(runtime.heat, 3), "Resistance", formatNumber(runtime.thermalResistance, 3))
+    y = drawPair(self, x, y, width, "Hot pressure", formatNumber(runtime.hotPressure, 3), "Cold fit", formatNumber(runtime.coldSuitability, 3))
+    y = drawPair(self, x, y, width, "Breathing", formatNumber(runtime.breathingSeverity, 3), "Sleep loss", formatNumber(runtime.sleepPenaltyFraction, 3))
+
+    y = drawSection(self, x, y + 3, width, "Endurance scales")
+    y = drawPair(self, x, y, width, "Walk regen", formatNumber(runtime.walkRegenScale, 3), "Stand regen", formatNumber(runtime.standRegenScale, 3))
+    y = drawPair(self, x, y, width, "Run drain", formatNumber(runtime.runDrainScale, 3), "Sprint drain", formatNumber(runtime.sprintDrainScale, 3))
+    y = drawPair(self, x, y, width, "Regen now", formatNumber(runtime.regenScale, 3), "Drain now", formatNumber(runtime.drainScale, 3))
+    y = drawPair(self, x, y, width, "Natural dE", formatNumber(runtime.naturalDelta, 5), "AMS dE", formatNumber(runtime.amsDelta, 5))
+    y = drawPair(self, x, y, width, "NMS regen", formatNumber(runtime.nmsRegenScale, 3), "NMS drain", formatNumber(runtime.nmsDrain, 5))
+    y = drawPair(self, x, y, width, "Sleep +fat", formatNumber(snapshot.state.lastSleepExtraFatigue, 5), "", "")
+
+    y = drawSection(self, x, y + 3, width, "Top burden drivers")
     if #snapshot.drivers == 0 then
         self:drawText("None", x, y, COLOR.dim.r, COLOR.dim.g, COLOR.dim.b, COLOR.dim.a, FONT_SMALL)
     else
         for i = 1, math.min(4, #snapshot.drivers) do
             local driver = snapshot.drivers[i]
             self:drawText(tostring(i) .. ". " .. shortText(driver.label or driver.fullType, 31), x, y, COLOR.label.r, COLOR.label.g, COLOR.label.b, COLOR.label.a, FONT_SMALL)
-            self:drawTextRight(formatNumber(driver.physical, 3), x + width, y, COLOR.value.r, COLOR.value.g, COLOR.value.b, COLOR.value.a, FONT_SMALL)
+            self:drawTextRight(formatNumber(driver.burdenKg, 2), x + width, y, COLOR.value.r, COLOR.value.g, COLOR.value.b, COLOR.value.a, FONT_SMALL)
             y = y + ROW_H
         end
     end
@@ -578,9 +596,6 @@ end
 function DevPanel.initialize()
     if initialized then
         return true
-    end
-    _G.AMS_DevPanel = function()
-        return DevPanel.toggle()
     end
     if Events and Events.OnFillWorldObjectContextMenu
         and type(Events.OnFillWorldObjectContextMenu.Add) == "function" then

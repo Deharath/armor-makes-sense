@@ -1,225 +1,165 @@
-local source = debug.getinfo(1, "S").source
-local scriptPath = string.sub(source, 2)
-local testsDir = string.match(scriptPath, "(.*/)") or "./"
-local rootDir = testsDir .. ".."
+local Support = dofile((os.getenv("AMS_ROOT") or ".") .. "/tests/support.lua")
+package.path = (Support.ROOT .. "/common/media/lua/client/?/?.lua;") .. package.path
 
-package.path = table.concat({
-    rootDir .. "/common/media/lua/client/?.lua",
-    rootDir .. "/common/media/lua/client/?/?.lua",
-    rootDir .. "/common/media/lua/shared/?.lua",
-    testsDir .. "?.lua",
-    package.path,
-}, ";")
-
-local Support = dofile((os.getenv("AMS_ROOT") or rootDir) .. "/tests/support.lua")
 local UITooltip = require "core/ArmorMakesSense_UITooltip"
+local LoadModel = require "ArmorMakesSense_LoadModelShared"
 
+-- Installation waits for the vanilla class and stays idempotent.
 ISToolTipInv = nil
-UITooltip.install()
-
-local originalRender = function()
-    return "original"
+Support.assertFalse(UITooltip.install(), "install defers without ISToolTipInv")
+local ownerPasses = 2
+local originalRender = function(self)
+    for _ = 1, ownerPasses do
+        self.item:DoTooltip(self.tooltip)
+    end
 end
 ISToolTipInv = { render = originalRender }
-
+Support.assertTrue(UITooltip.install(), "install succeeds once the class exists")
+local installed = ISToolTipInv.render
+Support.assertTrue(installed ~= originalRender, "render is wrapped")
 UITooltip.install()
+Support.assertEqual(ISToolTipInv.render, installed, "install is idempotent")
 
-Support.assertTrue(
-    ISToolTipInv.render ~= originalRender,
-    "tooltip installation retries after the vanilla class becomes available"
-)
-
-local installedRender = ISToolTipInv.render
-UITooltip.install()
-Support.assertEqual(
-    ISToolTipInv.render,
-    installedRender,
-    "tooltip installation remains idempotent"
-)
-
-local LoadModel = require "ArmorMakesSense_LoadModelShared"
-local originalSignalResolver = LoadModel.itemToBurdenSignal
-LoadModel.itemToBurdenSignal = function()
-    return { physicalLoad = 14, airflowResistance = 2.2, sealedRestriction = 0 }
+getTextManager = function()
+    return { MeasureStringX = function(_, _, text) return #text * 7 end }
 end
 
-local originalTooltipCalls = 0
-local embeddedTooltipCalls = 0
-local completedLayouts = {}
+local signal = { burdenKg = 4.6, airflowResistance = 3.75, sealedRestriction = 1 }
+LoadModel.itemToBurdenSignal = function() return signal end
+
 local tooltipKey = "Tooltip_item_NoBackpack"
-local tooltipSuppressedDuringRender = 0
+local keyDuringRender = {}
+local calls = { original = 0, embedded = 0 }
 local itemMethods = {
     getBodyLocation = function() return "ams:shoulderpad_left" end,
     getFullType = function() return "Base.Shoulderpad_Articulated_L_Metal" end,
     getTooltip = function() return tooltipKey end,
-    setTooltip = function(_, value)
-        tooltipKey = value
+    setTooltip = function(_, value) tooltipKey = value end,
+    DoTooltip = function()
+        calls.original = calls.original + 1
+        keyDuringRender[#keyDuringRender + 1] = tostring(tooltipKey)
     end,
-    DoTooltip = function(self, targetTooltip)
-        originalTooltipCalls = originalTooltipCalls + 1
-        targetTooltip:setWidth(170)
-        targetTooltip:setHeight(100)
-        if self:getTooltip() == nil then
-            tooltipSuppressedDuringRender = tooltipSuppressedDuringRender + 1
-        end
-    end,
-    DoTooltipEmbedded = function(self, _, layout)
-        embeddedTooltipCalls = embeddedTooltipCalls + 1
-        if self:getTooltip() == nil then
-            tooltipSuppressedDuringRender = tooltipSuppressedDuringRender + 1
-        end
-        layout.offsetY = 30
-        local encumbrance = layout:addItem()
-        encumbrance:setLabel("Encumbrance:", 1, 1, 0.8, 1)
-        encumbrance:setValue("2.0 (0.6 equipped)", 1, 1, 1, 1)
-        local defense = layout:addItem()
-        defense:setLabel("Bite Defense:", 1, 1, 0.8, 1)
-        defense:setValue("100 (+100)", 0, 1, 0, 1)
-        local combatSpeed = layout:addItem()
-        combatSpeed:setLabel("Combat speed modifier:", 1, 1, 0.8, 1)
-        combatSpeed:setProgress(0.5, 0.5, 0.5, 0.5, 1)
+    DoTooltipEmbedded = function(_, _, layout)
+        calls.embedded = calls.embedded + 1
+        keyDuringRender[#keyDuringRender + 1] = tostring(tooltipKey)
+        layout.rows = 2
     end,
 }
+local originalDoTooltip = itemMethods.DoTooltip
 local item = setmetatable({}, { __index = itemMethods })
-local tooltipHeight = 100
-local tooltipWidth = 170
-local function newLayout()
-    local layout = {
-        rows = {},
-        minLabelWidth = 0,
-        minValueWidth = 0,
-        offsetY = 0,
-    }
-    function layout:setMinLabelWidth(width)
-        self.minLabelWidth = width
-    end
-    function layout:setMinValueWidth(width)
-        self.minValueWidth = width
-    end
-    function layout:addItem()
-        local row = {}
-        function row:setLabel(text)
-            self.label = text
-        end
-        function row:setProgress(fraction)
-            self.progress = fraction
-        end
-        function row:setValue(value)
-            self.value = value
-        end
-        self.rows[#self.rows + 1] = row
-        return row
-    end
-    function layout:render(x, y, targetTooltip)
-        self.renderX = x
-        self.renderY = y
-        local labelWidth = self.minLabelWidth
-        local valueWidth = self.minValueWidth
-        for _, row in ipairs(self.rows) do
-            if row.label == "Combat speed modifier:" then
-                labelWidth = math.max(labelWidth, 200)
-            end
-            if row.value == "100 (+100)" then
-                valueWidth = math.max(valueWidth, 157)
-            end
-        end
-        targetTooltip:setWidth(x + labelWidth + 8 + valueWidth + targetTooltip.padRight)
-        return y + (#self.rows * 14)
-    end
+
+local measureOnly = false
+local texts, rects = {}, {}
+local tooltip = { width = 100, height = 0 }
+function tooltip:beginLayout()
+    local layout = { rows = 0 }
+    function layout:setMinLabelWidth(w) self.minLabel = w end
+    function layout:setMinValueWidth(w) self.minValue = w end
+    function layout:render(x, y) self.x, self.y = x, y; return y + self.rows * 14 end
+    self.layout = layout
     return layout
 end
-local tooltipMethods = {
-    beginLayout = function()
-        local layout = newLayout()
-        completedLayouts[#completedLayouts + 1] = layout
-        return layout
-    end,
-    endLayout = function() end,
-    getFont = function() return "TooltipFont" end,
-    getLineSpacing = function() return 20 end,
-    getHeight = function() return tooltipHeight end,
-    getWidth = function() return tooltipWidth end,
-    setHeight = function(_, value) tooltipHeight = value end,
-    setWidth = function(_, value) tooltipWidth = value end,
-}
-local tooltip = setmetatable({
-    padRight = 10,
-}, { __index = tooltipMethods })
-getTextManager = function()
-    return {
-        MeasureStringX = function(_, font, text)
-            Support.assertEqual(font, "TooltipFont", "tooltip geometry uses the active tooltip font")
-            Support.assertEqual(text, "0", "tooltip geometry mirrors vanilla padding measurement")
-            return 10
-        end,
-    }
-end
-local reflectionCalls = 0
-getNumClassFields = function()
-    reflectionCalls = reflectionCalls + 1
-    error("Not in debug")
-end
-getClassField = getNumClassFields
-getClassFieldVal = getNumClassFields
+function tooltip:endLayout() end
+function tooltip:getFont() return "TooltipFont" end
+function tooltip:getLineSpacing() return 20 end
+function tooltip:isMeasureOnly() return measureOnly end
+function tooltip:getWidth() return self.width end
+function tooltip:setWidth(v) self.width = v end
+function tooltip:setHeight(v) self.height = v end
+function tooltip:DrawText(_, text, x, y) texts[#texts + 1] = { text = text, x = x, y = y } end
+function tooltip:DrawTextureScaledColor(_, x, y, w, h, r, g, b, a) rects[#rects + 1] = { x = x, y = y, w = w, a = a } end
+
+local rows = UITooltip.buildRows(item)
+Support.assertEqual(#rows, 2, "burden and breathing rows")
+Support.assertEqual(rows[1].label, "Burden", "burden row first")
+Support.assertEqual(rows[1].pips, 3, "4.6 kg is three pips")
+Support.assertEqual(rows[2].label, "Breathing", "breathing row second")
+Support.assertEqual(rows[2].pips, 4, "sealed mask is four pips")
+
 local panel = { item = item, tooltip = tooltip }
-originalRender = function(self)
-    self.item:DoTooltip(self.tooltip)
-    self.item:DoTooltip(self.tooltip)
+ISToolTipInv.render(panel)
+Support.assertTrue(itemMethods.DoTooltip ~= originalDoTooltip, "persistent class wrapper installed")
+Support.assertEqual(calls.original, 0, "AMS owns eligible DoTooltip passes")
+Support.assertEqual(calls.embedded, 2, "both owner passes reuse vanilla's embedded rows")
+Support.assertEqual(tooltip.layout.minLabel, 80, "label column minimum")
+Support.assertEqual(tooltip.layout.x, 7, "left pad from digit width")
+Support.assertEqual(tooltip.layout.y, 28, "content starts below the title line")
+Support.assertEqual(tooltip.height, 102, "pip block extends tooltip height")
+Support.assertEqual(tooltip.width, 154, "pip strip widens a narrow tooltip")
+Support.assertEqual(#texts, 4, "two labels per pass")
+Support.assertEqual(texts[1].text, "Burden:", "burden label drawn")
+Support.assertEqual(texts[1].y, 59, "pip block sits under vanilla rows")
+Support.assertEqual(#rects, 16, "four pips per row per pass")
+Support.assertEqual(rects[1].x, 95, "pips align to the value column")
+Support.assertEqual(rects[1].y, 64, "pips are vertically centred")
+local lit = 0
+for i = 1, 8 do
+    if rects[i].a == 1 then lit = lit + 1 end
 end
+Support.assertEqual(lit, 7, "3 + 4 pips lit")
+Support.assertEqual(table.concat(keyDuringRender, ","), "nil,nil", "no-backpack note hidden during render")
+Support.assertEqual(tooltipKey, "Tooltip_item_NoBackpack", "no-backpack note restored after render")
+Support.assertEqual(UITooltip._active, nil, "active render cleared")
+
+-- Measure-only passes size the tooltip without drawing.
+texts, rects, measureOnly = {}, {}, true
+ISToolTipInv.render(panel)
+Support.assertEqual(#texts + #rects, 0, "measure-only pass draws nothing")
+Support.assertEqual(tooltip.height, 102, "measure-only pass still sizes the tooltip")
+measureOnly = false
+
+-- Outside an AMS render (or for a different tooltip) the wrapper is inert.
+item:DoTooltip(tooltip)
+Support.assertEqual(calls.original, 1, "DoTooltip outside render uses vanilla")
+UITooltip._active = { item = item, tooltip = {}, rows = rows }
+item:DoTooltip(tooltip)
+Support.assertEqual(calls.original, 2, "mismatched tooltip uses vanilla")
+UITooltip._active = nil
+
+-- Errors in the owner render still restore item state.
+ISToolTipInv._amsTooltipRenderWrapper = nil
+ISToolTipInv.render = function() error("owner boom") end
+UITooltip.install()
+local ok, err = pcall(ISToolTipInv.render, panel)
+Support.assertFalse(ok, "owner errors propagate")
+Support.assertTrue(string.find(tostring(err), "owner boom", 1, true) ~= nil, "owner error message preserved")
+Support.assertEqual(tooltipKey, "Tooltip_item_NoBackpack", "tooltip key restored after owner error")
+Support.assertEqual(UITooltip._active, nil, "active render cleared after owner error")
 ISToolTipInv._amsTooltipRenderWrapper = nil
 ISToolTipInv.render = originalRender
 UITooltip.install()
-ISToolTipInv.render(panel)
-Support.assertEqual(itemMethods.DoTooltip, getmetatable(item).__index.DoTooltip, "AMS restores item DoTooltip after owner render")
-Support.assertEqual(originalTooltipCalls, 0, "standalone AMS owns the eligible item's embedded tooltip path")
-Support.assertEqual(embeddedTooltipCalls, 2, "AMS preserves both owner passes through DoTooltipEmbedded")
-Support.assertEqual(#completedLayouts, 2, "AMS creates one combined layout per owner pass")
-for _, layout in ipairs(completedLayouts) do
-    Support.assertEqual(layout.minLabelWidth, 80, "combined layout preserves vanilla's minimum label width")
-    Support.assertEqual(layout.minValueWidth, 80, "combined layout preserves vanilla's minimum value width")
-    Support.assertEqual(#layout.rows, 5, "vanilla and AMS rows share one combined layout")
-    Support.assertEqual(layout.rows[4].label, "Burden:", "burden follows the vanilla rows")
-    Support.assertClose(layout.rows[4].progress, 0.5, 1e-9, "combined layout preserves the burden fraction")
-    Support.assertEqual(layout.rows[5].label, "Breathing:", "breathing follows burden in the combined layout")
-    Support.assertEqual(layout.rows[5].value, "Restricted", "combined layout preserves breathing text")
-    Support.assertEqual(layout.renderX, 10, "combined layout derives vanilla left padding from font metrics")
-    Support.assertEqual(layout.renderY, 30, "combined layout renders at vanilla's embedded content offset")
-end
-Support.assertEqual(tooltipWidth, 385, "widest vanilla label and value determine the shared tooltip width")
-Support.assertEqual(tooltipHeight, 105, "combined layout owns the final tooltip height")
-Support.assertEqual(tooltipSuppressedDuringRender, 2, "misleading shoulder warning is suppressed for both owner passes")
-Support.assertEqual(tooltipKey, "Tooltip_item_NoBackpack", "shoulder tooltip state is restored after owner render")
-Support.assertEqual(reflectionCalls, 0, "release tooltip rendering never calls debug-only reflection helpers")
 
-local wrappedByAnotherMod = ISToolTipInv.render
-ISToolTipInv.render = function(self)
-    return wrappedByAnotherMod(self)
-end
-UITooltip.install()
+-- Nothing to show: vanilla renders untouched.
+signal = { burdenKg = 0.4, airflowResistance = 0, sealedRestriction = 0 }
+Support.assertEqual(#UITooltip.buildRows(item), 0, "light item has no rows")
 ISToolTipInv.render(panel)
-Support.assertEqual(embeddedTooltipCalls, 4, "rewrapping a competing owner preserves both combined-layout passes")
-Support.assertEqual(#completedLayouts, 4, "nested AMS wrappers create one combined layout per owner pass")
+Support.assertEqual(calls.original, 4, "rowless items keep vanilla DoTooltip")
 
+-- Breathing toggle hides the breathing row.
+signal = { burdenKg = 4.6, airflowResistance = 3.75, sealedRestriction = 1 }
+SandboxVars = { ArmorMakesSense = { EnableBreathingModel = false } }
+rows = UITooltip.buildRows(item)
+Support.assertEqual(#rows, 1, "breathing disabled leaves burden only")
+SandboxVars = nil
+
+itemMethods.IsInventoryContainer = function() return true end
+Support.assertEqual(#UITooltip.buildRows(item), 0, "containers get no AMS rows")
+itemMethods.IsInventoryContainer = nil
+
+-- A shared tooltip controller takes over row display.
 EuryTooltipController = {
     installed = true,
     providers = {},
-    registerProvider = function(self, id, provider)
-        self.providers[id] = provider
-    end,
+    registerProvider = function(self, id, provider) self.providers[id] = provider end,
 }
 UITooltip.install()
-Support.assertEqual(
-    EuryTooltipController.providers.ArmorMakesSense,
-    UITooltip._provider,
-    "AMS registers with an available shared tooltip controller"
-)
+Support.assertEqual(EuryTooltipController.providers.ArmorMakesSense, UITooltip._provider, "provider registered")
+local before = calls.original
 ISToolTipInv.render(panel)
-Support.assertEqual(#completedLayouts, 4, "provider ownership suppresses standalone duplicate layouts")
-Support.assertEqual(originalTooltipCalls, 2, "provider ownership preserves the vanilla owner render")
-Support.assertEqual(tooltipSuppressedDuringRender, 6, "provider path still suppresses the misleading shoulder warning")
-Support.assertEqual(#UITooltip._provider:getRows({ item = item }), 2, "provider exposes both AMS rows")
-
-LoadModel.itemToBurdenSignal = originalSignalResolver
+Support.assertEqual(calls.original, before + 2, "provider ownership leaves vanilla DoTooltip")
+local providerRows = UITooltip._provider:getRows({ item = item })
+Support.assertEqual(#providerRows, 2, "provider exposes both rows")
+Support.assertEqual(providerRows[1].value, "3/4", "provider pip text")
 EuryTooltipController = nil
 
 print("ams tooltip lifecycle checks passed")

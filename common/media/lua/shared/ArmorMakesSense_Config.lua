@@ -1,38 +1,58 @@
 ArmorMakesSense = ArmorMakesSense or {}
 
--- Shared defaults used by both client and shared modules.
+-- Shared defaults. Sandbox options override the keys exposed in sandbox-options.txt.
 ArmorMakesSense.DEFAULTS = {
-    -- Armor load -> endurance pressure.
-    ArmorLoadMin = 5.0,
-    BaseEnduranceDrainPerMinute = 0.0033,
-    EnduranceRegenPenalty = 0.45,
-
-    -- Secondary physical effects.
+    -- Sandbox channels.
+    PhysicalLoadScale = 1.0,
     EnableThermalModel = true,
+    EnableBreathingModel = true,
     EnableMuscleStrainModel = true,
     EnableSleepPenaltyModel = true,
-    MuscleStrainMaxExtra = 0.15,
-    MuscleStrainLoadStart = 3.0,
-    MuscleStrainLoadFull = 22.0,
-    ThermalContributionMax = 14.0,
 
-    -- Vanilla rate plus immediate native movement floors. Brisk walking stays
-    -- free; modest equivalent-load weights avoid exaggerating mask performance.
+    -- Burden: worn mass in effective kg. Each worn piece gets a small mass
+    -- allowance so ordinary garments stay near zero; mass far from the trunk
+    -- costs more per kg (see LoadModel placement table).
+    BurdenItemMassAllowanceKg = 0.5,
+    BurdenBulkPerRunPenalty = 6.0,
+    BurdenBulkPerDiscomfort = 4.0,
+    BurdenClothingAllowanceKg = 3.5,
+
+    -- Load fraction = burden over body mass, scaled by Strength. The upper
+    -- clamp stands in for lean mass: extra body fat does not carry armor.
+    BodyMassMinKg = 50,
+    BodyMassMaxKg = 90,
+    StrengthFactorBase = 1.3,
+    StrengthFactorPerLevel = 0.06,
+
+    -- Endurance: AMS scales vanilla's own observed endurance change.
+    -- Standing still under load slows recovery with the square of the load
+    -- (never below zero); walking slows it linearly and can turn it into
+    -- drain. Any endurance use costs one load-proportional extra, because
+    -- vanilla already charges faster paces more.
+    StandRegenLoadWeight = 1.0,
+    WalkRegenLoadWeight = 2.0,
+    WalkRegenFloor = -0.5,
+    DrainLoadWeight = 1.5,
+
+    -- Heat: insulation while overheating slows recovery and adds drain.
+    ThermalRegenPenaltyMax = 0.5,
+    ThermalDrainWeight = 0.25,
+
+    -- Breathing: masks and sealed suits add drain at high exertion.
     BreathingEffortOnset = 0.20,
-    BreathingDynamicLoadWeight = 0.70,
-    BreathingSealedDynamicLoadWeight = 1.00,
+    BreathingDrainWeight = 0.35,
 
-    -- Sleep-in-armor continuous fatigue recovery slowdown.
-    SleepRigidityFatigueRate = 0.0045,
+    -- Melee strain from armor on the swing chain (effective kg).
+    MuscleStrainMaxExtra = 0.15,
+    MuscleStrainArmKgStart = 1.0,
+    MuscleStrainArmKgFull = 8.0,
 
-    -- Activity bands.
-    ActivityIdle = 0.35,
-    ActivityWalk = 0.75,
-    ActivityJog = 1.00,
-    ActivitySprint = 1.35,
+    -- Sleep: rigid armor slows fatigue recovery while asleep.
+    SleepPenaltyMax = 0.5,
+    SleepPenaltyPerRigidKg = 0.025,
 
-    DtMaxMinutes = 3,
-    DtCatchupMaxSlices = 240,
+    -- Observed-delta steps longer than this are rebased instead of applied.
+    MaxStepMinutes = 30,
 }
 
 return ArmorMakesSense.DEFAULTS

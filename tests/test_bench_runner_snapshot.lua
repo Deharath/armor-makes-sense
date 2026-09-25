@@ -26,8 +26,7 @@ local Snapshot = dofile(
 local runner = {
     id = "stream-test",
     label = "regression",
-    preset = "benchmark_breathing_quick",
-    mode = "sim",
+    preset = "breathing_quick",
     speedReq = 8,
     repeats = 1,
     setsApplied = 1,
@@ -44,7 +43,7 @@ local runner = {
 local opened, path, openError = Snapshot.openStreamWriter(runner)
 Support.assertTrue(opened, openError or "stream opens")
 Support.assertEqual(path, "benchlogs/bench_regression_stream-test.log", "stream path")
-Snapshot.streamAppend(runner, "[AMS_BENCH_START] id=stream-test preset=benchmark_breathing_quick", "start")
+Snapshot.streamAppend(runner, "[AMS_BENCH_START] id=stream-test preset=breathing_quick", "start")
 Snapshot.streamLine(runner, "[AMS_BENCH_SAMPLE] id=stream-test tag=breathing_live_native_driver")
 runner.index = 1
 Snapshot.streamAppend(runner, "[AMS_BENCH_DONE] id=stream-test reason=completed", "done")

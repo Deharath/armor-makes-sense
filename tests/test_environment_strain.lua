@@ -25,44 +25,37 @@ function player:isMoving() return self.moving end
 function player:isAttackStarted() return self.attacking end
 
 Support.assertEqual(Environment.getPostureLabel(player), "stand", "standing posture")
+Support.assertFalse(Environment.isResting("stand"), "standing is not resting")
 player.sitting = true
-Support.assertEqual(Environment.getPostureLabel(player), "sit_ground", "sitting posture")
+Support.assertEqual(Environment.getPostureLabel(player), "sit", "sitting posture")
+Support.assertTrue(Environment.isResting("sit"), "sitting is resting")
 player.sitting = false
+player.seatedVehicle = true
+Support.assertEqual(Environment.getPostureLabel(player), "sit_vehicle", "vehicle posture")
+Support.assertTrue(Environment.isResting("sit_vehicle"), "vehicle seat is resting")
+player.seatedVehicle = false
 player.asleep = true
 Support.assertEqual(Environment.getPostureLabel(player), "sleep", "sleep posture")
+Support.assertFalse(Environment.isResting("sleep"), "sleep is handled by the sleep model")
 player.asleep = false
 
-local activity = Environment.resolveActivity(player, defaults)
-Support.assertEqual(activity.label, "idle", "idle activity")
-Support.assertClose(activity.factor, defaults.ActivityIdle, 1e-9, "idle factor")
-
+Support.assertEqual(Environment.resolveActivity(player), "idle", "idle activity")
 player.attacking = true
-activity = Environment.resolveActivity(player, defaults)
-Support.assertEqual(activity.label, "idle", "attacking does not invent an activity band")
-Support.assertClose(activity.factor, defaults.ActivityIdle, 1e-9, "attacking retains idle factor")
+Support.assertEqual(Environment.resolveActivity(player), "idle", "attacking does not invent an activity band")
 player.attacking = false
 player.asleep = true
-activity = Environment.resolveActivity(player, defaults)
-Support.assertEqual(activity.label, "sleep", "sleep activity")
-Support.assertClose(activity.factor, 0, 1e-9, "sleep activity factor")
+Support.assertEqual(Environment.resolveActivity(player), "sleep", "sleep activity")
 player.asleep = false
-
 player.moving = true
-activity = Environment.resolveActivity(player, defaults)
-Support.assertEqual(activity.label, "walk", "walk activity")
-Support.assertClose(activity.factor, defaults.ActivityWalk, 1e-9, "walk factor")
+Support.assertEqual(Environment.resolveActivity(player), "walk", "walk activity")
 player.running = true
-activity = Environment.resolveActivity(player, defaults)
-Support.assertEqual(activity.label, "run", "run activity")
-Support.assertClose(activity.factor, defaults.ActivityJog, 1e-9, "run factor")
+Support.assertEqual(Environment.resolveActivity(player), "run", "run activity")
 player.sprinting = true
-activity = Environment.resolveActivity(player, defaults)
-Support.assertEqual(activity.label, "sprint", "sprint activity")
-Support.assertClose(activity.factor, defaults.ActivitySprint, 1e-9, "sprint factor")
+Support.assertEqual(Environment.resolveActivity(player), "sprint", "sprint activity")
 
-Support.assertClose(Strain.computeArmorStrainExtra(defaults, { swingChainLoad = 3 }), 0, 1e-9, "strain start threshold")
-Support.assertClose(Strain.computeArmorStrainExtra(defaults, { swingChainLoad = 12.5 }), 0.053033008589, 1e-9, "strain midpoint")
-Support.assertClose(Strain.computeArmorStrainExtra(defaults, { swingChainLoad = 22 }), 0.15, 1e-9, "strain full threshold")
+Support.assertClose(Strain.computeArmorStrainExtra(defaults, { armKg = 1 }), 0, 1e-9, "strain start threshold")
+Support.assertClose(Strain.computeArmorStrainExtra(defaults, { armKg = 4.5 }), 0.053033008589, 1e-9, "strain midpoint")
+Support.assertClose(Strain.computeArmorStrainExtra(defaults, { armKg = 8 }), 0.15, 1e-9, "strain full threshold")
 
 local meleeWeapon = {
     getType = function() return "Axe" end,
@@ -84,7 +77,7 @@ end
 
 local computeWornProfile = LoadModel.computeWornProfile
 LoadModel.computeWornProfile = function()
-    return { swingChainLoad = 22 }
+    return { armKg = 8 }
 end
 
 SandboxOptions = {
@@ -122,7 +115,7 @@ local cachedExtra = Strain.applyArmorStrainOverlay(
     player,
     meleeWeapon,
     defaults,
-    { swingChainLoad = 12.5 }
+    { armKg = 4.5 }
 )
 Support.assertClose(cachedExtra, 0.053033008589, 1e-9, "cached swing profile amount")
 Support.assertEqual(#appliedStrain, 2, "cached swing profile write count")

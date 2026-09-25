@@ -11,11 +11,11 @@ client owns presentation, local singleplayer execution, and development tools.
 - [Runtime Reference](./armor_makes_sense-runtime_reference.md): classification,
   load aggregation, physiology, strain, sleep, slots, and configuration
 - [Multiplayer Reference](./armor_makes_sense-mp_reference.md): authority,
-  demand-driven snapshot transport, sleep synchronization, and network state
+  demand-driven snapshot transport, and network state
 - [UI Reference](./armor_makes_sense-ui_reference.md): tooltips, Burden panel,
   refresh behavior, and controller handling
 - [Testing Reference](./armor_makes_sense-testing_reference.md): test API,
-  benchmark runner, scenarios, and report pipeline
+  benchmark runner, diagnostics, and report pipeline
 - [Design Principles](./armor_makes_sense-design_manifesto.md): gameplay goals
   and non-goals
 
@@ -27,146 +27,93 @@ client owns presentation, local singleplayer execution, and development tools.
 compatibility provider, and asks `ArmorMakesSense_Bootstrap.lua` to select
 exactly one client role. Production modules require their collaborators
 directly. `ArmorMakesSense_ClientRuntime.lua` owns client lifecycle state,
-logging, version reporting, and role-aware player-state access. In singleplayer,
-`EveryOneMinute` advances the gameplay model for every active local player,
-`OnPlayerUpdate` handles sleep-time updates, and combat events apply the
-attacking local player's muscle-strain overlay. Sleeping advances fatigue recovery penalties but pauses
-the endurance pipeline. The SP runtime registers only
-handlers with active behavior; its former no-op weapon-swing subscription was
-removed.
+logging, version reporting, protected calls, and role-aware player-state access.
 
-Development builds load `testing/ArmorMakesSense_00_DevBootstrap.lua` separately.
-It owns test-module imports, command contexts, global console bindings,
-environment locks, equilibrium resets, and benchmark pumps. None of those paths
-are present in Main or the production runtime modules.
-Its event registrations replace earlier development handlers after Lua reload,
-and benchmark speed restoration uses PZ's configured `getTrueMultiplier` value.
+In singleplayer, `EveryOneMinute` calls `core/ArmorMakesSense_Tick.lua` for each
+active local player. The tick samples worn gear, runs
+`Physiology.tick(player, state, options, profile, nowMinutes)`, and refreshes
+UI. `OnPlayerAttackFinished` applies the attacking local player's muscle-strain
+overlay through `ArmorMakesSense_StrainShared.lua`.
+
+Sleeping is handled inside the same minute tick. The sleep model observes
+vanilla fatigue recovery, applies only the stiff-gear recovery penalty, and
+causes the endurance path to rebase rather than scale an endurance delta.
+Planning, bed choice, and sleep duration remain vanilla.
+
+Development builds load `testing/ArmorMakesSense_00_DevBootstrap.lua`
+separately. It owns test-module imports, command contexts, global console
+bindings, environment locks, equilibrium resets, development-panel startup, and
+benchmark pumps. Those paths are not imported by the production runtime.
 
 ### Multiplayer
 
-`ArmorMakesSense_MPServerRuntime.lua` owns endurance, sleep fatigue, wake
-correction, and melee strain. Its weapon-swing handler delegates eligibility,
-vanilla-option gating, magnitude, and stat application to the same shared
-strain policy used in SP and reuses the server's latest cached worn profile.
-Full player-addressed snapshots are demand-driven: the visible Burden panel or a
-support-report export asks for current UI state when needed. A clothing change
-only dirties the UI, which recomputes deterministic gear burden and driver rows
-locally on its next frame without requiring a clothing-specific request. Periodic presentation
-requests contain no gameplay or lifecycle input and never invoke simulation.
-The server recomputes dynamic telemetry against an isolated state copy without
-advancing endurance, catch-up, sleep, or thermal authority. Client and server
-independently enforce a five-second request floor, and the client suppresses
-duplicates while a request is pending.
+`server/ArmorMakesSense_MPServerRuntime.lua` is the multiplayer authority for
+endurance, sleep fatigue penalties, melee strain, and snapshot production. It
+registers `OnClientCommand`, `EveryOneMinute`, and `OnWeaponSwing`:
 
-The MP client runtime is inert when loaded. The production bootstrap calls its
-explicit registration entrypoint only when `isClient()` identifies a
-multiplayer client. SP gameplay handlers are not registered in that role. The
-MP runtime registers only server-command and player lifecycle handlers; it does
-not subscribe snapshot transport to clothing or minute events.
+- `EveryOneMinute` samples each online player, runs the shared physiology tick,
+  stores `mpState.runtimeSnapshot`, attaches cost drivers, and syncs fatigue
+  with `syncPlayerStats(player, 16)` when AMS added sleep fatigue.
+- `OnClientCommand` accepts `request_snapshot`, checks
+  `ArmorMakesSense_MPRequestPolicy.lua`, refreshes a read-only projection, and
+  sends the encoded snapshot.
+- `OnWeaponSwing` uses the latest cached worn profile for up to one wall-clock
+  second, then applies the shared strain overlay.
 
-The MP server and SP client use the same shared load, environment, strain,
-physiology, and simulation-advance modules. Coordinators sample PZ state and
-own UI and network side effects; the shared advance operation owns
-elapsed accumulation, active catch-up limits, slicing, and model call order.
-Both coordinators omit the endurance callback during sleep.
+The MP client never advances gameplay. `ArmorMakesSense_MPClientRuntime.lua`
+registers only `OnServerCommand`, `OnConnected`, and `OnCreatePlayer` when the
+bootstrap selects the multiplayer role. The visible Burden panel requests
+dynamic server telemetry when its cache is missing or older than 30 wall-clock
+seconds. Local clothing changes dirty the UI; deterministic item rows and gear
+burden are rebuilt locally without a request.
+
+Both SP and MP use one authoritative tick per game minute. If there is no prior
+minute, elapsed time is zero, the player is asleep, or elapsed time exceeds
+`MaxStepMinutes` (30 by default), the physiology state is rebased instead of
+applying an endurance adjustment. `Physiology.project` is read-only and is used
+for UI refreshes and MP snapshot requests.
 
 ### Vanilla Runtime Contracts
 
 The model integrations were checked against the installed Project Zomboid
-42.20.0 runtime. Vanilla alone initializes `SleepingEvent`; AMS never calls
-`setPlayerFallAsleep` after vanilla has started sleep because that API resets
-sleep-event state and reapplies the delay-to-sleep timer. MP wake reconciliation
-only accepts an explicit compact server `WakeTransition` sleep-state message;
-an ordinary UI snapshot cannot cancel sleep. When the sleep model is enabled,
-the automatic sleep hook repairs a missing or near-zero wake interval before
-applying the planner penalty, preventing a broken schedule from immediately
-waking the player and consuming the sleep attempt. AMS otherwise only extends
-vanilla's existing wake time. When the sleep model is disabled, AMS installs no
-sleep dialog or automatic-sleep wrappers, advertises no sleep compatibility
-capabilities, performs no MP sleep scan or bed-hint handling, and clears its
-transient sleep state without observing the session. This installation decision
-is made at startup, so changing the sandbox option requires a restart. Active
-multiplayer sleep clients send only a bed-type hint and preserve the
-server-delegated `SleepAllowed` branch.
-The server applies that hint to the vanilla player so continuous bed recovery
-matches the client, while AMS retains only the bounded wake reconciliation
-needed when the server does not observe vanilla's client-side wake adjustment.
-Both the automatic sleep path and the normal sleep dialog send this hint after
-vanilla has placed the player to sleep.
-Authoritative MP wake reconciliation calls vanilla `SleepingEvent:wakeUp` with
-packet echo suppressed instead of directly editing player sleep fields. AMS
-does not claim this authority when its sleep model is disabled or CMS owns
-fatigue coordination.
-
-All AMS/CMS sleep handoffs resolve through
-`ArmorMakesSense_SleepOwnership.lua`. Planner, continuous-fatigue, and
-wake-adjustment ownership are separate capabilities; gameplay coordinators do
-not duplicate compatibility probes or capability names.
+42.20.0 runtime.
 
 Thermoregulator node samples use vanilla's normalized `getInsulationUI()` and
-`getWindresistUI()` values and are weighted by `ThermalNode` skin surface.
-The raw getters are not used: their values contain nonlinear per-garment
+`getWindresistUI()` values and are weighted by `ThermalNode` skin surface. The
+raw getters are not used because their values contain nonlinear per-garment
 transforms and layer bonuses and are not bounded to the model's 0-1 resistance
 scale. Equal weighting is used only when `getSkinSurface()` is unavailable.
-This matches vanilla's UI normalization and use of body-part surface area and
-prevents either raw layer counts or small regions from dominating whole-body
-telemetry.
-
-Physical load intentionally starts from `InventoryItem.getEquippedWeight()`.
-In the checked runtime this applies vanilla's `0.3` equipped-or-worn
-encumbrance multiplier. AMS tuning was calibrated against that value; replacing
-it with raw item mass would be a model rebalance, not an accuracy correction.
 
 Shared gameplay modules import `ArmorMakesSense_UtilsShared.lua` and
 `ArmorMakesSense_StatsShared.lua` directly. They do not accept mutable runtime
-contexts. Activity sampling describes movement and sleep only. Combat events
-apply one shared per-swing armor strain policy and create no sampled state.
-Breathing demand takes the greater of vanilla's smoothed thermoregulator rate
-and the 3.1/6.9/9.5 MET anchor for the existing native walk/run/sprint label.
-The public metabolic-target getter is not used because vanilla clears that
-scratch field before Lua events can sample it. AMS does not maintain a parallel
-combat or exertion latch.
+contexts. Stat writes use the shared execution-role resolver, so a server or
+singleplayer client can write gameplay stats while a pure MP client cannot.
 
-The shared load model requires both equipment classifiers directly. It computes
-armor signals once per included item and evaluates those signals through the
-classifier's pure decision entrypoint; runtime contexts do not carry duplicate
-keyword tables or fallback classification formulas.
+Activity sampling mirrors vanilla posture and movement flags: sleep, seated
+rest, standing, walk, run, and sprint. Breathing demand uses the greater of the
+thermoregulator metabolic rate and AMS movement anchors for the sampled
+activity. AMS does not maintain a parallel combat or exertion latch.
 
-Worn equipment is normalized as burden rather than gated by the armor label.
-`itemToBurdenSignal` records why a row was included and why it was classified
-as armor-like. The explicit `AMSIncludeBurden`, `AMSExcludeBurden`, and
-`AMSArmor` tags form the narrow override contract for third-party gear.
-Physical calculations read movement modifiers cached before AMS applies its
-direct speed rebalance, so movement policy cannot feed back into burden.
-Thermal resistance is sampled separately from vanilla's effective
-thermoregulator nodes and is not inferred from item defense or movement stats.
-The Burden panel shows retained heat only as a relative active-pressure bar
-after the contribution reaches its visibility floor; exact values remain in
-support reports. Body heat alone is neither presented nor applied as an
-equipment penalty.
+The shared load model computes signals once per included item and caches them
+by full type, body location, and actual weight. Rigidity comes from the item's
+original vanilla discomfort; respiratory data comes from the breathing
+classifier.
 
-The worn profile has one canonical name per channel: `physicalLoad`,
-`airflowResistance`, `sealedRestriction`, `rigidityLoad`, and `swingChainLoad`.
-`driverCount` names the number of physical cost drivers. Thermal resistance is
-physiology telemetry, not a worn-profile channel. Historical aliases and the
-ambiguous precomputed combined load are not published.
+Worn equipment is normalized as effective kilograms rather than gated by the
+armor label. The explicit `AMSIncludeBurden`, `AMSExcludeBurden`, and
+`AMSArmor` tags are the override contract for third-party gear. Cosmetic items
+and containers are excluded unless explicitly included. Physical calculations
+read the original discomfort values cached before AMS zeroes script discomfort,
+so movement and discomfort policy cannot feed back into burden.
 
-Respiratory equipment publishes two distinct signals: additive
-`airflowResistance` and explicit `sealedRestriction`. Worn profiles sum airflow
-but take the maximum sealed restriction. Physiology never infers a sealed state
-from an aggregate numeric threshold, and breathing cannot reduce unrelated
-physical burden.
+Respiratory equipment publishes additive `airflowResistance` and maxed
+`sealedRestriction`. Physiology never infers a sealed state from an aggregate
+numeric threshold, and breathing cannot reduce unrelated burden.
 
 Server snapshots are encoded and decoded by
 `ArmorMakesSense_MPSnapshotCodec.lua`. The codec owns the wire-field mapping,
-driver-row mapping, defaults, and schema validation. Schema version 6 is a hard
-contract; clients reject snapshots with a missing or different version.
-
-Simulation is explicitly fail-open. Results distinguish attempted, committed,
-and discarded slices/minutes; a failed slice is discarded because a callback
-may already have partially mutated PZ state. Stat writes use one server-first
-execution-role resolver, so a listen server retains authority while a pure MP
-client cannot write gameplay stats.
+driver-row mapping, defaults, and schema validation. Schema version 7 is the
+hard contract; clients reject snapshots with a missing or different version.
 
 ## Source Layout
 
@@ -176,7 +123,7 @@ client cannot write gameplay stats.
 | `common/media/lua/shared/` | Shared configuration, classification, models, compatibility, and slot rules |
 | `common/media/lua/client/` | Client entrypoints, UI, SP runtime, diagnostics, and testing |
 | `common/media/lua/server/` | MP authority and server diagnostics |
-| `common/media/sandbox-options.txt` | Server-authoritative gameplay toggles |
+| `common/media/sandbox-options.txt` | Server-authoritative gameplay options |
 | `42/mod.info` | Build 42 metadata override |
 
 `common/` is the runtime source of truth. `42/` contains metadata only and does
@@ -186,168 +133,238 @@ not duplicate `common/media`.
 
 ### Entry Points
 
-- `client/ArmorMakesSense_Main.lua`: client startup, sleep hooks, and
-  compatibility provider
+- `client/ArmorMakesSense_Main.lua`: client startup, slot/speed initialization,
+  UI installation, and compatibility provider registration
 - `client/core/ArmorMakesSense_Bootstrap.lua`: client role detection and
   exclusive runtime registration
-- `client/ArmorMakesSense_MPClientRuntime.lua`: MP snapshot transport and client
-  reconciliation with explicit, side-effect-free registration
-- `server/ArmorMakesSense_MPServerRuntime.lua`: MP gameplay authority and
-  snapshot production
-- `client/ArmorMakesSense_SleepHooks.lua`: sleep planner integration and MP bed-type
-  hint transport
+- `client/ArmorMakesSense_MPClientRuntime.lua`: MP snapshot transport with
+  explicit, side-effect-free registration
+- `server/ArmorMakesSense_MPServerRuntime.lua`: MP gameplay authority,
+  projection snapshots, fatigue sync, and strain handling
 
 ### Shared Model
 
 - `ArmorMakesSense_Config.lua`: default tuning values
 - `ArmorMakesSense_UtilsShared.lua`: numeric, boolean, protected-method, role,
-  world-time, and wall-clock helpers used by both authorities, classifiers,
-  sleep hooks, and script-item rebalance code
+  world-time, and wall-clock helpers
 - `ArmorMakesSense_Options.lua`: canonical typed sandbox-option resolution for
   SP and MP authority
-- `ArmorMakesSense_StatsShared.lua`: production endurance/fatigue authority plus
-  read-only body-state and metabolic telemetry; MP client writes are blocked at
-  the authority boundary
-- `ArmorMakesSense_ArmorClassifier.lua`: canonical armor signals and classification
-- `ArmorMakesSense_BreathingClassifier.lua`: canonical respiratory equipment signals
-- `ArmorMakesSense_LoadModelShared.lua`: per-item signals and canonical worn-gear analysis for gameplay, UI, MP snapshots, and reports
+- `ArmorMakesSense_StatsShared.lua`: endurance/fatigue/stat IO and metabolic
+  telemetry with MP-client writes blocked
+- `ArmorMakesSense_BreathingClassifier.lua`: canonical respiratory equipment
+  signals
+- `ArmorMakesSense_LoadModelShared.lua`: per-item burden signals, worn-profile
+  aggregation, carrier resolution, and load fraction
 - `ArmorMakesSense_EnvironmentShared.lua`: activity and posture sampling
-- `ArmorMakesSense_ThermalModel.lua`: effective node resistance, sustained hot
-  pressure, cold suitability, and thermal contribution
-- `ArmorMakesSense_BreathingModel.lua`: pure metabolic-effort and respiratory contribution result
-- `ArmorMakesSense_EnduranceModel.lua`: pure regeneration and drain composition result
-- `ArmorMakesSense_SleepModel.lua`: pure vanilla-recovery and rigidity-penalty result
-- `ArmorMakesSense_SleepPhysiology.lua`: sleep-session snapshots, planner
-  contribution, fatigue application, and wake reconciliation
+- `ArmorMakesSense_ThermalModel.lua`: effective thermal resistance, hot
+  pressure, cold suitability, and `heat`
+- `ArmorMakesSense_BreathingModel.lua`: respiratory severity, effort ramp, and
+  breathing pressure
+- `ArmorMakesSense_EnduranceModel.lua`: observed-delta recovery and drain
+  scaling
+- `ArmorMakesSense_SleepModel.lua`: stiff-gear fatigue recovery penalty
 - `ArmorMakesSense_PhysiologyShared.lua`: PZ sampling, model composition,
-  endurance compatibility, result application, and runtime snapshots
-- `ArmorMakesSense_Simulation.lua`: elapsed-time accumulation, active catch-up
-  policy, bounded slicing, and shared sleep/endurance advancement
-- `ArmorMakesSense_StrainShared.lua`: melee strain eligibility and magnitude
-- `ArmorMakesSense_SpeedRebalance.lua`: discomfort removal, curated speed values,
-  item reslots, and removal of obsolete shoulder-pad script tooltips
-- `ArmorMakesSense_SlotCompat.lua`: custom body locations and compatibility rules
+  compatibility callbacks, stat writes, and runtime snapshots
+- `ArmorMakesSense_StrainShared.lua`: melee strain eligibility and arm-burden
+  magnitude
+- `ArmorMakesSense_SpeedRebalance.lua`: discomfort removal, combat-speed rule,
+  item reslots, and shoulder-pad tooltip cleanup
+- `ArmorMakesSense_SlotCompat.lua`: custom body locations and compatibility
+  rules
 - `ArmorMakesSense_Compat.lua`: `MakesSenseCompat` registry
 - `ArmorMakesSense_MPCompat.lua`: MP protocol constants and build identity
 - `ArmorMakesSense_RuntimeState.lua`: isolated transient SP, MP-client, and
-  MP-server state stores
-- `ArmorMakesSense_MPSnapshotCodec.lua`: versioned server snapshot wire codec
-- `server/ArmorMakesSense_MPSnapshotBuilder.lua`: server runtime snapshot
-  shaping, including detailed breathing telemetry
-- `server/ArmorMakesSense_MPRequestPolicy.lua`: request-triggered snapshot
-  throttling, queueing, and completion
-- `client/testing/ArmorMakesSense_BenchRunnerSnapshot.lua`: streamed benchmark
-  artifact writer with compact snapshot fallback; successful streams are finalized
-  in place so transient samples and probes remain available to parsers
-- benchmark step preparation owns time pinning and rebases the simulation clock;
-  activity drivers preserve that continuous timeline instead of resetting it
+  MP-server weak-key state stores
+- `ArmorMakesSense_MPSnapshotCodec.lua`: schema-versioned server snapshot wire
+  codec
+- `server/ArmorMakesSense_MPRequestPolicy.lua`: request acceptance, queueing,
+  and completion flags
 
 ### Client Core
 
-- `ArmorMakesSense_ClientRuntime.lua`: client lifecycle flags, logging,
-  version metadata, protected PZ calls, and role-aware state lookup
+- `ArmorMakesSense_ClientRuntime.lua`: client lifecycle flags, logging, version
+  metadata, protected PZ calls, and role-aware state lookup
 - `ArmorMakesSense_State.lua`: options and per-player state initialization
-- `ArmorMakesSense_Tick.lua`: singleplayer scheduling, input sampling, and UI
-- `ArmorMakesSense_Runtime.lua`: event registration and lifecycle guards
+- `ArmorMakesSense_Tick.lua`: singleplayer minute scheduling, load sampling,
+  physiology tick, and UI refresh
+- `ArmorMakesSense_Runtime.lua`: SP event registration and lifecycle guards
 - `ArmorMakesSense_Combat.lua`: singleplayer combat event handling
-- `ArmorMakesSense_UI.lua`: Burden panel, character-tab integration, help, and
-  support export; already-created character windows are resolved through
-  42.20's per-player UI data rather than a class-level singleton
-- `ArmorMakesSense_PresentationPolicy.lua`: shared physical tiers,
-  active-pressure visibility, and diagnostic effect formatting
-- `ArmorMakesSense_UITooltip.lua`: compositional wearable tooltip extension and
-  optional shared-controller provider for AMS burden and breathing rows; the
-  standalone path supplies one layout to 42.20's `DoTooltipEmbedded` contract so
-  vanilla and AMS rows share column measurement, rendering, and final bounds,
-  deriving the title offset and padding from the tooltip's public font and line
-  metrics without debug-only Java reflection
-- `ArmorMakesSense_SupportReport.lua`: support report collection and formatting;
-  SP and MP reports preserve raw thermal evidence, snapshot age, quantitative
-  endurance effects, and option-aware sleep state
+- `ArmorMakesSense_Draw.lua`: shared pip drawing vocabulary
+- `ArmorMakesSense_BurdenView.lua`: pure Burden tab view model
+- `ArmorMakesSense_BurdenPanel.lua`: Burden tab drawing, body map, and support
+  export button
+- `ArmorMakesSense_UI.lua`: character-tab integration, fallback window, and help
+- `ArmorMakesSense_PresentationPolicy.lua`: shared LOAD, ITEM, HEAT,
+  BREATHING, SLEEP, and ARM pip bands
+- `ArmorMakesSense_UITooltip.lua`: wearable tooltip pip rows and optional shared
+  tooltip-controller provider
+- `ArmorMakesSense_SupportReport.lua`: support report collection and formatting
 
-Production client modules do not use mutable dependency contexts. The
-development benchmark modules retain their separate context because their job
-is to run controlled substitutions and scenarios rather than game runtime.
+Production client modules do not use mutable dependency contexts. Development
+benchmark modules retain a separate context because their job is to run
+controlled substitutions and scenarios rather than game runtime.
 
 ### Diagnostics and Testing
 
-- `client/diagnostics/` and `server/diagnostics/`: MP ping, dump, and sleep
-  diagnostics for development builds
+- `client/diagnostics/` and `server/diagnostics/`: MP ping and diagnostic dump
+  harnesses for development builds
 - `client/testing/`: command API, gear helpers, scenarios, benchmark execution,
   snapshots, and reports
 - `client/testing/ArmorMakesSense_00_DevBootstrap.lua`: development-only module
   loading, context construction, global API binding, and event pumps
 - `client/testing/ArmorMakesSense_DevPanel.lua`: development-only live model
   inspector and operator controls for environment, gear, reports, and
-  benchmarks; protected single-value reads are collapsed before numeric
-  conversion to avoid Kahlua treating extra return slots as a numeric base
+  benchmarks
 - `client/testing/ArmorMakesSense_Reset.lua`: destructive equilibrium and body
   reset helpers used by controlled tests
 - `client/testing/ArmorMakesSense_TestStats.lua`: development-only thirst,
   discomfort, wetness, and body-temperature setters
-- benchmark catalogs and scenarios are validated before execution; unknown
-  blocks or activities, missing production runtime telemetry, and incomplete
-  parser inputs fail closed instead of producing zero-filled measurements
-- the scenario language contains only block and activity modes used by shipped
-  presets; removed prototype modes are not retained as dormant capability
-- real-sleep benchmarks accept only fatigue-threshold recovery; external wakes,
-  failed entry, and safety timeouts are invalid measurements
-- native benchmark movement is explicitly cancelled before path state is
-  cleared; transient thermal runs use minute-aligned activity windows and end
-  their rest sample on a fresh production tick
-- coordinate resets use PZ's `teleportTo` lifecycle; climate overrides preserve
-  the previous admin channel state; benchmark cleanup restores the exact worn
-  item objects and emits the vanilla clothing-update event
-- benchmark plans do not support perk/XP mutation; controlled equilibrium reset
-  remains intentionally destructive and is for disposable test characters
-Workshop packaging excludes the development testing and diagnostics modules.
-It validates that remaining Lua has no development references and does not
-rewrite source files during staging.
+
+Workshop packaging excludes development testing and diagnostics modules. Release
+shape validation rejects development references in production Lua.
+
+## Load, Physiology, and Presentation Fields
+
+`ArmorMakesSense_LoadModelShared.lua` computes each included worn item's burden:
+
+```text
+burdenKg = max(0, weightKg - 0.5) * placementFactor + bulkKg
+bulkKg = originalRunPenalty * 6 + originalDiscomfort * 4
+```
+
+Placement is body-location based: trunk locations are near 1.0, full-body and
+leg locations are higher, swing-chain arm/hand locations are higher, and feet
+cost the most per kilogram. Footwear run modifiers are ignored as burden input
+because they describe soles and traction. Cost drivers are items with
+`burdenKg >= 1.5` (`LoadModel.COST_DRIVER_THRESHOLD_KG`).
+
+The worn profile publishes these gameplay channels:
+
+| Field | Meaning |
+|---|---|
+| `burdenKg` | Total effective kilograms from included worn items |
+| `massKg` | Mass above the per-item allowance |
+| `bulkKg` | Burden from cached vanilla run penalty and discomfort |
+| `armKg` | Swing-chain effective kilograms used by melee strain |
+| `rigidKg` | Weight of stiff gear (vanilla discomfort above 0) multiplied by sleep-contact share |
+| `airflowResistance` | Sum of respiratory airflow restriction |
+| `sealedRestriction` | Maximum sealed-suit or sealed-mask restriction |
+| `driverCount` | Number of cost drivers at or above 1.5 effective kg |
+
+`loadFraction` is carrier-relative:
+
+```text
+max(0, burdenKg - 3.5) / bodyKg * (1.3 - 0.06 * Strength) * PhysicalLoadScale
+```
+
+Body mass is clamped to 50-90 kg and Strength to 0-10. `PhysicalLoadScale` is a
+sandbox multiplier from 0 to 3.
+
+`ArmorMakesSense_ThermalModel.lua` returns `heat` as retained thermal resistance
+multiplied by current heat strain, clamped to 0-1. It also exposes thermal
+resistance, hot pressure, and cold suitability for presentation and reports.
+
+`ArmorMakesSense_BreathingModel.lua` returns respiratory severity from airflow
+and seal, then multiplies it by an exertion ramp above the default 0.2 onset.
+Walking sits at the onset, so pressure appears under harder exertion or higher
+metabolic demand. `EnableBreathingModel` gates pressure, not severity.
+
+`ArmorMakesSense_EnduranceModel.lua` observes vanilla's endurance change since
+the prior authoritative tick. Positive deltas are recovery and are scaled down:
+by the square of the load while standing (never below zero), linearly while
+walking, where the configured floor can turn recovery into drain. Negative
+deltas are amplified by one load weight whatever the pace, plus heat and
+breathing pressure. Seated postures recover at the vanilla rate, while heat can
+affect both recovery and drain.
+Nutrition Makes Sense contributions compose through `MakesSenseCompat` as
+`regenScale` and `extraDrain`.
+
+`ArmorMakesSense_SleepModel.lua` uses only `rigidKg`. While the player is
+asleep, `penaltyFraction = min(0.5, rigidKg * 0.025)` by default. AMS observes
+vanilla fatigue recovery and adds back that fraction as fatigue unless Caffeine
+Makes Sense advertises `fatigue_coordinator`, in which case CMS reads the same
+fraction from the sleep contribution callback.
+
+`ArmorMakesSense_StrainShared.lua` uses `armKg`: no extra strain at or below 1
+kg, ramping to `MuscleStrainMaxExtra` 0.15 at 8 kg with a `t^1.5` curve.
+
+`ArmorMakesSense_SpeedRebalance.lua` zeroes `DiscomfortModifier` on every
+wearable at boot after caching the original value for burden. It leaves
+`RunSpeedModifier` alone and sets `CombatSpeedModifier` by one rule: swing-chain
+locations lose 1% per effective kg, capped at 5%.
+
+## Runtime Snapshots
+
+`Physiology.tick` and `Physiology.project` produce the runtime snapshot used by
+UI, reports, MP transport, diagnostics, and benchmarks.
+
+Base snapshot fields:
+
+| Field | Meaning |
+|---|---|
+| `activityLabel`, `postureLabel` | Current sampled activity and posture |
+| `burdenKg`, `armKg`, `rigidKg`, `driverCount` | Worn-profile summary |
+| `bodyKg`, `strength`, `loadFraction` | Carrier and load fraction |
+| `heat`, `thermalResistance`, `hotPressure`, `coldSuitability` | Thermal model output |
+| `airflowResistance`, `sealedRestriction` | Respiratory gear inputs |
+| `breathingSeverity`, `breathingEnabled` | Breathing presentation state |
+| `restRegenScale`, `standRegenScale`, `walkRegenScale` | Recovery scales for sitting, standing and walking |
+| `runDrainScale`, `sprintDrainScale` | Drain scales for run and sprint |
+| `sleepPenaltyFraction` | Current stiff-gear fatigue recovery penalty |
+| `updatedMinute` | World-age minute when the snapshot was produced |
+
+After a real endurance tick, the snapshot also carries `naturalDelta`,
+`amsDelta`, `regenScale`, `drainScale`, `nmsRegenScale`, `nmsDrain`,
+`dtMinutes`, `metabolicRate`, `breathingEffortRamp`, and `breathingPressure`.
+Projection snapshots omit those tick-only values and the codec supplies defaults
+when they are sent over MP.
 
 ## State and Authority
 
 Runtime state is held in three weak-key tables indexed by player identity. It is
 not written to player `modData` or save files.
 
-- SP state stores timing, endurance baselines, runtime snapshots, and sleep state.
-- MP client state stores request timing, one pending flag, and the latest server
-  snapshot.
-- MP server state stores authority timing, catch-up, sleep synchronization,
-  thermal state, a runtime snapshot cache, queued snapshot demand, and a cached
-  worn profile.
+- SP state stores timing, endurance/fatigue baselines, thermal smoothing state,
+  and the latest UI runtime snapshot.
+- MP client state stores request timing, one pending flag, and the latest
+  decoded `mpServerSnapshot`.
+- MP server state stores authoritative timing, fatigue baselines, thermal
+  smoothing state, the latest runtime snapshot, one optional pending snapshot
+  request, and a cached worn profile.
 
 On first access for a player, `ArmorMakesSense_RuntimeState.lua` deletes the
-obsolete `ArmorMakesSenseState` save blob without importing any values from it.
-Reloads and reconnects therefore start with current time and live stats instead
-of replaying saved catch-up state.
-
-Active non-sleep catch-up is capped at one game minute. Sleep catch-up remains
-time-based because fatigue recovery advances during accelerated sleep.
+obsolete `ArmorMakesSenseState` save blob without importing values from it.
+Reloads and reconnects therefore start from current time and live stats.
 
 ## Console Output
 
 Production modules route console output through `ArmorMakesSense_Logger.lua`.
-A release session emits one boot identity for its active role, confirmations
-for explicit user actions such as writing a support report, and actionable
-warnings or errors. Normal option state, successful hook installation, UI and
-slot initialization, rebalance summaries, snapshots, and synchronization are
-silent. Routine lifecycle details use the `DEBUG` level and appear only when PZ
-debug mode is active or the loaded mod id is `ArmorMakesSenseDev`.
+A release session emits one boot identity for its active role, confirmations for
+explicit user actions such as writing a support report, and actionable warnings
+or errors. Normal option state, successful hook installation, UI and slot
+initialization, rebalance summaries, snapshots, and synchronization are silent.
+Routine lifecycle details use the `DEBUG` level and appear only when PZ debug
+mode is active or the loaded mod id is `ArmorMakesSenseDev`.
 
-Release-shape validation rejects direct `print()` calls outside the logger and
-requires exactly one boot identity definition for SP, MP-client, and MP-server.
+Release-shape validation keeps production Lua free of development-only references,
+removed runtime modules, stale field vocabulary, and broad MP-client snapshot
+subscriptions.
 
 ## Configuration
 
 `ArmorMakesSense_Config.lua` defines tuning defaults. Public sandbox options are
-limited to these model toggles:
+limited to these model controls:
 
-- `ArmorMakesSense.EnableThermalModel`
-- `ArmorMakesSense.EnableMuscleStrainModel`
-- `ArmorMakesSense.EnableSleepPenaltyModel`
+| Option | Type | Range/default |
+|---|---|---|
+| `ArmorMakesSense.PhysicalLoadScale` | double | 0-3, default 1.0 |
+| `ArmorMakesSense.EnableThermalModel` | boolean | default true |
+| `ArmorMakesSense.EnableBreathingModel` | boolean | default true |
+| `ArmorMakesSense.EnableMuscleStrainModel` | boolean | default true |
+| `ArmorMakesSense.EnableSleepPenaltyModel` | boolean | default true |
 
 Both SP and MP resolve `ArmorMakesSense.DEFAULTS` first and then apply matching
-values from `SandboxVars.ArmorMakesSense`.
+values from `SandboxVars.ArmorMakesSense` through `ArmorMakesSense_Options.lua`.
 
 ## Makes Sense Compatibility
 
@@ -362,9 +379,9 @@ registers:
 - `sleep_planner_penalty_provider`
 
 Nutrition Makes Sense can provide an endurance contribution that AMS composes
-before the final endurance write. Caffeine Makes Sense can own fatigue and sleep
+before the final endurance write. Caffeine Makes Sense can own fatigue
 coordination; when it does, AMS supplies penalty fractions and does not write
-the coordinated fatigue result independently.
+fatigue independently.
 
 ## Version Identity
 

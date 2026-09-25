@@ -6,102 +6,119 @@ Testing.BenchRunnerNative = Testing.BenchRunnerNative or {}
 
 local BenchRunnerNative = Testing.BenchRunnerNative
 local BenchUtils = Testing.BenchUtils
+local BenchRunnerEnv = Testing.BenchRunnerEnv
+local BenchRunnerRuntime = Testing.BenchRunnerRuntime
 local C = {}
-local D = {}
 
 -- -----------------------------------------------------------------------------
--- Context and dependency wiring
+-- Context and module imports
 -- -----------------------------------------------------------------------------
-
-local function setDeps(deps)
-    D = deps or {}
-end
 
 function BenchRunnerNative.setContext(context)
     C = context or {}
 end
 
--- Dependency delegation: prefer injected D[name], fall back to BenchUtils or inline.
-local function depCall(name, fallback)
-    return function(...)
-        local fn = D[name]
-        if type(fn) == "function" then return fn(...) end
-        if fallback then return fallback(...) end
+local function ctx(name)
+    return C[name]
+end
+
+local clamp = BenchUtils.clamp
+local toBoolArg = BenchUtils.toBoolArg
+local safeMethod = BenchUtils.safeMethod
+
+local function nowMinutes()
+    return BenchUtils.nowMinutes(ctx)
+end
+
+local getRuntimeBenchRunner = BenchRunnerRuntime.getRuntimeBenchRunner
+local registerNativeTickPump = BenchRunnerRuntime.registerNativeTickPump
+local unregisterNativeTickPump = BenchRunnerRuntime.unregisterNativeTickPump
+local setIsoPlayerTestAIMode = BenchRunnerEnv.setIsoPlayerTestAIMode
+local snapPlayerToCoords = BenchRunnerEnv.snapPlayerToCoords
+local applyNativeActivityMode = BenchRunnerEnv.applyNativeActivityMode
+local stabilizeNativeCombatStance = BenchRunnerEnv.stabilizeNativeCombatStance
+local clearNativeMovementState = BenchRunnerEnv.clearNativeMovementState
+local distance2D = BenchRunnerEnv.distance2D
+local readPlayerCoords = BenchRunnerEnv.readPlayerCoords
+local readClimateSnapshot = BenchRunnerEnv.readClimateSnapshot
+local buildPatrolWaypoints = BenchRunnerEnv.buildPatrolWaypoints
+
+-- -----------------------------------------------------------------------------
+-- Bench weapon selection
+-- -----------------------------------------------------------------------------
+
+local BENCH_WEAPON_CANDIDATES = {
+    "Base.BaseballBat",
+    "Base.Crowbar",
+    "Base.Machete",
+    "Base.Sword",
+}
+
+local function resolveWeaponFlag(value)
+    local raw = tostring(value or "")
+    if raw == "" then
         return nil
     end
-end
-
-local ctx          = depCall("ctx", function(name) return C[name] end)
-local clamp        = depCall("clamp", BenchUtils.clamp)
-local toBoolArg    = depCall("toBoolArg", BenchUtils.toBoolArg)
-local boolTag      = depCall("boolTag", BenchUtils.boolTag)
-local metricOrNa   = depCall("metricOrNa", BenchUtils.metricOrNa)
-
-local nowMinutes = depCall("nowMinutes", function()
-    return BenchUtils.nowMinutes(ctx)
-end)
-
--- safeMethod: explicit fallback chain (deps -> ctx -> BenchUtils -> inline pcall).
-local function safeMethod(target, methodName, ...)
-    local fn = D.safeMethod
-    if type(fn) == "function" then return fn(target, methodName, ...) end
-    local sf = ctx("safeMethod")
-    if type(sf) == "function" then return sf(target, methodName, ...) end
-    return BenchUtils.safeMethod(target, methodName, ...)
-end
-
--- -----------------------------------------------------------------------------
--- Runtime and environment dep delegates
--- -----------------------------------------------------------------------------
-
-local benchSnapshotAppend               = depCall("benchSnapshotAppend")
-local runtimeRunKey                     = depCall("runtimeRunKey", BenchUtils.runtimeRunKey or nil)
-local getRuntimeBenchRunner             = depCall("getRuntimeBenchRunner")
-local registerNativeTickPump            = depCall("registerNativeTickPump")
-local unregisterNativeTickPump          = depCall("unregisterNativeTickPump")
-local setIsoPlayerTestAIMode            = depCall("setIsoPlayerTestAIMode")
-local snapPlayerToCoords                = depCall("snapPlayerToCoords")
-local applyNativeActivityMode           = depCall("applyNativeActivityMode")
-local stabilizeNativeCombatStance       = depCall("stabilizeNativeCombatStance")
-local clearNativeMovementState          = depCall("clearNativeMovementState")
-
-local distance2D = depCall("distance2D", function(ax, ay, bx, by)
-    local dx = (tonumber(ax) or 0) - (tonumber(bx) or 0)
-    local dy = (tonumber(ay) or 0) - (tonumber(by) or 0)
-    return math.sqrt((dx * dx) + (dy * dy))
-end)
-
-local readPlayerCoords = depCall("readPlayerCoords", function(player)
-    return tonumber(safeMethod(player, "getX")) or 0,
-        tonumber(safeMethod(player, "getY")) or 0,
-        tonumber(safeMethod(player, "getZ")) or 0
-end)
-
-local readClimateSnapshot = depCall("readClimateSnapshot", function(player)
-    local x, y, z = readPlayerCoords(player)
-    return { x = x, y = y, z = z, outdoors = true, inVehicle = false, climbing = false }
-end)
-
-
-local buildPatrolWaypoints = depCall("buildPatrolWaypoints", function(x, y, z, radius, shape, axis, rectLongTiles, rectShortTiles)
-    return {}
-end)
-
-local equipRequestedWeapon = depCall("equipRequestedWeapon", function(player, requestedWeapon)
-    return nil, nil
-end)
-
-local logWeaponSelection = depCall("logWeaponSelection")
-
-local readNativeOption = depCall("readNativeOption", function(exec, key, defaultValue)
-    local options = exec and exec.nativeOptions or nil
-    if type(options) == "table" and options[key] ~= nil then
-        return options[key]
+    local key = string.lower(raw)
+    local aliases = {
+        bat = "Base.BaseballBat",
+        crowbar = "Base.Crowbar",
+        machete = "Base.Machete",
+        sword = "Base.Sword",
+    }
+    if aliases[key] then
+        return aliases[key]
     end
-    return defaultValue
-end)
+    if string.find(raw, ".", 1, true) then
+        return raw
+    end
+    return nil
+end
 
-local logNativeProbe = depCall("logNativeProbe")
+local function equipRequestedWeapon(player, requestedWeapon)
+    local equip = ctx("equipBestMeleeWeapon")
+    if type(equip) ~= "function" then
+        return nil, nil
+    end
+    local fullType = resolveWeaponFlag(requestedWeapon)
+    if fullType then
+        return equip(player, { fullType }), fullType
+    end
+    return equip(player, BENCH_WEAPON_CANDIDATES), nil
+end
+
+local function activeWeaponName(player)
+    if not player then
+        return "none"
+    end
+    local weapon = safeMethod(player, "getUseHandWeapon") or safeMethod(player, "getPrimaryHandItem")
+    if not weapon then
+        return "none"
+    end
+    local fullType = tostring(safeMethod(weapon, "getFullType") or safeMethod(weapon, "getType") or "")
+    if fullType ~= "" then
+        return fullType
+    end
+    return tostring(safeMethod(weapon, "getDisplayName") or "unknown")
+end
+
+local function logWeaponSelection(exec, mode, requestedWeapon, requestedResolved, equippedWeapon, player)
+    local log = ctx("log")
+    if type(log) ~= "function" then
+        return
+    end
+    log(string.format(
+        "[AMS_BENCH_WEAPON] id=%s set=%s scenario=%s mode=%s requested=%s requested_resolved=%s equipped=%s active=%s",
+        tostring(exec and exec.runId or "na"),
+        tostring(exec and exec.setDef and exec.setDef.id or "na"),
+        tostring(exec and exec.scenarioId or "na"),
+        tostring(mode or "na"),
+        tostring(requestedWeapon or "auto"),
+        tostring(requestedResolved or "auto"),
+        tostring(equippedWeapon or "none"),
+        tostring(activeWeaponName(player))
+    ))
+end
 
 local function nativeDriverRecordPhaseEvent(driver, now, phase)
     if type(driver) ~= "table" then
@@ -630,13 +647,9 @@ local function startNativeDriver(player, exec, block)
         timeoutSec = (mode == "native_combat_air") and math.max(180, targetSwings * 6) or targetSec
     end
 
-    local probeEnabledRaw = readNativeOption(exec, "nativeProbe", false)
-    local probeEnabled = probeEnabledRaw == true or tostring(probeEnabledRaw) == "true" or tonumber(probeEnabledRaw) == 1
-    local probeEverySec = math.max(0.2, tonumber(readNativeOption(exec, "nativeProbeEverySec", 1.0)) or 1.0)
-    local attackCooldownSec = tonumber(readNativeOption(exec, "nativeAttackCooldownSec", block.attack_cooldown_sec))
-        or tonumber(readNativeOption(exec, "native_attack_cooldown_sec", block.attack_cooldown_sec))
-        or tonumber(readNativeOption(exec, "nativeAttackEverySec", block.attack_every_sec))
-        or tonumber(block.attack_interval_sec)
+    local nativeOptions = exec and exec.nativeOptions or {}
+    local attackCooldownSec = tonumber(nativeOptions.nativeAttackCooldownSec)
+        or tonumber(block.attack_cooldown_sec)
         or 0.22
     attackCooldownSec = clamp(attackCooldownSec, 0.05, 2.0)
 
@@ -682,9 +695,6 @@ local function startNativeDriver(player, exec, block)
         combatTicks = 0,
         speedSum = 0,
         speedSamples = 0,
-        amsAppliedTotal = 0,
-        amsAppliedTickCount = 0,
-        lastAmsRuntimeMinute = nil,
         stallLimitMin = (math.max(10, tonumber(block.stall_sec) or 30)) / 60.0,
         patrolRadius = math.max(1.5, tonumber(block.patrol_radius) or 4.0),
         patrolShape = patrolShapeRaw,
@@ -758,13 +768,6 @@ local function startNativeDriver(player, exec, block)
         canBehaviorPathI = false,
         canBehaviorUpdate = false,
         canBehaviorSetData = false,
-        probeEnabled = probeEnabled,
-        probeEveryMin = probeEverySec / 60.0,
-        probeLastAt = nil,
-        probeSamples = 0,
-        probeJustMovedSamples = 0,
-        probeNPCSamples = 0,
-        probePathShouldMoveSamples = 0,
         phaseZeroAt = driverStartAt,
         phaseTimelineEvents = {},
         phaseLast = nil,
@@ -898,8 +901,6 @@ local function finalizeNativeActivity(player, exec, driver, outcome, reason)
     exec.activityResult.valid_sample_ratio = validRatio
     exec.activityResult.movement_uptime = moveUptime
     exec.activityResult.distance_moved = tonumber(driver.distanceMoved) or 0
-    exec.activityResult.total_distance_tiles = tonumber(driver.distanceMoved) or 0
-    exec.activityResult.elapsed_game_sec = elapsedSec
     exec.activityResult.walk_pct = stateTicks > 0 and (walkTicks / stateTicks) or nil
     exec.activityResult.run_pct = stateTicks > 0 and (runTicks / stateTicks) or nil
     exec.activityResult.sprint_pct = stateTicks > 0 and (sprintTicks / stateTicks) or nil
@@ -919,23 +920,12 @@ local function finalizeNativeActivity(player, exec, driver, outcome, reason)
     exec.activityResult.pct_sprint = labelTicks > 0 and (sprintTicks / labelTicks) or nil
     exec.activityResult.pct_combat = labelTicks > 0 and (combatTicks / labelTicks) or nil
     exec.activityResult.avg_move_speed = avgMoveSpeed
-    exec.activityResult.ams_applied_total = tonumber(driver.amsAppliedTotal) or 0
-    exec.activityResult.ams_applied_tick_count = tonumber(driver.amsAppliedTickCount) or 0
     exec.activityResult.attack_attempts = tonumber(driver.attackAttempts) or 0
     exec.activityResult.attack_success = tonumber(driver.attackSuccess) or 0
     exec.activityResult.attack_cooldown_blocks = tonumber(driver.attackCooldownBlocks) or 0
     exec.activityResult.attack_cooldown_sec = tonumber(driver.attackCooldownSec)
     exec.activityResult.hit_events = tonumber(driver.hitEvents) or 0
     exec.activityResult.native_nav_mode = (driver.mode == "native_treadmill_simple") and "treadmill_simple" or tostring(driver.movementMode or "na")
-    exec.activityResult.native_ai_mode = tostring(driver.testAIModeState or "na")
-    exec.activityResult.native_npc_mode = tostring(driver.testAIModeState or "na")
-    exec.activityResult.native_path_retries = tonumber(driver.pathRetryCount) or 0
-    exec.activityResult.native_path_has = driver.pathState and driver.pathState.hasPath or nil
-    exec.activityResult.native_path_goal = driver.pathState and driver.pathState.goalLocation or nil
-    exec.activityResult.native_path_moving = driver.pathState and driver.pathState.movingUsingPath or nil
-    exec.activityResult.native_path_started = driver.pathState and driver.pathState.startedMoving or nil
-    exec.activityResult.native_path_len = driver.pathState and tonumber(driver.pathState.pathLength) or nil
-    exec.activityResult.native_path_result = tostring(driver.pathBehaviorResult or "na")
     exec.activityResult.reset_ok = driver.stepResetOk
     exec.activityResult.reset_attempts = tonumber(driver.stepResetAttemptCount) or 0
     exec.activityResult.reset_error = tostring(driver.stepResetError or "none")
@@ -944,8 +934,6 @@ local function finalizeNativeActivity(player, exec, driver, outcome, reason)
     exec.activityResult.teleport_jump_count = tonumber(driver.teleportJumpCount) or 0
     exec.activityResult.anchor_start_err_tiles = tonumber(driver.anchorStartErrorTiles)
     exec.activityResult.anchor_end_err_tiles = tonumber(anchorEndError)
-    exec.activityResult.goal_x = tonumber(driver.forwardGoalX)
-    exec.activityResult.goal_y = tonumber(driver.forwardGoalY)
     exec.activityResult.anchor_delta_before_start = tonumber(driver.anchorDeltaBeforeStart) or tonumber(driver.anchorStartErrorTiles)
     exec.activityResult.anchor_delta_after_post_reset = tonumber(driver.anchorDeltaAfterPostReset)
     exec.activityResult.sample_window_sec = elapsedSec
@@ -974,29 +962,6 @@ local function finalizeNativeActivity(player, exec, driver, outcome, reason)
     exec.activityResult.achieved_sec = elapsedSec
     exec.activityResult.requested_sec = exec.activityResult.requested_sec or tonumber(driver.targetSec) or 0
     exec.activityResult.requested_swings = exec.activityResult.requested_swings or tonumber(driver.targetSwings) or 0
-
-    if driver.probeEnabled then
-        local probeTotal = math.max(1, tonumber(driver.probeSamples) or 0)
-        local justMovedRatio = (tonumber(driver.probeJustMovedSamples) or 0) / probeTotal
-        local npcRatio = (tonumber(driver.probeNPCSamples) or 0) / probeTotal
-        local shouldMoveRatio = (tonumber(driver.probePathShouldMoveSamples) or 0) / probeTotal
-        local claimedNoProgressRatio = totalSamples > 0 and ((tonumber(driver.movingClaimedNoProgressSamples) or 0) / totalSamples) or 0
-        local log = ctx("log")
-        if type(log) == "function" then
-            log(string.format(
-                "[AMS_NATIVE_PROBE_SUMMARY] id=%s scenario=%s samples=%d just_moved_ratio=%s npc_ratio=%s should_move_ratio=%s claimed_no_progress_ratio=%s distance_moved=%s nav_mode=%s",
-                tostring(exec and exec.runId or "na"),
-                tostring(exec and exec.scenarioId or "na"),
-                tonumber(driver.probeSamples) or 0,
-                metricOrNa(justMovedRatio, 4),
-                metricOrNa(npcRatio, 4),
-                metricOrNa(shouldMoveRatio, 4),
-                metricOrNa(claimedNoProgressRatio, 4),
-                metricOrNa(driver.distanceMoved, 3),
-                tostring(driver.movementMode or "na")
-            ))
-        end
-    end
 
     unregisterNativeTickPump()
     if driver.useTestAIMode then
@@ -1079,19 +1044,6 @@ local function tickNativeDriver(player, exec)
     else
         driver.distanceMoved = (tonumber(driver.distanceMoved) or 0) + moved
         driver.totalSamples = (tonumber(driver.totalSamples) or 0) + 1
-
-        local ensureState = ctx("ensureState")
-        local runtimeState = type(ensureState) == "function" and ensureState(player) or nil
-        local snapshot = type(runtimeState) == "table" and runtimeState.uiRuntimeSnapshot or nil
-        local updatedMinute = tonumber(snapshot and snapshot.updatedMinute)
-        if updatedMinute ~= nil
-            and updatedMinute >= driver.startedAt
-            and updatedMinute ~= tonumber(driver.lastAmsRuntimeMinute) then
-            driver.lastAmsRuntimeMinute = updatedMinute
-            driver.amsAppliedTotal = (tonumber(driver.amsAppliedTotal) or 0)
-                + (tonumber(snapshot.enduranceAppliedDelta) or 0)
-            driver.amsAppliedTickCount = (tonumber(driver.amsAppliedTickCount) or 0) + 1
-        end
     end
 
     local elapsedSec = math.max(0, (now - (driver.startedAt or now)) * 60.0)
@@ -1291,41 +1243,6 @@ local function tickNativeDriver(player, exec)
             driver.lastPathAcceptedAt = now
         end
 
-        if driver.probeEnabled then
-            local probeJustMoved = safeMethod(player, "isJustMoved")
-            local probeIsNPC = safeMethod(player, "isNPC")
-            local probeState = driver.pathState or {}
-            driver.probeSamples = (tonumber(driver.probeSamples) or 0) + 1
-            if probeJustMoved == true then
-                driver.probeJustMovedSamples = (tonumber(driver.probeJustMovedSamples) or 0) + 1
-            end
-            if probeIsNPC == true then
-                driver.probeNPCSamples = (tonumber(driver.probeNPCSamples) or 0) + 1
-            end
-            if probeState.shouldBeMoving == true then
-                driver.probePathShouldMoveSamples = (tonumber(driver.probePathShouldMoveSamples) or 0) + 1
-            end
-
-            if now - (driver.probeLastAt or 0) >= (driver.probeEveryMin or 0.0166) then
-                driver.probeLastAt = now
-                logNativeProbe(exec, driver, {
-                    elapsedSec = elapsedSec,
-                    x = x,
-                    y = y,
-                    moved = moved,
-                    justMoved = probeJustMoved,
-                    isNPC = probeIsNPC,
-                    isAiming = safeMethod(player, "isAiming"),
-                    hasPath = probeState.hasPath,
-                    goalLocation = probeState.goalLocation,
-                    movingUsingPath = probeState.movingUsingPath,
-                    startedMoving = probeState.startedMoving,
-                    shouldBeMoving = probeState.shouldBeMoving,
-                    pathLength = probeState.pathLength,
-                })
-            end
-        end
-
         if now - (driver.lastPathAcceptedAt or driver.startedAt or now) > (driver.pathAcceptTimeoutMin or 0.12) then
             if nativeDriverRetryPath(player, driver, now, x, y, driver.lastZ) then
                 return "pending", nil
@@ -1409,21 +1326,8 @@ end
 -- Public API (only expose what BenchRunner actually calls)
 -- -----------------------------------------------------------------------------
 
-local function exposeWithDeps(name, impl)
-    BenchRunnerNative[name] = function(...)
-        local argc = select("#", ...)
-        if argc <= 0 then
-            return impl()
-        end
-        local args = {...}
-        setDeps(args[argc])
-        args[argc] = nil
-        return impl(unpack(args, 1, argc - 1))
-    end
-end
-
-exposeWithDeps("startNativeDriver", startNativeDriver)
-exposeWithDeps("tickNativeDriver", tickNativeDriver)
-exposeWithDeps("finalizeNativeActivity", finalizeNativeActivity)
+BenchRunnerNative.startNativeDriver = startNativeDriver
+BenchRunnerNative.tickNativeDriver = tickNativeDriver
+BenchRunnerNative.finalizeNativeActivity = finalizeNativeActivity
 
 return BenchRunnerNative

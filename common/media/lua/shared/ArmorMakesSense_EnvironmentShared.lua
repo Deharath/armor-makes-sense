@@ -7,58 +7,42 @@ Core.Environment = Core.Environment or {}
 local Utils = require "ArmorMakesSense_UtilsShared"
 local Environment = Core.Environment
 
--- -----------------------------------------------------------------------------
--- Environment + activity sampling
--- -----------------------------------------------------------------------------
+local function flag(player, methodName)
+    return Utils.toBoolean(Utils.safeMethod(player, methodName))
+end
 
+-- Mirrors the posture split vanilla uses in IsoPlayer.updateEndurance.
 function Environment.getPostureLabel(player)
-    if Utils.toBoolean(Utils.safeMethod(player, "isAsleep")) then
+    if flag(player, "isAsleep") then
         return "sleep"
     end
-    if Utils.toBoolean(Utils.safeMethod(player, "isSitOnGround")) then
-        return "sit_ground"
-    end
-    if Utils.toBoolean(Utils.safeMethod(player, "isSeatedInVehicle")) then
+    if flag(player, "isSeatedInVehicle") then
         return "sit_vehicle"
+    end
+    if flag(player, "isSitOnGround") or flag(player, "isSittingOnFurniture") or flag(player, "isResting") then
+        return "sit"
     end
     return "stand"
 end
 
-local function activityFactorForLabel(options, label)
-    if label == "sleep" then
-        return 0
-    end
-    if label == "sprint" then
-        return Utils.clamp(tonumber(options.ActivitySprint) or 1.35, 0.2, 1.8)
-    end
-    if label == "run" then
-        return Utils.clamp(tonumber(options.ActivityJog) or 1.0, 0.2, 1.8)
-    end
-    if label == "walk" then
-        return Utils.clamp(tonumber(options.ActivityWalk) or 0.75, 0.2, 1.8)
-    end
-    return Utils.clamp(tonumber(options.ActivityIdle) or 0.35, 0.2, 1.8)
+function Environment.isResting(postureLabel)
+    return postureLabel == "sit" or postureLabel == "sit_vehicle"
 end
 
-function Environment.resolveActivity(player, options)
-    local moving = Utils.toBoolean(Utils.safeMethod(player, "isPlayerMoving"))
-        or Utils.toBoolean(Utils.safeMethod(player, "isMoving"))
-
-    local label = "idle"
-    if Utils.toBoolean(Utils.safeMethod(player, "isAsleep")) then
-        label = "sleep"
-    elseif Utils.toBoolean(Utils.safeMethod(player, "isSprinting")) then
-        label = "sprint"
-    elseif Utils.toBoolean(Utils.safeMethod(player, "isRunning")) then
-        label = "run"
-    elseif moving then
-        label = "walk"
+function Environment.resolveActivity(player)
+    if flag(player, "isAsleep") then
+        return "sleep"
     end
-
-    return {
-        label = label,
-        factor = activityFactorForLabel(options or {}, label),
-    }
+    if flag(player, "isSprinting") then
+        return "sprint"
+    end
+    if flag(player, "isRunning") then
+        return "run"
+    end
+    if flag(player, "isPlayerMoving") or flag(player, "isMoving") then
+        return "walk"
+    end
+    return "idle"
 end
 
 return Environment

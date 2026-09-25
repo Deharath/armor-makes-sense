@@ -34,14 +34,6 @@ local function lower(deps, value)
     return value and string.lower(tostring(value)) or ""
 end
 
-local function toBoolean(deps, value)
-    local fn = dep("toBoolean", deps)
-    if type(fn) == "function" then
-        return fn(value)
-    end
-    return value == true
-end
-
 function Gear.snapshotWornItems(player, deps)
     local out = {}
     local wornItems = safeMethod(deps, player, "getWornItems")
@@ -65,25 +57,6 @@ end
 -- -----------------------------------------------------------------------------
 -- Inventory and worn-item indexing
 -- -----------------------------------------------------------------------------
-
-function Gear.inventoryItemsByType(player, deps)
-    local map = {}
-    local inv = safeMethod(deps, player, "getInventory")
-    local items = inv and safeMethod(deps, inv, "getItems")
-    local count = tonumber(items and safeMethod(deps, items, "size")) or 0
-    local wornItems = safeMethod(deps, player, "getWornItems")
-    for i = 0, count - 1 do
-        local item = safeMethod(deps, items, "get", i)
-        if item and not toBoolean(deps, safeMethod(deps, wornItems, "contains", item)) then
-            local fullType = tostring(safeMethod(deps, item, "getFullType") or safeMethod(deps, item, "getType") or "")
-            if fullType ~= "" then
-                map[fullType] = map[fullType] or {}
-                map[fullType][#map[fullType] + 1] = item
-            end
-        end
-    end
-    return map
-end
 
 function Gear.wornItemsByType(player, deps)
     local map = {}
@@ -209,7 +182,7 @@ local function notifyClothingUpdated(player)
     end
 end
 
-function Gear.wearProfile(player, profileEntries, mode, deps)
+function Gear.wearProfile(player, profileEntries, deps)
     if not profileEntries then
         return 0, 0, 0
     end
@@ -221,10 +194,6 @@ function Gear.wearProfile(player, profileEntries, mode, deps)
     for _, entry in ipairs(profileEntries) do
         entries[#entries + 1] = entry
     end
-    local wearMode = lower(deps, mode or "inventory")
-    local useInventory = wearMode ~= "virtual"
-    local allowSpawn = wearMode == "spawn" or wearMode == "virtual"
-    local invByType = useInventory and Gear.inventoryItemsByType(player, deps) or {}
     local wornByType = Gear.wornItemsByType(player, deps)
     local plan = {}
     local worn = 0
@@ -232,14 +201,10 @@ function Gear.wearProfile(player, profileEntries, mode, deps)
     local spawned = 0
     for _, entry in ipairs(entries) do
         local ft = tostring(entry.fullType or "")
-        local bucket = invByType[ft]
-        local item = bucket and table.remove(bucket, 1) or nil
-        if not item then
-            local wornBucket = wornByType[ft]
-            item = wornBucket and table.remove(wornBucket, 1) or nil
-        end
+        local wornBucket = wornByType[ft]
+        local item = wornBucket and table.remove(wornBucket, 1) or nil
         local created = false
-        if not item and allowSpawn then
+        if not item then
             item = Gear.createItemByFullType(ft)
             if item then
                 spawned = spawned + 1
@@ -247,9 +212,7 @@ function Gear.wearProfile(player, profileEntries, mode, deps)
             end
         end
         if item then
-            if wearMode == "virtual" then
-                restoreVirtualItemCondition(item, deps)
-            end
+            restoreVirtualItemCondition(item, deps)
             local loc = Gear.resolveItemWearLocation(item, deps) or Gear.resolveSavedLocation(entry.location)
             if loc ~= nil then
                 plan[#plan + 1] = {

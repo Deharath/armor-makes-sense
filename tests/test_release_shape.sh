@@ -1,491 +1,119 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Structural guards for the 2.0 runtime shape. Behavior lives in the Lua tests.
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_PATHS=(
-  "${ROOT_DIR}/common/media/lua/client"
-  "${ROOT_DIR}/common/media/lua/shared"
-  "${ROOT_DIR}/common/media/lua/server"
-)
+LUA="${ROOT_DIR}/common/media/lua"
+RUNTIME_PATHS=("${LUA}/client" "${LUA}/shared" "${LUA}/server")
+RELEASE_GLOBS=(-g '*.lua' -g '!**/testing/**' -g '!**/diagnostics/**')
+TICK="${LUA}/client/core/ArmorMakesSense_Tick.lua"
+MP_SERVER="${LUA}/server/ArmorMakesSense_MPServerRuntime.lua"
+MP_CLIENT="${LUA}/client/ArmorMakesSense_MPClientRuntime.lua"
+UI="${LUA}/client/core/ArmorMakesSense_UI.lua"
 
-forbidden='testing/ArmorMakesSense|ArmorMakesSense\.Testing|tickBenchRunner|testLock|autoRunner|benchRunner|gearProfiles|resetCharacterToEquilibrium|resetMuscleStrain'
-if rg -n "${forbidden}" "${RUNTIME_PATHS[@]}" -g '*.lua' -g '!**/testing/**' -g '!**/diagnostics/**'; then
-  echo "release runtime still contains development references" >&2
+fail() {
+  echo "$1" >&2
   exit 1
-fi
+}
 
-if ! rg -q 'function DevBootstrap\.initialize' "${ROOT_DIR}/common/media/lua/client/testing/ArmorMakesSense_00_DevBootstrap.lua"; then
-  echo "development bootstrap entrypoint missing" >&2
-  exit 1
+if rg -n 'testing/ArmorMakesSense|ArmorMakesSense\.Testing|tickBenchRunner|testLock|autoRunner|benchRunner|gearProfiles|resetCharacterToEquilibrium|resetMuscleStrain' \
+  "${RUNTIME_PATHS[@]}" "${RELEASE_GLOBS[@]}"; then
+  fail "release runtime still contains development references"
 fi
+rg -q 'function DevBootstrap\.initialize' "${LUA}/client/testing/ArmorMakesSense_00_DevBootstrap.lua" \
+  || fail "development bootstrap entrypoint missing"
 
-mp_runtime="${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua"
-if rg -n '^registerEvents\(\)' "${mp_runtime}"; then
-  echo "MP client runtime still self-registers during module load" >&2
-  exit 1
-fi
-if ! rg -q 'function MPClientRuntime\.registerEvents' "${mp_runtime}"; then
-  echo "MP client runtime registration entrypoint missing" >&2
-  exit 1
-fi
-if rg -n 'setAsleep|setAsleepTime|setForceWakeUpTime' "${mp_runtime}"; then
-  echo "MP wake reconciliation still bypasses vanilla SleepingEvent cleanup" >&2
-  exit 1
-fi
-if ! rg -q 'sleepingEvent:wakeUp\(playerObj, true\)' "${mp_runtime}"; then
-  echo "MP wake reconciliation does not use vanilla's authoritative wake path" >&2
-  exit 1
-fi
-
-legacy_state_key='ArmorMakesSenseState'
-if rg -n "${legacy_state_key}" \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**' \
-  -g '!ArmorMakesSense_RuntimeState.lua'; then
-  echo "release runtime still accesses the legacy persisted state key" >&2
-  exit 1
-fi
-
-simulation_module='ArmorMakesSense_Simulation'
-if ! rg -q "require \"${simulation_module}\"" "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_Tick.lua"; then
-  echo "singleplayer coordinator does not use the shared simulation advance path" >&2
-  exit 1
-fi
-if ! rg -q "require \"${simulation_module}\"" "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP server coordinator does not use the shared simulation advance path" >&2
-  exit 1
-fi
-if rg -n 'ACTIVE_ENDURANCE_CATCHUP_(MAX|RESET_THRESHOLD)_MINUTES' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  -g '*.lua'; then
-  echo "runtime coordinator duplicates shared catch-up constants" >&2
-  exit 1
-fi
-
-if rg -n 'SLEEP_WAKE_DIAG_COMMAND|sleep_wake_diag' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPCompat.lua" \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "released MP runtime still accepts diagnostic wake-fatigue authority" >&2
-  exit 1
-fi
-if ! rg -q 'Strain\.applyArmorStrainOverlay' "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP server does not use the shared strain application policy" >&2
-  exit 1
-fi
-if rg -n 'Strain\.(isMeleeStrainEligible|computeArmorStrainExtra)' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP server duplicates shared strain calculation steps" >&2
-  exit 1
-fi
-if rg -n 'recentCombatUntilMinute|combatActivityPending|COMBAT_LATCH_ATTACK_SECONDS|getActivity(Label|Factor)|noteCombatActivity' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "released runtime still uses split or timer-based activity state" >&2
-    exit 1
-fi
-if rg -n 'EnvironmentShared|resolveActivity|combatActivityPending' \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_Combat.lua"; then
-  echo "SP combat event still mutates sampled activity state" >&2
-  exit 1
-fi
-if rg -n 'recoveryTrace|updateRecoveryTrace' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "released runtime still contains the write-only recovery trace" >&2
-  exit 1
-fi
-if rg -n 'pendingSleepSession|SLEEP_SESSION_COMMAND|sleep_for|wake_hour|clientWorldMinute|clientFatigue' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "released runtime still carries unused sleep-session metadata" >&2
-    exit 1
-fi
-
-if ! rg -q 'safeCall\(playerObj, "setBedType", bedType\)' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP sleep bed hint is not applied to vanilla server recovery" >&2
-  exit 1
-fi
-if rg -n 'getClientActivityLabel|after_world_minute|activity_label|script_version|script_build|args\.reason|incident_seq' \
-  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua"; then
-  echo "MP snapshot requests still carry server-ignored client metadata" >&2
-  exit 1
-fi
-if rg -n 'IncidentTrace|IncidentRecorder|MPIncidentSchema|incident_trace|incident_seq' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "released runtime still contains MP incident capture" >&2
-  exit 1
-fi
-if rg -n '"OnClothingUpdated"|"EveryOneMinute"' \
-  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua"; then
-  echo "MP client runtime still subscribes snapshot transport to broad events" >&2
-  exit 1
-fi
-if rg -n 'after_world_minute|pendingServerRefreshMinute|serverRefreshAfterMinute|buildProfileFromRuntime' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "released runtime still couples clothing UI refresh to snapshot freshness metadata" >&2
-  exit 1
-fi
-if ! rg -q 'profile = analysis\.profile' \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
-  echo "Burden UI does not use the current local worn profile" >&2
-  exit 1
-fi
-if rg -n 'SNAPSHOT_FALLBACK_SECONDS' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua'; then
-  echo "released runtime still uses the old two-second snapshot fallback" >&2
-  exit 1
-fi
-if ! rg -q 'MP\.SLEEP_STATE_COMMAND = "sleep_state"' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPCompat.lua"; then
-  echo "compact MP sleep-state transport is missing" >&2
-  exit 1
-fi
-if ! rg -q 'RequestPolicy\.queueSnapshotRequest' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP server does not queue bounded presentation snapshot requests" >&2
-  exit 1
-fi
-if ! rg -q 'Physiology\.projectRuntimeSnapshot' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP request path does not refresh presentation telemetry through the read-only projector" >&2
-  exit 1
-fi
-client_command_body="$(sed -n '/local function onClientCommand/,/local function onEveryOneMinute/p' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua")"
-if rg -q 'updatePlayer' <<<"${client_command_body}"; then
-  echo "MP snapshot requests still invoke gameplay simulation" >&2
-  exit 1
-fi
-if rg -n 'lastSnapshotSentSecond|thermalHot|thermalCold|thermal_hot|thermal_cold|thermalTier' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPSnapshotCodec.lua" \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_SupportReport.lua"; then
-  echo "runtime or support report still carries unused snapshot state or derived thermal labels" >&2
-  exit 1
-fi
-if rg -n 'thermalWord|showThermal\b|UI_AMS_Label_Thermal|UI_AMS_Annotation_(Heat|Cold)' \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PresentationPolicy.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/Translate/EN/UI.json"; then
-  echo "player-facing UI still converts numeric thermal contribution into qualitative labels" >&2
-  exit 1
-fi
-for quantitative_helper in recoveryPenaltyPercent drainPercentPerMinute sleepPenaltyPercent; do
-  if rg -q "PresentationPolicy\.${quantitative_helper}" \
-    "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
-    echo "player-facing UI exposes diagnostic quantity: ${quantitative_helper}" >&2
-    exit 1
-  fi
-  if ! rg -q "PresentationPolicy\.${quantitative_helper}" \
-    "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_SupportReport.lua"; then
-    echo "support report lost quantitative helper: ${quantitative_helper}" >&2
-    exit 1
-  fi
+# 2.0 amputations stay amputated.
+for removed in \
+  "${LUA}/client/ArmorMakesSense_SleepHooks.lua" \
+  "${LUA}/shared/ArmorMakesSense_SleepOwnership.lua" \
+  "${LUA}/shared/ArmorMakesSense_SleepPhysiology.lua" \
+  "${LUA}/shared/ArmorMakesSense_Simulation.lua" \
+  "${LUA}/server/ArmorMakesSense_MPSnapshotBuilder.lua" \
+  "${LUA}/client/core/ArmorMakesSense_Utils.lua" \
+  "${LUA}/client/core/ArmorMakesSense_Stats.lua" \
+  "${LUA}/client/core/ArmorMakesSense_ContextFactory.lua" \
+  "${LUA}/client/core/ArmorMakesSense_ContextBinder.lua" \
+  "${LUA}/client/core/ArmorMakesSense_ContextRefs.lua"; do
+  [[ -e "${removed}" ]] && fail "removed module returned: ${removed}"
 done
-for pressure_helper in hasThermalPressure hasBreathingPressure hasSleepPressure; do
-  if ! rg -q "PresentationPolicy\.${pressure_helper}" \
-    "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
-    echo "Burden UI does not use active-pressure visibility helper: ${pressure_helper}" >&2
-    exit 1
-  fi
-done
-if ! rg -q 'Codec\.SCHEMA_VERSION = 6' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_MPSnapshotCodec.lua"; then
-  echo "MP snapshot schema was not bumped for quantitative runtime fields" >&2
-  exit 1
+if rg -n 'setAsleep|setAsleepTime|setForceWakeUpTime|setPlayerFallAsleep|wakeUp\(' "${RUNTIME_PATHS[@]}" "${RELEASE_GLOBS[@]}"; then
+  fail "release runtime drives vanilla sleep state; sleep planning belongs to vanilla"
 fi
-if rg -n 'lastAsleepFlag|Deliberate duplicate of ArmorMakesSense_Utils|local function safe(Method|Call)' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
-  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_SleepHooks.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_ArmorClassifier.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_BreathingClassifier.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_SpeedRebalance.lua"; then
-  echo "runtime still carries legacy wake migration or duplicate protected-call utilities" >&2
-  exit 1
+if rg -n 'physicalLoad|loadNorm|effectiveLoad|thermalContribution|breathingContribution|swingChainLoad|rigidityLoad|ThermalContributionMax|ActivityIdle|DtMaxMinutes|DtCatchupMaxSlices' \
+  "${LUA}" -g '*.lua' -g '*.txt' -g '*.json'; then
+  fail "1.x load-point vocabulary remains"
 fi
-if ! rg -q 'Environment\.resolveActivity' \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_Tick.lua" \
-  || ! rg -q 'Environment\.resolveActivity' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "SP and MP coordinators do not both consume shared activity results" >&2
-  exit 1
-fi
-if rg -n 'breathingLoad|breathing_load|BreathingSealLoad(Start|Span)' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "released runtime still infers respiratory category from aggregate breathing load" >&2
-    exit 1
-fi
-if rg -n 'massLoad|wearabilityLoad|armorCount|upperBodyLoad|combinedLoad|itemToArmorSignal|computeArmorProfile' \
-  "${ROOT_DIR}/common/media/lua" \
-  -g '*.lua'; then
-  echo "historical worn-profile aliases or misleading API names remain" >&2
-  exit 1
-fi
-if rg -n 'processedMinutes|\.slices\b' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_Simulation.lua"; then
-  echo "simulation still conflates attempted and committed work" >&2
-  exit 1
-fi
-if rg -n 'ZombRand|HaloTextHelper|ISTimedActionQueue|IsoPlayer\.allPlayersAsleep|save\(true\)' \
-  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_SleepHooks.lua"; then
-  echo "AMS sleep hook still owns copied vanilla workflow" >&2
-  exit 1
-fi
-if rg -n 'sleep_planner_coordinator|fatigue_coordinator|sleep_wake_adjustment_coordinator' \
-  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_SleepHooks.lua" \
-  "${ROOT_DIR}/common/media/lua/client/ArmorMakesSense_MPClientRuntime.lua" \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua"; then
-  echo "sleep gameplay modules bypass shared ownership policy" >&2
-  exit 1
-fi
-for model in BreathingModel EnduranceModel; do
-  if ! rg -q "require \"ArmorMakesSense_${model}\"" \
-    "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua"; then
-    echo "physiology does not compose required calculation model: ${model}" >&2
-    exit 1
-  fi
-done
-if ! rg -q 'require "ArmorMakesSense_SleepPhysiology"' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua" \
-  || ! rg -q 'require "ArmorMakesSense_SleepModel"' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_SleepPhysiology.lua"; then
-  echo "sleep physiology ownership is not composed through the dedicated module" >&2
-  exit 1
+if rg -n 'ArmorMakesSenseState' "${RUNTIME_PATHS[@]}" "${RELEASE_GLOBS[@]}" -g '!ArmorMakesSense_RuntimeState.lua'; then
+  fail "release runtime still accesses the legacy persisted state key"
 fi
 
+# One physiology tick shared by SP and the MP server.
+rg -q 'Physiology\.tick\(' "${TICK}" || fail "SP coordinator does not use Physiology.tick"
+rg -q 'Physiology\.tick\(' "${MP_SERVER}" || fail "MP server does not use Physiology.tick"
+rg -q 'Physiology\.project\(' "${MP_SERVER}" || fail "MP snapshot requests do not use the read-only projector"
+client_command_body="$(sed -n '/local function onClientCommand/,/^end/p' "${MP_SERVER}")"
+if rg -q 'Physiology\.tick|tickPlayer' <<<"${client_command_body}"; then
+  fail "MP snapshot requests still advance gameplay"
+fi
+rg -q 'Strain\.applyArmorStrainOverlay' "${MP_SERVER}" || fail "MP server does not use the shared strain overlay"
+rg -q 'require "ArmorMakesSense_MPRequestPolicy"' "${MP_SERVER}" || fail "MP server does not use the request policy"
+rg -q 'RequestPolicy\.queueSnapshotRequest' "${MP_SERVER}" || fail "MP server does not queue bounded snapshot requests"
+rg -q 'Codec\.SCHEMA_VERSION = 7' "${LUA}/shared/ArmorMakesSense_MPSnapshotCodec.lua" \
+  || fail "MP snapshot schema is not the 2.0 schema"
+if rg -n '^registerEvents\(\)' "${MP_CLIENT}"; then
+  fail "MP client runtime self-registers during module load"
+fi
+rg -q 'function MPClientRuntime\.registerEvents' "${MP_CLIENT}" || fail "MP client registration entrypoint missing"
+if rg -n '"OnClothingUpdated"|"EveryOneMinute"' "${MP_CLIENT}"; then
+  fail "MP client subscribes snapshot transport to broad events"
+fi
+if rg -n 'SLEEP_WAKE_DIAG_COMMAND|sleep_wake_diag' "${LUA}/shared/ArmorMakesSense_MPCompat.lua" "${MP_SERVER}"; then
+  fail "released MP runtime accepts diagnostic wake-fatigue authority"
+fi
+
+for model in BreathingModel EnduranceModel SleepModel ThermalModel LoadModelShared; do
+  rg -q "require \"ArmorMakesSense_${model}\"" "${LUA}/shared/ArmorMakesSense_PhysiologyShared.lua" \
+    || fail "physiology does not compose ${model}"
+done
 shared_models=(
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_LoadModelShared.lua"
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_EnvironmentShared.lua"
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_StrainShared.lua"
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_PhysiologyShared.lua"
+  "${LUA}/shared/ArmorMakesSense_LoadModelShared.lua"
+  "${LUA}/shared/ArmorMakesSense_EnvironmentShared.lua"
+  "${LUA}/shared/ArmorMakesSense_StrainShared.lua"
+  "${LUA}/shared/ArmorMakesSense_PhysiologyShared.lua"
 )
 if rg -n 'setContext|ctx\(' "${shared_models[@]}"; then
-  echo "shared gameplay models still use mutable runtime context" >&2
-  exit 1
+  fail "shared gameplay models use mutable runtime context"
 fi
-for shared_model in "${shared_models[@]}"; do
-  if ! rg -q 'require "ArmorMakesSense_UtilsShared"' "${shared_model}"; then
-    echo "shared gameplay model does not require shared utilities: ${shared_model}" >&2
-    exit 1
-  fi
+if rg -n 'setContext|ctx\(|moduleCall' "${LUA}/client" "${RELEASE_GLOBS[@]}"; then
+  fail "release client runtime uses mutable context dispatch"
+fi
+if rg -n 'SandboxVars.*ArmorMakesSense' "${RUNTIME_PATHS[@]}" -g '*.lua' -g '!ArmorMakesSense_Options.lua' -g '!**/testing/**'; then
+  fail "runtime parses AMS sandbox options outside the shared resolver"
+fi
+if rg -n 'local function getWallClockSeconds' "${LUA}/client" "${LUA}/server" -g '*.lua'; then
+  fail "runtime duplicates the shared wall-clock resolver"
+fi
+
+# Presentation: pips through the shared policy, no numeric diagnostics on the player UI.
+BURDEN_VIEW="${LUA}/client/core/ArmorMakesSense_BurdenView.lua"
+BURDEN_PANEL="${LUA}/client/core/ArmorMakesSense_BurdenPanel.lua"
+for presenter in "${BURDEN_VIEW}" "${BURDEN_PANEL}" "${LUA}/client/core/ArmorMakesSense_UITooltip.lua"; do
+  rg -q 'require "ArmorMakesSense_PresentationPolicy"' "${presenter}" \
+    || fail "presentation surface bypasses the shared policy: ${presenter}"
 done
-if [[ -e "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_Utils.lua" \
-   || -e "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_Stats.lua" ]]; then
-  echo "client-only utility or stat adapters remain after shared cutover" >&2
-  exit 1
-fi
-
-legacy_context_modules=(
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_ContextFactory.lua"
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_ContextBinder.lua"
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_ContextRefs.lua"
-)
-for legacy_module in "${legacy_context_modules[@]}"; do
-  if [[ -e "${legacy_module}" ]]; then
-    echo "legacy client context module remains: ${legacy_module}" >&2
-    exit 1
-  fi
-done
-if rg -n 'setContext|ctx\(|moduleCall' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**'; then
-  echo "release client runtime still uses mutable context dispatch" >&2
-  exit 1
-fi
-
-obsolete_client_lifecycle='logOptionsSnapshot|setSystemEnabled|isSystemEnabled|function Combat\.onWeaponSwing'
-if rg -n "${obsolete_client_lifecycle}" "${ROOT_DIR}/common/media/lua/client" -g '*.lua' -g '!**/testing/**'; then
-  echo "obsolete client lifecycle scaffolding returned" >&2
-  exit 1
-fi
-
-if rg -n 'SandboxVars.*ArmorMakesSense' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  -g '*.lua' \
-  -g '!ArmorMakesSense_Options.lua' \
-  -g '!**/testing/**'; then
-  echo "runtime parses AMS sandbox options outside the shared resolver" >&2
-  exit 1
-fi
-if rg -n 'local function getWallClockSeconds' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/server" \
-  -g '*.lua'; then
-  echo "runtime duplicates the shared wall-clock resolver" >&2
-  exit 1
-fi
-
-if rg -n 'rigidityNorm \* 6\.75|UI_AMS_Label_SleepLonger' \
-  "${ROOT_DIR}/common/media/lua/client" \
-  "${ROOT_DIR}/common/media/lua/shared" \
-  -g '*.lua' -g '*.json'; then
-  echo "presentation still contains the disconnected sleep estimate" >&2
-  exit 1
-fi
-if ! rg -q 'exportFn\(self:resolvePlayer\(\)\)' \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"; then
-  echo "support export does not preserve split-screen player identity" >&2
-  exit 1
-fi
-for presenter in \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua" \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UITooltip.lua" \
-  "${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_SupportReport.lua"; do
-  if ! rg -q 'require "ArmorMakesSense_PresentationPolicy"' "${presenter}"; then
-    echo "presentation surface bypasses shared threshold policy: ${presenter}" >&2
-    exit 1
-  fi
-done
-
-if ! rg -q 'require "ArmorMakesSense_MPSnapshotBuilder"' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua" \
-  || ! rg -q 'require "ArmorMakesSense_MPRequestPolicy"' \
-  "${ROOT_DIR}/common/media/lua/server/ArmorMakesSense_MPServerRuntime.lua"; then
-  echo "MP server does not use extracted snapshot and request policies" >&2
-  exit 1
-fi
+rg -q 'require "core/ArmorMakesSense_Draw"' "${BURDEN_PANEL}" || fail "Burden tab does not use the shared pip drawing"
+rg -q 'exportFn\(self:resolvePlayer\(\)\)' "${BURDEN_PANEL}" || fail "support export loses split-screen player identity"
+rg -q 'Physiology\.projectWithServerThermal' "${BURDEN_PANEL}" || fail "MP Burden tab does not use the local worn profile"
+rg -q 'BurdenPanel\.new' "${UI}" || fail "character-info tab does not host the Burden panel"
 
 diagnostic_clients=(
-  "${ROOT_DIR}/common/media/lua/client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua"
-  "${ROOT_DIR}/common/media/lua/client/diagnostics/ArmorMakesSense_MPClientHarness.lua"
+  "${LUA}/client/diagnostics/ArmorMakesSense_MPDiagnosticsClient.lua"
+  "${LUA}/client/diagnostics/ArmorMakesSense_MPClientHarness.lua"
 )
 if rg -n -U 'pcall\(\s*sendClientCommand,\s*tostring' "${diagnostic_clients[@]}"; then
-  echo "development diagnostics still use the obsolete client-command overload" >&2
-  exit 1
-fi
-if rg -n 'minuteSummaryEnabled|emitMinuteSummary|ams_enable_mp_diag_minute_summary' \
-  "${ROOT_DIR}/common/media/lua/server/diagnostics" \
-  "${ROOT_DIR}/docs"; then
-  echo "dormant MP minute-summary capability remains" >&2
-  exit 1
+  fail "development diagnostics use the obsolete client-command overload"
 fi
 
-basic_bone_count="$(rg -c 'Base\.Cuirass_BasicBone' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_SpeedRebalance.lua")"
-if [[ "${basic_bone_count}" -ne 2 ]]; then
-  echo "basic bone cuirass is not present in both speed and reslot policy" >&2
-  exit 1
-fi
-
-dead_bench='idle_window|native_warmup|native_move([^m]|$)|lock_env_start|lock_env_end|sample_series|muscleContribution|recoveryContribution'
-if rg -n "${dead_bench}" "${ROOT_DIR}/common/media/lua/client/testing" -g '*.lua'; then
-  echo "development runner still contains dormant benchmark capability" >&2
-  exit 1
-fi
-
-ui_module="${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UI.lua"
-tooltip_module="${ROOT_DIR}/common/media/lua/client/core/ArmorMakesSense_UITooltip.lua"
-if ! rg -q 'require "core/ArmorMakesSense_UITooltip"' "${ui_module}"; then
-  echo "Burden UI does not install the dedicated tooltip integration" >&2
-  exit 1
-fi
-if rg -n 'ISToolTipInv|DoTooltipEmbedded|AMSTooltipPatched|installTooltipHook' "${ui_module}"; then
-  echo "tooltip patching leaked back into the Burden UI module" >&2
-  exit 1
-fi
-if ! rg -q 'function UITooltip\.install' "${tooltip_module}"; then
-  echo "tooltip integration entrypoint missing" >&2
-  exit 1
-fi
-if ! rg -q 'DoTooltipEmbedded' "${tooltip_module}" \
-  || ! rg -q '"beginLayout"' "${tooltip_module}"; then
-  echo "standalone tooltip integration does not use the 42.20 shared-layout contract" >&2
-  exit 1
-fi
-if rg -n '"DrawText"|"DrawTextRight"|"DrawProgressBar"' "${tooltip_module}"; then
-  echo "standalone tooltip integration bypasses shared layout measurement with direct drawing" >&2
-  exit 1
-fi
-if rg -n 'getNumClassFields|getClassField|getClassFieldVal' "${tooltip_module}"; then
-  echo "release tooltip integration uses debug-only Java reflection" >&2
-  exit 1
-fi
-if ! rg -q 'getPlayerData.+characterInfo|playerData\.characterInfo' "${ui_module}"; then
-  echo "Burden UI no longer resolves the live per-player character window" >&2
-  exit 1
-fi
-if rg -n 'screenClass\.instance' "${ui_module}"; then
-  echo "Burden UI regressed to the nonexistent character-window singleton" >&2
-  exit 1
-fi
-if rg -n 'function Stats\.set(Thirst|Discomfort|Wetness|BodyTemperature)' \
-  "${ROOT_DIR}/common/media/lua/shared/ArmorMakesSense_StatsShared.lua"; then
-  echo "development-only body-state setters leaked into production StatsShared" >&2
-  exit 1
-fi
-if [[ ! -f "${ROOT_DIR}/common/media/lua/client/testing/ArmorMakesSense_TestStats.lua" ]]; then
-  echo "development body-state setter module missing" >&2
-  exit 1
-fi
-
-PACKAGING_PATHS=(
-  "${ROOT_DIR}/../tools/mod_sync/sync_local_mod.sh"
-  "${ROOT_DIR}/../tools/workshop_publish/core.py"
-)
-rewrite_pattern='WriteAllLines\(\$mainLua|sed -i .+testing|stripped testing requires from Main'
-if rg -n "${rewrite_pattern}" "${PACKAGING_PATHS[@]}"; then
-  echo "release tooling still rewrites Main.lua" >&2
-  exit 1
-fi
-
-if rg -n '\bprint[[:space:]]*\(' "${RUNTIME_PATHS[@]}" \
-  -g '*.lua' \
-  -g '!**/testing/**' \
-  -g '!**/diagnostics/**' \
-  -g '!ArmorMakesSense_Logger.lua'; then
-  echo "release runtime bypasses the centralized logger" >&2
-  exit 1
-fi
-if rg -n 'BOOT_ROLE|BOOT_MP' "${RUNTIME_PATHS[@]}" -g '*.lua' -g '!**/testing/**' -g '!**/diagnostics/**'; then
-  echo "release runtime still contains obsolete boot banners" >&2
-  exit 1
-fi
-boot_identity_count="$(rg -n '\[BOOT\] loaded version=' "${RUNTIME_PATHS[@]}" \
-  -g '*.lua' -g '!**/testing/**' -g '!**/diagnostics/**' | wc -l)"
-if [[ "${boot_identity_count}" -ne 3 ]]; then
-  echo "release runtime must define exactly one boot identity for each SP, MP-client, and MP-server role" >&2
-  exit 1
-fi
-
-echo "ams release source-shape checks passed"
+echo "ams release shape checks passed"

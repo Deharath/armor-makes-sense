@@ -1,9 +1,13 @@
 {
     "Sandbox_ArmorMakesSense": "Armor Makes Sense",
+    "Sandbox_ArmorMakesSense_PhysicalLoadScale": "Armor Burden Strength",
+    "Sandbox_ArmorMakesSense_PhysicalLoadScale_tooltip": "Scales how much worn gear slows endurance recovery and makes exertion cost more. 1.0 is the default, 0 turns the weight effect off, 2.0 doubles it.",
     "Sandbox_ArmorMakesSense_EnableThermalModel": "Armor Thermal Effects",
-    "Sandbox_ArmorMakesSense_EnableThermalModel_tooltip": "When enabled, effective clothing insulation adds endurance burden during sustained body heat. Turn this off to remove AMS thermal burden.",
+    "Sandbox_ArmorMakesSense_EnableThermalModel_tooltip": "When enabled, insulating gear that traps body heat slows endurance recovery and makes exertion cost more while you are running hot.",
+    "Sandbox_ArmorMakesSense_EnableBreathingModel": "Armor Restricts Breathing",
+    "Sandbox_ArmorMakesSense_EnableBreathingModel_tooltip": "When enabled, gas masks, respirators and sealed suits make running and sprinting cost more endurance.",
     "Sandbox_ArmorMakesSense_EnableMuscleStrainModel": "Armor Increases Melee Strain",
-    "Sandbox_ArmorMakesSense_EnableMuscleStrainModel_tooltip": "When enabled, heavier armor adds extra vanilla melee muscle strain during combat. Turn this off to remove the armor-based strain effect.",
+    "Sandbox_ArmorMakesSense_EnableMuscleStrainModel_tooltip": "When enabled, heavy gear on the shoulders, arms and hands adds extra vanilla melee muscle strain during combat.",
     "Sandbox_ArmorMakesSense_EnableSleepPenaltyModel": "Armor Reduces Sleep Recovery",
-    "Sandbox_ArmorMakesSense_EnableSleepPenaltyModel_tooltip": "When enabled, sleeping in restrictive armor slows fatigue recovery. Turn this off to remove the armor-based sleep penalty."
+    "Sandbox_ArmorMakesSense_EnableSleepPenaltyModel_tooltip": "When enabled, sleeping in stiff gear such as armor and pads slows how fast sleep clears fatigue."
 }

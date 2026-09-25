@@ -66,7 +66,7 @@ local function neutralResult(available, bodyTemp)
         strainScale = 0,
         coldNeed = 0,
         coldSuitability = 0,
-        contribution = 0,
+        heat = 0,
     }
 end
 
@@ -219,7 +219,6 @@ function ThermalModel.advance(sample, state, elapsedMinutes, options)
     end
 
     local strainScale = pressureToScale(hotPressure)
-    local contributionMax = math.max(0, tonumber(options.ThermalContributionMax) or 14)
     return {
         available = true,
         bodyTemp = tonumber(sample.coreTemp),
@@ -230,7 +229,8 @@ function ThermalModel.advance(sample, state, elapsedMinutes, options)
         strainScale = strainScale,
         coldNeed = coldNeed,
         coldSuitability = coldSuitability,
-        contribution = resistance * strainScale * contributionMax,
+        -- Share of full heat stress the worn insulation is responsible for.
+        heat = Utils.clamp(resistance * strainScale, 0, 1),
     }
 end
 

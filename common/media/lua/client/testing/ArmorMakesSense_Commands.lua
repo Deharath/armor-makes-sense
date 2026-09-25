@@ -62,7 +62,7 @@ local function getOrLoadProfile(state, profileName)
     return entries
 end
 
-function Commands.gearWear(name, mode)
+function Commands.gearWear(name)
     local player = ctx("getLocalPlayer")()
     if not player then
         ctx("logError")("gear wear failed: no local player")
@@ -72,15 +72,14 @@ function Commands.gearWear(name, mode)
     if profileName == "" then
         profileName = "default"
     end
-    local wearMode = tostring(mode or "inventory")
     local state = ctx("ensureState")(player)
     local entries = getOrLoadProfile(state, profileName)
     if not entries then
         ctx("logError")(string.format("gear wear failed: profile '%s' not found", profileName))
         return false
     end
-    local worn, missing, spawned = ctx("wearProfile")(player, entries, wearMode)
-    ctx("log")(string.format("[GEAR] wore profile=%s mode=%s worn=%d missing=%d spawned=%d", profileName, wearMode, worn, missing, spawned))
+    local worn, missing, spawned = ctx("wearProfile")(player, entries)
+    ctx("log")(string.format("[GEAR] wore profile=%s worn=%d missing=%d spawned=%d", profileName, worn, missing, spawned))
     return true
 end
 
@@ -95,86 +94,6 @@ function Commands.gearClear()
         pcall(triggerEvent, "OnClothingUpdated", player)
     end
     ctx("log")("[GEAR] cleared worn items")
-    return true
-end
-
-function Commands.gearList()
-    local player = ctx("getLocalPlayer")()
-    if not player then
-        ctx("logError")("gear list failed: no local player")
-        return false
-    end
-    local state = ctx("ensureState")(player)
-    local profiles = state.gearProfiles or {}
-    local names = {}
-    for k, v in pairs(profiles) do
-        names[#names + 1] = string.format("%s(%d)", tostring(k), #(v or {}))
-    end
-    table.sort(names)
-    ctx("log")("[GEAR] profiles: " .. table.concat(names, ", "))
-    return true
-end
-
-function Commands.gearReloadBuiltin(name)
-    local player = ctx("getLocalPlayer")()
-    if not player then
-        ctx("logError")("gear reload built-in failed: no local player")
-        return false
-    end
-    local profileName = tostring(name or "")
-    if profileName == "" then
-        ctx("logError")("gear reload built-in failed: provide profile name")
-        return false
-    end
-    local builtIn = ctx("getBuiltInGearProfile")(profileName)
-    if not builtIn then
-        ctx("logError")(string.format("gear reload built-in failed: no built-in profile '%s'", profileName))
-        return false
-    end
-    local state = ctx("ensureState")(player)
-    state.gearProfiles[profileName] = builtIn
-    ctx("log")(string.format("[GEAR] reloaded built-in profile=%s entries=%d", profileName, #builtIn))
-    return true
-end
-
-function Commands.gearDump(name)
-    local player = ctx("getLocalPlayer")()
-    if not player then
-        ctx("logError")("gear dump failed: no local player")
-        return false
-    end
-    local profileName = tostring(name or "default")
-    if profileName == "" then
-        profileName = "default"
-    end
-    local state = ctx("ensureState")(player)
-    local entries = getOrLoadProfile(state, profileName)
-    if not entries then
-        ctx("logError")(string.format("gear dump failed: profile '%s' not found", profileName))
-        return false
-    end
-
-    local baseline = ctx("getBaselineWearEntries")()
-    local baselineTypes = {}
-    local profileTypes = {}
-    for _, entry in ipairs(baseline) do
-        baselineTypes[#baselineTypes + 1] = tostring(entry.fullType or "")
-    end
-    for _, entry in ipairs(entries) do
-        profileTypes[#profileTypes + 1] = tostring(entry.fullType or "")
-    end
-    table.sort(baselineTypes)
-    table.sort(profileTypes)
-
-    ctx("log")(string.format(
-        "[GEAR] dump profile=%s baselineCount=%d profileCount=%d totalWear=%d",
-        profileName,
-        #baselineTypes,
-        #profileTypes,
-        #baselineTypes + #profileTypes
-    ))
-    ctx("log")("[GEAR] baseline items: " .. table.concat(baselineTypes, ", "))
-    ctx("log")("[GEAR] profile items: " .. table.concat(profileTypes, ", "))
     return true
 end
 
@@ -223,20 +142,6 @@ function Commands.lockEnv(tempC, wetnessPct, minutes)
     return true
 end
 
-function Commands.envNow()
-    local player = ctx("getLocalPlayer")()
-    if not player then
-        ctx("logError")("env read failed: no local player")
-        return false
-    end
-    ctx("log")(string.format(
-        "[debug] env now temp=%.2f wet=%.1f",
-        tonumber(ctx("getBodyTemperature")(player)) or -1,
-        tonumber(ctx("getWetness")(player)) or -1
-    ))
-    return true
-end
-
 function Commands.mark(label)
     local player = ctx("getLocalPlayer")()
     local tag = tostring(label or "mark")
@@ -250,10 +155,10 @@ function Commands.mark(label)
     local profile = ctx("computeWornProfile")(player)
     local static = ctx("getStaticCombatSnapshot")(player)
     ctx("log")(string.format(
-        "[MARK] label=%s t=%.2f phy=%.2f pieces=%d end=%.4f fatigue=%.4f thirst=%.4f temp=%.2f wet=%.1f str=%d fit=%d wpnSkill=%d wpn=%s",
+        "[MARK] label=%s t=%.2f burden_kg=%.2f drivers=%d end=%.4f fatigue=%.4f thirst=%.4f temp=%.2f wet=%.1f str=%d fit=%d wpnSkill=%d wpn=%s",
         tag,
         ctx("getWorldAgeMinutes")(),
-        tonumber(profile.physicalLoad) or 0,
+        tonumber(profile.burdenKg) or 0,
         tonumber(profile.driverCount) or 0,
         tonumber(ctx("getEndurance")(player)) or -1,
         tonumber(ctx("getFatigue")(player)) or -1,
@@ -310,7 +215,7 @@ function Commands.discomfortAudit()
     local count = tonumber(wornItems and ctx("safeMethod")(wornItems, "size")) or 0
     local totalWorn = 0
     local nonZeroWearable = 0
-    local nonZeroArmorLike = 0
+    local nonZeroRigid = 0
     local labels = {}
 
     for i = 0, count - 1 do
@@ -319,43 +224,38 @@ function Commands.discomfortAudit()
         if item then
             totalWorn = totalWorn + 1
             local scriptItem = ctx("safeMethod")(item, "getScriptItem")
-            local discomfort = getItemOrScriptNumber(item, scriptItem, "getDiscomfortModifier")
+            -- SpeedRebalance zeroes script discomfort at boot; audit the authored value.
+            local fullType = tostring(ctx("safeMethod")(item, "getFullType") or "")
+            local discomfort = ctx("getOriginalDiscomfort")(fullType)
+                or getItemOrScriptNumber(item, scriptItem, "getDiscomfortModifier")
             if discomfort > 0.0001 then
                 local wornLocation = ctx("safeMethod")(worn, "getLocation")
                 local wearable = ctx("isWearableItem")(item, wornLocation)
                 if wearable then
                     nonZeroWearable = nonZeroWearable + 1
                 end
-                local isArmorLike = false
-                local classifier = ctx("Classifier")
-                if classifier and type(classifier.evaluateArmorLike) == "function" then
-                    local eval = classifier.evaluateArmorLike(item, scriptItem, wornLocation)
-                    isArmorLike = eval and ctx("toBoolean")(eval.isArmorLike) or false
-                else
-                    isArmorLike = ctx("itemToBurdenSignal")(item, wornLocation) ~= nil
-                end
-                if isArmorLike then
-                    nonZeroArmorLike = nonZeroArmorLike + 1
+                local signal = ctx("itemToBurdenSignal")(item, wornLocation)
+                local rigid = signal ~= nil and signal.rigid == true
+                if rigid then
+                    nonZeroRigid = nonZeroRigid + 1
                 end
                 labels[#labels + 1] = string.format(
                     "%s(%.3f,%s,%s)",
-                    tostring(ctx("safeMethod")(item, "getFullType") or ctx("safeMethod")(item, "getType") or "unknown"),
+                    fullType ~= "" and fullType or tostring(ctx("safeMethod")(item, "getType") or "unknown"),
                     discomfort,
                     wearable and "wearable" or "non-wearable",
-                    isArmorLike and "armor" or "non-armor"
+                    rigid and "rigid" or "non-rigid"
                 )
             end
         end
     end
 
     table.sort(labels)
-    local classifier = ctx("Classifier")
     ctx("log")(string.format(
-        "[DISCOMFORT_AUDIT] worn=%d nonZeroWearable=%d nonZeroArmorLike=%d classifier=%s",
+        "[DISCOMFORT_AUDIT] worn=%d nonZeroWearable=%d nonZeroRigid=%d",
         totalWorn,
         nonZeroWearable,
-        nonZeroArmorLike,
-        tostring(classifier and type(classifier.evaluateArmorLike) == "function")
+        nonZeroRigid
     ))
     if #labels > 0 then
         ctx("log")("[DISCOMFORT_AUDIT] items: " .. table.concat(labels, ", "))
@@ -390,13 +290,15 @@ local function collectUIProbeCurrentGear(logItems, logTag)
 
                 if logItems then
                     ctx("log")(string.format(
-                        "%s item=%s loc=%s phy=%.3f airflow=%.3f thermal=%.3f",
+                        "%s item=%s loc=%s burden_kg=%.3f mass_kg=%.3f bulk_kg=%.3f rigid_kg=%.3f airflow=%.3f",
                         logTag or "[UI_PROBE]",
                         fullType,
                         wornLocation ~= "" and wornLocation or "none",
-                        tonumber(signal.physicalLoad) or 0,
-                        tonumber(signal.airflowResistance) or 0,
-                        tonumber(signal.thermalResistance) or 0
+                        tonumber(signal.burdenKg) or 0,
+                        tonumber(signal.massKg) or 0,
+                        tonumber(signal.bulkKg) or 0,
+                        tonumber(signal.rigidKg) or 0,
+                        tonumber(signal.airflowResistance) or 0
                     ))
                 end
             end
@@ -404,7 +306,7 @@ local function collectUIProbeCurrentGear(logItems, logTag)
     end
 
     local state = ctx("ensureState")(player)
-    local runtime = type(state) == "table" and state.uiRuntimeSnapshot or nil
+    local runtime = ctx("getUiRuntimeSnapshot")(state)
     if type(runtime) ~= "table" then
         ctx("logError")("ui probe failed: no production runtime snapshot yet")
         return nil
@@ -412,11 +314,11 @@ local function collectUIProbeCurrentGear(logItems, logTag)
 
     return {
         pieces = itemCount,
-        phy = tonumber(runtime.physicalLoad),
+        burdenKg = tonumber(runtime.burdenKg),
         airflow = tonumber(runtime.airflowResistance),
         thermal = tonumber(runtime.thermalResistance),
-        effective = tonumber(runtime.effectiveLoad),
-        norm = tonumber(runtime.loadNorm),
+        heat = tonumber(runtime.heat),
+        loadFraction = tonumber(runtime.loadFraction),
         hotPressure = tonumber(runtime.hotPressure),
         coldSuitability = tonumber(runtime.coldSuitability),
         updatedMinute = tonumber(runtime.updatedMinute),
@@ -429,13 +331,13 @@ function Commands.uiProbeCurrentGear()
         return false
     end
     ctx("log")(string.format(
-        "[UI_PROBE] total pieces=%d phy=%s airflow=%s thermal=%s effective=%s norm=%s hot_pressure=%s cold_suitability=%s updated_minute=%s source=production_runtime",
+        "[UI_PROBE] total pieces=%d burden_kg=%s airflow=%s thermal=%s heat=%s load_fraction=%s hot_pressure=%s cold_suitability=%s updated_minute=%s source=production_runtime",
         summary.pieces,
-        tostring(summary.phy or "na"),
+        tostring(summary.burdenKg or "na"),
         tostring(summary.airflow or "na"),
         tostring(summary.thermal or "na"),
-        tostring(summary.effective or "na"),
-        tostring(summary.norm or "na"),
+        tostring(summary.heat or "na"),
+        tostring(summary.loadFraction or "na"),
         tostring(summary.hotPressure or "na"),
         tostring(summary.coldSuitability or "na"),
         tostring(summary.updatedMinute or "na")
@@ -456,15 +358,6 @@ function Commands.benchRun(presetId, optsTable)
     return BenchRunner.run(presetId, optsTable)
 end
 
-function Commands.benchStatus()
-    local BenchRunner = getBenchRunner()
-    if not BenchRunner or type(BenchRunner.status) ~= "function" then
-        ctx("logError")("bench status failed: bench runner unavailable")
-        return false
-    end
-    return BenchRunner.status()
-end
-
 function Commands.benchStop()
     local BenchRunner = getBenchRunner()
     if not BenchRunner or type(BenchRunner.stop) ~= "function" then
@@ -472,33 +365,6 @@ function Commands.benchStop()
         return false
     end
     return BenchRunner.stop()
-end
-
-function Commands.benchSetList(presetId)
-    local BenchRunner = getBenchRunner()
-    if not BenchRunner or type(BenchRunner.setList) ~= "function" then
-        ctx("logError")("bench set list failed: bench runner unavailable")
-        return false
-    end
-    return BenchRunner.setList(presetId)
-end
-
-function Commands.benchScenarioList(presetId)
-    local BenchRunner = getBenchRunner()
-    if not BenchRunner or type(BenchRunner.scenarioList) ~= "function" then
-        ctx("logError")("bench scenario list failed: bench runner unavailable")
-        return false
-    end
-    return BenchRunner.scenarioList(presetId)
-end
-
-function Commands.benchWearSet(presetId, setId)
-    local BenchRunner = getBenchRunner()
-    if not BenchRunner or type(BenchRunner.wearSet) ~= "function" then
-        ctx("logError")("bench wear set failed: bench runner unavailable")
-        return false
-    end
-    return BenchRunner.wearSet(presetId, setId)
 end
 
 return Commands

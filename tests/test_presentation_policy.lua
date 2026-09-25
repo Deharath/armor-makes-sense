@@ -4,35 +4,47 @@ ArmorMakesSense = {}
 package.loaded["ArmorMakesSense_PresentationPolicy"] = nil
 local Policy = require "ArmorMakesSense_PresentationPolicy"
 
-Support.assertEqual(Policy.burdenTier(0), "negligible", "empty burden tier")
-Support.assertEqual(Policy.burdenTier(6.99), "negligible", "negligible upper edge")
-Support.assertEqual(Policy.burdenTier(7), "light", "light boundary")
-Support.assertEqual(Policy.burdenTier(20), "moderate", "moderate boundary")
-Support.assertEqual(Policy.burdenTier(45), "heavy", "heavy boundary")
-Support.assertEqual(Policy.burdenTier(75), "extreme", "extreme boundary")
+Support.assertEqual(Policy.PIP_COUNT, 4, "four-pip strips")
+for _, bands in ipairs({ Policy.LOAD_BANDS, Policy.ITEM_BANDS_KG, Policy.HEAT_BANDS, Policy.BREATHING_BANDS, Policy.SLEEP_BANDS }) do
+    Support.assertEqual(#bands, Policy.PIP_COUNT, "band table matches pip count")
+    for i = 2, #bands do
+        Support.assertTrue(bands[i] > bands[i - 1], "bands ascend")
+    end
+end
 
-Support.assertEqual(Policy.breathingTier(0.79, 0), nil, "sub-threshold breathing")
-Support.assertEqual(Policy.breathingTier(0.80, 0), "mild", "mild breathing boundary")
-Support.assertEqual(Policy.breathingTier(2.00, 0), "restricted", "restricted breathing boundary")
-Support.assertEqual(Policy.breathingTier(0.80, 0.1), "heavy", "sealed breathing tier")
+Support.assertEqual(Policy.loadPips(0), 0, "no load, no pips")
+Support.assertEqual(Policy.loadPips(0.0199), 0, "below the first load band")
+Support.assertEqual(Policy.loadPips(0.02), 1, "first load band")
+Support.assertEqual(Policy.loadPips(0.13), 3, "third load band")
+Support.assertEqual(Policy.loadPips(5), 4, "load pips saturate")
+Support.assertEqual(Policy.itemPips(0.99), 0, "sub-kilogram items stay unlit")
+Support.assertEqual(Policy.itemPips(6), 4, "heavy item")
+Support.assertEqual(Policy.heatPips(0.2), 2, "heat pips")
+Support.assertEqual(Policy.breathingPips(1), 4, "sealed mask breathing pips")
+Support.assertEqual(Policy.sleepPips(0.2), 3, "sleep pips")
+Support.assertEqual(Policy.pips(nil, Policy.LOAD_BANDS), 0, "nil value is zero pips")
+Support.assertEqual(Policy.ITEM_TOOLTIP_MIN_KG, Policy.ITEM_BANDS_KG[1], "tooltip threshold is the first item band")
 
-Support.assertClose(Policy.recoveryPenaltyPercent(0.82, 0.01), 18, 1e-9, "active recovery penalty")
-Support.assertClose(Policy.recoveryPenaltyPercent(0.82, 0), 0, 1e-9, "inactive recovery has no displayed penalty")
-Support.assertClose(Policy.drainPercentPerMinute(0.002, 0.5), 0.4, 1e-9, "drain normalized per minute")
-Support.assertClose(Policy.drainPercentPerMinute(0.002, 0), 0, 1e-9, "zero-duration drain is not displayed")
-Support.assertClose(Policy.sleepPenaltyPercent(0.125, true), 12.5, 1e-9, "enabled sleep penalty")
-Support.assertClose(Policy.sleepPenaltyPercent(0.125, false), 0, 1e-9, "disabled sleep penalty is hidden")
-Support.assertClose(Policy.snapshotAgeMinutes(10.5, 10), 0.5, 1e-9, "snapshot age")
+Support.assertEqual(Policy.tier(0), "negligible", "zero-pip tier")
+Support.assertEqual(Policy.tier(2), "moderate", "two-pip tier")
+Support.assertEqual(Policy.tier(4), "extreme", "four-pip tier")
+Support.assertEqual(Policy.tier(nil), "negligible", "nil tier")
 
-Support.assertFalse(Policy.hasThermalPressure(0.2499), "sub-threshold retained heat stays hidden")
-Support.assertTrue(Policy.hasThermalPressure(0.25), "meaningful retained heat becomes visible")
-Support.assertFalse(Policy.hasBreathingPressure(0), "inactive breathing pressure stays hidden")
-Support.assertTrue(Policy.hasBreathingPressure(0.01), "active breathing pressure becomes visible")
-Support.assertFalse(Policy.hasSleepPressure(0.15, false), "disabled sleep pressure stays hidden")
-Support.assertFalse(Policy.hasSleepPressure(0, true), "inactive sleep pressure stays hidden")
-Support.assertTrue(Policy.hasSleepPressure(0.15, true), "active sleep pressure becomes visible")
+Support.assertEqual(Policy.percentChange(1), 0, "vanilla scale")
+Support.assertEqual(Policy.percentChange(0.5), -50, "halved recovery")
+Support.assertEqual(Policy.percentChange(1.375), 38, "amplified drain rounds")
+Support.assertEqual(Policy.percentChange(-0.5), -150, "walk floor below zero")
 
-Support.assertFalse(Policy.hasSleepRestriction(9.99), "sub-threshold sleep restriction")
-Support.assertTrue(Policy.hasSleepRestriction(10), "sleep restriction boundary")
+-- Continuous fill: partial cells between bands, floor matches pips.
+local bands = { 1, 2, 4, 8 }
+Support.assertClose(Policy.fill(0, bands), 0, 1e-9, "empty fill")
+Support.assertClose(Policy.fill(0.5, bands), 0.5, 1e-9, "half of the first cell")
+Support.assertClose(Policy.fill(3, bands), 2.5, 1e-9, "half of the third cell")
+Support.assertClose(Policy.fill(20, bands), 4, 1e-9, "fill caps at the band count")
+for _, v in ipairs({ 0, 0.99, 1, 1.5, 2, 3.9, 4, 7.9, 8, 12 }) do
+    Support.assertEqual(math.floor(Policy.fill(v, bands)), Policy.pips(v, bands), "floor(fill) equals pips at " .. v)
+end
+Support.assertEqual(Policy.armPips(1.4), 0, "light arm gear is free")
+Support.assertEqual(Policy.armPips(5), 3, "heavy arm gear")
 
 print("ams presentation policy checks passed")

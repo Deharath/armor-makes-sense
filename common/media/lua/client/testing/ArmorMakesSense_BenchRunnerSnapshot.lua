@@ -7,7 +7,6 @@ Testing.BenchRunnerSnapshot = Testing.BenchRunnerSnapshot or {}
 local BenchRunnerSnapshot = Testing.BenchRunnerSnapshot
 local C = {}
 
-local DEFAULT_NORM_FLOOR = 0.05
 
 -- -----------------------------------------------------------------------------
 -- Context wiring and snapshot buffering
@@ -114,7 +113,6 @@ function BenchRunnerSnapshot.openStreamWriter(runner)
                     string.format("label=%s", tostring(runner.label or "")),
                     string.format("preset=%s", tostring(runner.preset or "na")),
                     "reason=active",
-                    string.format("mode=%s", tostring(runner.mode or "lab")),
                     string.format("speed=%.2f", tonumber(runner.speedReq) or 0),
                     string.format("repeats=%d", math.max(1, math.floor(tonumber(runner.repeats) or 1))),
                     string.format("sets_applied=%d", math.max(0, math.floor(tonumber(runner.setsApplied) or 0))),
@@ -190,7 +188,7 @@ function BenchRunnerSnapshot.closeStreamWriter(runner)
     return true
 end
 
-function BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutesFn, normFloor)
+function BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutesFn)
     if type(runner) ~= "table" then
         return false, nil, "snapshot_missing_runner"
     end
@@ -224,10 +222,10 @@ function BenchRunnerSnapshot.finalizeBenchLog(runner, reason, nowMinutesFn, norm
         BenchRunnerSnapshot.closeStreamWriter(runner)
     end
 
-    return BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn, normFloor)
+    return BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn)
 end
 
-function BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn, normFloor)
+function BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn)
     if type(runner) ~= "table" then
         return false, nil, "snapshot_missing_runner"
     end
@@ -291,12 +289,10 @@ function BenchRunnerSnapshot.writeBenchSnapshotFile(runner, reason, nowMinutesFn
         string.format("label=%s", tostring(runner.label or "")),
         string.format("preset=%s", tostring(runner.preset or "na")),
         string.format("reason=%s", tostring(reason or "completed")),
-        string.format("mode=%s", tostring(runner.mode or "lab")),
         string.format("speed=%.2f", tonumber(runner.speedReq) or 0),
         string.format("repeats=%d", math.max(1, math.floor(tonumber(runner.repeats) or 1))),
         string.format("sets_applied=%d", math.max(0, math.floor(tonumber(setsApplied) or 0))),
         string.format("scenarios_applied=%d", math.max(0, math.floor(tonumber(scenariosApplied) or 0))),
-        string.format("norm_floor=%.2f", tonumber(runner.normFloor) or tonumber(normFloor) or DEFAULT_NORM_FLOOR),
         string.format("total_steps=%d", math.max(0, math.floor(tonumber(runner.total) or 0))),
         string.format("completed_steps=%d", math.max(0, math.floor(tonumber(runner.index) or 0))),
         string.format("script_version=%s", tostring(runner.scriptVersion or "na")),

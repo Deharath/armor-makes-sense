@@ -8,8 +8,8 @@ local BenchRunnerStep = Testing.BenchRunnerStep
 local BenchUtils = Testing.BenchUtils
 local C = {}
 local BenchRunnerSnapshot = Testing.BenchRunnerSnapshot
+local BenchRunnerEnv = Testing.BenchRunnerEnv
 
-local NORM_FLOOR = 0.05
 local VALIDITY_DEFAULTS = {
     movement_uptime_min = 0.70,
     target_activity_uptime_min = 0.85,
@@ -32,6 +32,10 @@ end
 
 local function depOr(deps, key, fallback)
     return (deps and deps[key]) or fallback
+end
+
+local function nowMs()
+    return type(getTimestampMs) == "function" and tonumber(getTimestampMs()) or 0
 end
 
 local function streamActive(runner)
@@ -115,43 +119,11 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
     local envSource = activity and activity.env_source or "na"
     local activitySource = activity and activity.activity_source or "na"
     local verbose = forceVerbose == true or isVerboseBenchLog(exec)
-    local diagSuffix = string.format(
-        " eff_load=%s load_norm_runtime=%s runtime_updated_min=%s runtime_snapshot_age_min=%s thermal_resistance=%s airflow_resistance_runtime=%s sealed_restriction_runtime=%s thermal_scale=%s thermal_hot_pressure=%s cold_suitability=%s body_temp_runtime=%s thermal_contribution=%s breathing_contribution=%s metabolic_rate=%s metabolic_demand=%s metabolic_norm=%s breathing_effort_ramp=%s breathing_dynamic_load=%s breathing_sealed_load=%s end_before_ams=%s end_after_ams=%s end_natural_delta=%s end_applied_delta=%s weight_used_total=%s equipped_weight_total=%s actual_weight_total=%s fallback_weight_total=%s fallback_weight_count=%d source_actual_count=%d source_fallback_count=%d",
-        metricOrNa(metrics.effectiveLoad, 4),
-        metricOrNa(metrics.loadNormRuntime, 5),
-        metricOrNa(metrics.runtimeUpdatedMinute, 3),
-        metricOrNa(metrics.runtimeSnapshotAgeMinutes, 3),
-        metricOrNa(metrics.thermalResistance, 4),
-        metricOrNa(metrics.airflowResistanceRuntime, 4),
-        metricOrNa(metrics.sealedRestrictionRuntime, 4),
-        metricOrNa(metrics.thermalStrainScale, 4),
-        metricOrNa(metrics.hotPressure, 4),
-        metricOrNa(metrics.coldSuitability, 4),
-        metricOrNa(metrics.bodyTempRuntime, 4),
-        metricOrNa(metrics.thermalContribution, 4),
-        metricOrNa(metrics.breathingContribution, 4),
-        metricOrNa(metrics.metabolicRate, 4),
-        metricOrNa(metrics.metabolicDemand, 4),
-        metricOrNa(metrics.metabolicNorm, 4),
-        metricOrNa(metrics.breathingEffortRamp, 4),
-        metricOrNa(metrics.breathingDynamicLoad, 4),
-        metricOrNa(metrics.breathingSealedLoad, 4),
-        metricOrNa(metrics.enduranceBeforeAms, 6),
-        metricOrNa(metrics.enduranceAfterAms, 6),
-        metricOrNa(metrics.enduranceNaturalDelta, 6),
-        metricOrNa(metrics.enduranceAppliedDelta, 6),
-        metricOrNa(metrics.weightUsedTotal, 4),
-        metricOrNa(metrics.equippedWeightTotal, 4),
-        metricOrNa(metrics.actualWeightTotal, 4),
-        metricOrNa(metrics.fallbackWeightTotal, 4),
-        tonumber(metrics.fallbackWeightCount) or 0,
-        tonumber(metrics.sourceActualCount) or 0,
-        tonumber(metrics.sourceFallbackCount) or 0
-    )
+    local diagSuffix = " " .. BenchRunnerEnv.formatRuntimeMetrics(metrics.runtime, metricOrNa)
     local line
     if not verbose then
         line = string.format(
-            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s windSpeed=%s windIntensity=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d drivers=%d phy=%.3f sc=%.3f br=%.3f compAdj=%s norm=%s driver=%s env_source=%s activity_source=%s",
+            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s windSpeed=%s windIntensity=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d drivers=%d load_fraction=%s driver=%s env_source=%s activity_source=%s",
             runId,
             tostring(setDef.id),
             tostring(setDef.class),
@@ -192,11 +164,7 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
             metricOrNa(metrics.clothingCondMin, 4),
             tonumber(metrics.clothingCondItems) or 0,
             tonumber(metrics.driverCount) or 0,
-            tonumber(metrics.phy) or 0,
-            tonumber(metrics.swingChainLoad) or 0,
-            tonumber(metrics.br) or 0,
-            metricOrNa(metrics.compAdj, 3),
-            metricOrNa(metrics.norm, 5),
+            metricOrNa(metrics.loadFraction, 5),
             tostring(driver),
             tostring(envSource),
             tostring(activitySource)
@@ -204,7 +172,7 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
         line = line .. diagSuffix
     else
         line = string.format(
-            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s strainTorsoUpper=%s strainTorsoLower=%s strainUpperLegR=%s strainLowerLegR=%s strainFootR=%s strainNeck=%s wet=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d drivers=%d phy=%.3f sc=%.3f br=%.3f compAdj=%s norm=%s x=%s y=%s z=%s outdoors=%s in_vehicle=%s climbing=%s ambient=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s airTemp=%s airWindTemp=%s wind=%s windSpeed=%s windIntensity=%s cloud=%s rain=%s raining=%s driver=%s env_source=%s activity_source=%s",
+            "[AMS_BENCH_SAMPLE] id=%s set=%s class=%s scenario=%s tag=%s sample=%d t=%.2f end=%s thirst=%s fatigue=%s temp=%s skinTemp=%s strainTotal=%s strainPeak=%s armStiffness=%s strainRightArm=%s strainLeftArm=%s strainTorso=%s strainRightLeg=%s strainHandR=%s strainForeArmR=%s strainUpperArmR=%s strainHandL=%s strainForeArmL=%s strainUpperArmL=%s strainTorsoUpper=%s strainTorsoLower=%s strainUpperLegR=%s strainLowerLegR=%s strainFootR=%s strainNeck=%s wet=%s clothingCondAvg=%s clothingCondMin=%s clothingCondItems=%d drivers=%d load_fraction=%s x=%s y=%s z=%s outdoors=%s in_vehicle=%s climbing=%s ambient=%s ambientAirTemp=%s externalAirTemp=%s airAndWindTemp=%s thermalChevronUp=%s energyMultiplier=%s fatigueMultiplier=%s setPoint=%s timeOfDay=%s gameHour=%s airTemp=%s airWindTemp=%s wind=%s windSpeed=%s windIntensity=%s cloud=%s rain=%s raining=%s driver=%s env_source=%s activity_source=%s",
             runId,
             tostring(setDef.id),
             tostring(setDef.class),
@@ -241,11 +209,7 @@ function BenchRunnerStep.sampleLog(runId, setDef, scenarioId, tag, sampleIndex, 
             metricOrNa(metrics.clothingCondMin, 4),
             tonumber(metrics.clothingCondItems) or 0,
             tonumber(metrics.driverCount) or 0,
-            tonumber(metrics.phy) or 0,
-            tonumber(metrics.swingChainLoad) or 0,
-            tonumber(metrics.br) or 0,
-            metricOrNa(metrics.compAdj, 3),
-            metricOrNa(metrics.norm, 5),
+            metricOrNa(metrics.loadFraction, 5),
             metricOrNa(metrics.x, 3),
             metricOrNa(metrics.y, 3),
             metricOrNa(metrics.z, 1),
@@ -318,8 +282,7 @@ function BenchRunnerStep.summarizeStep(startMetrics, endMetrics)
     local strainDelta = (endStrain ~= nil and startStrain ~= nil) and (endStrain - startStrain) or nil
     local armStiffnessDelta = (endArmStiffness ~= nil and startArmStiffness ~= nil) and (endArmStiffness - startArmStiffness) or nil
 
-    local norm = asMetricValue(endMetrics and endMetrics.norm)
-    local divisor = norm and math.max(norm, NORM_FLOOR) or nil
+    local loadFraction = asMetricValue(endMetrics and endMetrics.loadFraction)
 
     return {
         endDelta = endDelta,
@@ -331,44 +294,8 @@ function BenchRunnerStep.summarizeStep(startMetrics, endMetrics)
         armStiffnessEnd = endArmStiffness,
         armStiffnessDelta = armStiffnessDelta,
         swingsPerMinute = nil,
-        enduranceCostPerNorm = endDelta and divisor and (endDelta / divisor) or nil,
-        thirstCostPerNorm = thirstDelta and divisor and (thirstDelta / divisor) or nil,
-        tempCostPerNorm = tempDelta and divisor and (tempDelta / divisor) or nil,
-        lowNormGuarded = norm and norm < NORM_FLOOR or nil,
-        norm = norm,
-        compAdj = asMetricValue(endMetrics and endMetrics.compAdj),
-        effectiveLoad = asMetricValue(endMetrics and endMetrics.effectiveLoad),
-        loadNormRuntime = asMetricValue(endMetrics and endMetrics.loadNormRuntime),
-        runtimeUpdatedMinute = asMetricValue(endMetrics and endMetrics.runtimeUpdatedMinute),
-        runtimeSnapshotAgeMinutes = asMetricValue(endMetrics and endMetrics.runtimeSnapshotAgeMinutes),
-        swingChainLoadRuntime = asMetricValue(endMetrics and endMetrics.swingChainLoad),
-        physicalLoadRuntime = asMetricValue(endMetrics and endMetrics.physicalLoadRuntime),
-        thermalResistance = asMetricValue(endMetrics and endMetrics.thermalResistance),
-        airflowResistanceRuntime = asMetricValue(endMetrics and endMetrics.airflowResistanceRuntime),
-        sealedRestrictionRuntime = asMetricValue(endMetrics and endMetrics.sealedRestrictionRuntime),
-        thermalStrainScale = asMetricValue(endMetrics and endMetrics.thermalStrainScale),
-        hotPressure = asMetricValue(endMetrics and endMetrics.hotPressure),
-        coldSuitability = asMetricValue(endMetrics and endMetrics.coldSuitability),
-        bodyTempRuntime = asMetricValue(endMetrics and endMetrics.bodyTempRuntime),
-        thermalContribution = asMetricValue(endMetrics and endMetrics.thermalContribution),
-        breathingContribution = asMetricValue(endMetrics and endMetrics.breathingContribution),
-        metabolicRate = asMetricValue(endMetrics and endMetrics.metabolicRate),
-        metabolicDemand = asMetricValue(endMetrics and endMetrics.metabolicDemand),
-        metabolicNorm = asMetricValue(endMetrics and endMetrics.metabolicNorm),
-        breathingEffortRamp = asMetricValue(endMetrics and endMetrics.breathingEffortRamp),
-        breathingDynamicLoad = asMetricValue(endMetrics and endMetrics.breathingDynamicLoad),
-        breathingSealedLoad = asMetricValue(endMetrics and endMetrics.breathingSealedLoad),
-        enduranceBeforeAms = asMetricValue(endMetrics and endMetrics.enduranceBeforeAms),
-        enduranceAfterAms = asMetricValue(endMetrics and endMetrics.enduranceAfterAms),
-        enduranceNaturalDelta = asMetricValue(endMetrics and endMetrics.enduranceNaturalDelta),
-        enduranceAppliedDelta = asMetricValue(endMetrics and endMetrics.enduranceAppliedDelta),
-        weightUsedTotal = asMetricValue(endMetrics and endMetrics.weightUsedTotal),
-        equippedWeightTotal = asMetricValue(endMetrics and endMetrics.equippedWeightTotal),
-        actualWeightTotal = asMetricValue(endMetrics and endMetrics.actualWeightTotal),
-        fallbackWeightTotal = asMetricValue(endMetrics and endMetrics.fallbackWeightTotal),
-        fallbackWeightCount = tonumber(endMetrics and endMetrics.fallbackWeightCount) or 0,
-        sourceActualCount = tonumber(endMetrics and endMetrics.sourceActualCount) or 0,
-        sourceFallbackCount = tonumber(endMetrics and endMetrics.sourceFallbackCount) or 0,
+        loadFraction = loadFraction,
+        runtime = type(endMetrics and endMetrics.runtime) == "table" and endMetrics.runtime or nil,
     }
 end
 
@@ -433,16 +360,7 @@ function BenchRunnerStep.resolveScenarioGateProfile(scenario)
     return profile
 end
 
-local function resolveThreshold(value, fallback, minValue)
-    local parsed = tonumber(value)
-    if parsed == nil then
-        parsed = fallback
-    end
-    if minValue ~= nil and parsed < minValue then
-        return minValue
-    end
-    return parsed
-end
+local resolveThreshold = BenchUtils.resolveThreshold
 
 function BenchRunnerStep.evaluateStepGates(exec, summary)
     local activity = exec and exec.activityResult or {}
@@ -470,14 +388,18 @@ function BenchRunnerStep.evaluateStepGates(exec, summary)
     summary.swingsPerMinute = calculateSwingsPerMinute(activity)
     activity.swings_per_minute = summary.swingsPerMinute
 
+    if activity.input_disturbed then
+        reject("input_disturbed")
+    end
+
     local clockRewindSec = tonumber(activity.clock_rewind_sec)
     if clockRewindSec ~= nil and clockRewindSec > 0.1 then
         reject("clock_continuity")
     end
 
     local achievedSwings = tonumber(activity.achieved_swings) or 0
-    if summary.armStiffnessDelta ~= nil and achievedSwings > 0 then
-        summary.stiffnessPerSwing = summary.armStiffnessDelta / achievedSwings
+    if summary.armStrainGain ~= nil and achievedSwings > 0 then
+        summary.stiffnessPerSwing = summary.armStrainGain / achievedSwings
     end
 
     activity.set_integrity = normalizeSetIntegrityTag(activity.set_integrity)
@@ -521,7 +443,7 @@ function BenchRunnerStep.evaluateStepGates(exec, summary)
     end
 
     if result.validity_gates_passed and not profile.realSleep then
-        if tonumber(summary and summary.loadNormRuntime) == nil then
+        if tonumber(summary and summary.loadFraction) == nil then
             reject("runtime_snapshot")
         end
     end
@@ -592,7 +514,7 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         setActual = textSignature(setActual)
     end
     local line = string.format(
-        "[AMS_BENCH_STEP_DONE] id=%s idx=%d/%d set=%s class=%s scenario=%s repeat_index=%d exit_reason=%s requested_swings=%d achieved_swings=%d requested_sec=%.2f achieved_sec=%.2f endDelta=%s thirstDelta=%s fatigueDelta=%s tempDelta=%s strainDelta=%s arm_stiffness_start=%s arm_stiffness_end=%s arm_stiffness_delta=%s stiffness_per_swing=%s swings_per_minute=%s norm=%s compAdj=%s sc=%.3f endurance_cost_per_norm=%s thirst_cost_per_norm=%s temp_cost_per_norm=%s low_norm_guarded=%s set_source=%s set_expected=%s set_actual=%s set_integrity=%s driver=%s env_source=%s activity_source=%s step_validity=%s validity_gates_passed=%s gate_rejected=%s gate_failed=%s native_nav_mode=%s native_ai_mode=%s native_npc_mode=%s native_path_retries=%d native_path_has=%s native_path_goal=%s native_path_moving=%s native_path_started=%s native_path_len=%s native_path_result=%s reset_ok=%s reset_attempts=%d reset_error=%s forward_rearm_attempts=%d forward_rearm_failures=%d teleport_jump_count=%d anchor_start_err_tiles=%s anchor_end_err_tiles=%s anchor_delta_before_start=%s anchor_delta_after_post_reset=%s goal_x=%s goal_y=%s valid_sample_ratio=%s movement_uptime=%s distance_moved=%s total_distance_tiles=%s elapsed_game_sec=%s sample_window_sec=%s total_samples=%d valid_samples=%d moving_samples=%d stall_sec_accum=%s stall_reason=%s stall_reason_counts=%s phase_timeline=%s walk_pct=%s run_pct=%s sprint_pct=%s idle_pct=%s pct_idle=%s pct_walk=%s pct_run=%s pct_sprint=%s pct_combat=%s avg_move_speed=%s attack_attempts=%d attack_success=%d attack_success_ratio=%s attack_cooldown_blocks=%d attack_cooldown_sec=%s hit_events=%d",
+        "[AMS_BENCH_STEP_DONE] id=%s idx=%d/%d set=%s class=%s scenario=%s repeat_index=%d exit_reason=%s requested_swings=%d achieved_swings=%d requested_sec=%.2f achieved_sec=%.2f endDelta=%s thirstDelta=%s fatigueDelta=%s tempDelta=%s strainDelta=%s arm_stiffness_start=%s arm_stiffness_end=%s arm_stiffness_delta=%s stiffness_per_swing=%s swings_per_minute=%s load_fraction=%s set_expected=%s set_actual=%s set_integrity=%s driver=%s env_source=%s activity_source=%s step_validity=%s validity_gates_passed=%s gate_rejected=%s gate_failed=%s native_nav_mode=%s reset_ok=%s reset_attempts=%d reset_error=%s forward_rearm_attempts=%d forward_rearm_failures=%d teleport_jump_count=%d anchor_start_err_tiles=%s anchor_end_err_tiles=%s anchor_delta_before_start=%s anchor_delta_after_post_reset=%s valid_sample_ratio=%s movement_uptime=%s distance_moved=%s sample_window_sec=%s total_samples=%d valid_samples=%d moving_samples=%d stall_sec_accum=%s stall_reason=%s stall_reason_counts=%s phase_timeline=%s pct_idle=%s pct_walk=%s pct_run=%s pct_sprint=%s pct_combat=%s avg_move_speed=%s attack_attempts=%d attack_success=%d attack_success_ratio=%s attack_cooldown_blocks=%d attack_cooldown_sec=%s hit_events=%d",
         runId,
         index,
         total,
@@ -615,14 +537,7 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         metricOrNa(summary.armStiffnessDelta, 6),
         metricOrNa(summary.stiffnessPerSwing, 6),
         metricOrNa(summary.swingsPerMinute, 4),
-        metricOrNa(summary.norm, 5),
-        metricOrNa(summary.compAdj, 3),
-        tonumber(summary.swingChainLoadRuntime) or 0,
-        metricOrNa(summary.enduranceCostPerNorm, 6),
-        metricOrNa(summary.thirstCostPerNorm, 6),
-        metricOrNa(summary.tempCostPerNorm, 6),
-        tostring(summary.lowNormGuarded),
-        tostring(activity.set_source or "na"),
+        metricOrNa(summary.loadFraction, 5),
         setExpected,
         setActual,
         tostring(activity.set_integrity or "na"),
@@ -634,15 +549,6 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         tostring(activity.gate_rejected),
         tostring(activity.gate_failed or "none"),
         tostring(activity.native_nav_mode or "na"),
-        tostring(activity.native_ai_mode or "na"),
-        tostring(activity.native_npc_mode or "na"),
-        tonumber(activity.native_path_retries) or 0,
-        boolTag(activity.native_path_has),
-        boolTag(activity.native_path_goal),
-        boolTag(activity.native_path_moving),
-        boolTag(activity.native_path_started),
-        metricOrNa(activity.native_path_len, 3),
-        tostring(activity.native_path_result or "na"),
         boolTag(activity.reset_ok),
         tonumber(activity.reset_attempts) or 0,
         tostring(activity.reset_error or "none"),
@@ -653,13 +559,9 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         metricOrNa(activity.anchor_end_err_tiles, 3),
         metricOrNa(activity.anchor_delta_before_start, 3),
         metricOrNa(activity.anchor_delta_after_post_reset, 3),
-        metricOrNa(activity.goal_x, 3),
-        metricOrNa(activity.goal_y, 3),
         metricOrNa(activity.valid_sample_ratio, 4),
         metricOrNa(activity.movement_uptime, 4),
         metricOrNa(activity.distance_moved, 3),
-        metricOrNa(activity.total_distance_tiles, 3),
-        metricOrNa(activity.elapsed_game_sec, 3),
         metricOrNa(activity.sample_window_sec, 3),
         tonumber(activity.total_samples) or 0,
         tonumber(activity.valid_samples) or 0,
@@ -668,10 +570,6 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         tostring(activity.stall_reason or "none"),
         tostring(activity.stall_reason_counts or "none"),
         tostring(activity.phase_timeline or "none"),
-        metricOrNa(activity.walk_pct, 4),
-        metricOrNa(activity.run_pct, 4),
-        metricOrNa(activity.sprint_pct, 4),
-        metricOrNa(activity.idle_pct, 4),
         metricOrNa(activity.pct_idle, 4),
         metricOrNa(activity.pct_walk, 4),
         metricOrNa(activity.pct_run, 4),
@@ -685,48 +583,23 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         metricOrNa(activity.attack_cooldown_sec, 3),
         tonumber(activity.hit_events) or 0
     )
-    local diagStepSuffix = string.format(
-        " eff_load=%s load_norm_runtime=%s runtime_updated_min=%s runtime_snapshot_age_min=%s swing_chain_load_runtime=%s physical_load_runtime=%s thermal_resistance=%s airflow_resistance_runtime=%s sealed_restriction_runtime=%s thermal_scale=%s thermal_hot_pressure=%s cold_suitability=%s body_temp_runtime=%s thermal_contribution=%s breathing_contribution=%s metabolic_rate=%s metabolic_demand=%s metabolic_norm=%s breathing_effort_ramp=%s breathing_dynamic_load=%s breathing_sealed_load=%s end_before_ams=%s end_after_ams=%s end_natural_delta=%s end_applied_delta=%s weight_used_total=%s equipped_weight_total=%s actual_weight_total=%s fallback_weight_total=%s fallback_weight_count=%d source_actual_count=%d source_fallback_count=%d stat_strength=%s stat_fitness=%s stat_weapon_skill=%s stat_weapon_perk=%s requested_activity=%s target_activity_pct=%s ams_applied_total=%s ams_applied_tick_count=%d clock_rewind_sec=%s",
-        metricOrNa(summary.effectiveLoad, 4),
-        metricOrNa(summary.loadNormRuntime, 5),
-        metricOrNa(summary.runtimeUpdatedMinute, 3),
-        metricOrNa(summary.runtimeSnapshotAgeMinutes, 3),
-        metricOrNa(summary.swingChainLoadRuntime, 4),
-        metricOrNa(summary.physicalLoadRuntime, 4),
-        metricOrNa(summary.thermalResistance, 4),
-        metricOrNa(summary.airflowResistanceRuntime, 4),
-        metricOrNa(summary.sealedRestrictionRuntime, 4),
-        metricOrNa(summary.thermalStrainScale, 4),
-        metricOrNa(summary.hotPressure, 4),
-        metricOrNa(summary.coldSuitability, 4),
-        metricOrNa(summary.bodyTempRuntime, 4),
-        metricOrNa(summary.thermalContribution, 4),
-        metricOrNa(summary.breathingContribution, 4),
-        metricOrNa(summary.metabolicRate, 4),
-        metricOrNa(summary.metabolicDemand, 4),
-        metricOrNa(summary.metabolicNorm, 4),
-        metricOrNa(summary.breathingEffortRamp, 4),
-        metricOrNa(summary.breathingDynamicLoad, 4),
-        metricOrNa(summary.breathingSealedLoad, 4),
-        metricOrNa(summary.enduranceBeforeAms, 6),
-        metricOrNa(summary.enduranceAfterAms, 6),
-        metricOrNa(summary.enduranceNaturalDelta, 6),
-        metricOrNa(summary.enduranceAppliedDelta, 6),
-        metricOrNa(summary.weightUsedTotal, 4),
-        metricOrNa(summary.equippedWeightTotal, 4),
-        metricOrNa(summary.actualWeightTotal, 4),
-        metricOrNa(summary.fallbackWeightTotal, 4),
-        tonumber(summary.fallbackWeightCount) or 0,
-        tonumber(summary.sourceActualCount) or 0,
-        tonumber(summary.sourceFallbackCount) or 0,
+    local diagStepSuffix = " " .. BenchRunnerEnv.formatRuntimeMetrics(summary.runtime, metricOrNa) .. string.format(
+        " stat_strength=%s stat_fitness=%s stat_weapon_skill=%s stat_weapon_perk=%s requested_activity=%s target_activity_pct=%s tick_count=%d tick_gaps=%d natural_total=%s ams_total=%s realized_scale=%s tick_closure=%s arm_strain_gain=%s game_sec_per_frame=%s wall_sec=%s clock_rewind_sec=%s",
         metricOrNa(activity and activity.stat_strength, 0),
         metricOrNa(activity and activity.stat_fitness, 0),
         metricOrNa(activity and activity.stat_weapon_skill, 0),
         tostring((activity and activity.stat_weapon_perk) or "na"),
         tostring((activity and activity.requested_activity) or "na"),
         metricOrNa(activity and activity.target_activity_pct, 4),
-        metricOrNa(activity and activity.ams_applied_total, 6),
-        tonumber(activity and activity.ams_applied_tick_count) or 0,
+        tonumber(summary.tickCount) or 0,
+        tonumber(summary.tickGaps) or 0,
+        metricOrNa(summary.naturalTotal, 6),
+        metricOrNa(summary.amsTotal, 6),
+        metricOrNa(summary.realizedScale, 4),
+        metricOrNa(summary.tickClosure, 6),
+        metricOrNa(summary.armStrainGain, 4),
+        metricOrNa(summary.gameSecPerFrame, 3),
+        metricOrNa(summary.wallSec, 2),
         metricOrNa(activity and activity.clock_rewind_sec, 3)
     )
     line = line .. diagStepSuffix
@@ -736,32 +609,37 @@ function BenchRunnerStep.logStepDone(runId, index, total, setDef, scenarioId, re
         log(line)
         benchSnapshotAppend(exec and exec.snapshot or nil, line, "step")
     end
-    local phaseLine = string.format(
-        "[AMS_BENCH_STEP_PHASE] id=%s idx=%d/%d scenario=%s repeat_index=%d phase_timeline=%s stall_reason=%s stall_sec_accum=%s sample_window_sec=%s total_samples=%d valid_samples=%d moving_samples=%d",
-        tostring(runId),
-        tonumber(index) or 0,
-        tonumber(total) or 0,
-        tostring(scenarioId),
-        tonumber(repeatIndex) or 1,
-        tostring(activity.phase_timeline or "none"),
-        tostring(activity.stall_reason or "none"),
-        metricOrNa(activity.stall_sec_accum, 3),
-        metricOrNa(activity.sample_window_sec, 3),
-        tonumber(activity.total_samples) or 0,
-        tonumber(activity.valid_samples) or 0,
-        tonumber(activity.moving_samples) or 0
-    )
-    if useStream then
-        streamAppend(runner, phaseLine, "step")
-    else
-        log(phaseLine)
-        benchSnapshotAppend(exec and exec.snapshot or nil, phaseLine, "step")
-    end
 end
 
 -- -----------------------------------------------------------------------------
 -- Activity execution lifecycle
 -- -----------------------------------------------------------------------------
+
+-- -----------------------------------------------------------------------------
+-- Input disturbance retries
+-- -----------------------------------------------------------------------------
+
+BenchRunnerStep.MAX_INPUT_RETRIES = 2
+
+local function logStepRetry(exec)
+    local line = string.format(
+        "[AMS_BENCH_STEP_RETRY] id=%s idx=%d/%d set=%s scenario=%s repeat_index=%d reason=%s attempt=%d",
+        tostring(exec.runId),
+        tonumber(exec.index) or 0,
+        tonumber(exec.total) or 0,
+        tostring(exec.setDef and exec.setDef.id or "?"),
+        tostring(exec.scenarioId),
+        tonumber(exec.repeatIndex) or 1,
+        tostring(exec.disturbed),
+        (tonumber(exec.retryCount) or 0) + 1
+    )
+    local runner = exec.runner
+    if streamActive(runner) then
+        streamLine(runner, line)
+    elseif type(ctx("log")) == "function" then
+        ctx("log")(line)
+    end
+end
 
 local function registerVanillaSleep(player, hours, safeMethod)
     local sleepingEvent = type(getSleepingEvent) == "function" and getSleepingEvent() or nil
@@ -836,11 +714,7 @@ function BenchRunnerStep.runActivity(player, state, exec, block, deps)
         driverLabel = "native"
         envSource = "vanilla"
         activitySource = "vanilla"
-        local isCombatMode = (mode == "native_combat_air")
         speedReq = tonumber(block.speed_req)
-        if speedReq == nil and isCombatMode then
-            speedReq = tonumber(exec and exec.combatSpeedReq)
-        end
         local nativeDriver, nativeStartErr = startNativeDriver(player, exec, block)
         if not nativeDriver then
             exitReason = tostring(nativeStartErr or "native_hard_start_failed")
@@ -856,9 +730,6 @@ function BenchRunnerStep.runActivity(player, state, exec, block, deps)
             exec.nativeDriver = nativeDriver
             pendingType = "native_driver"
             requestedSec = tonumber(nativeDriver.targetSec) or requestedSec
-            if isCombatMode and requestedSec <= 0 then
-                requestedSec = tonumber(nativeDriver.timeoutSec) or 0
-            end
             requestedSwings = tonumber(nativeDriver.targetSwings) or requestedSwings
         end
     else
@@ -895,6 +766,7 @@ function BenchRunnerStep.isPendingComplete(player, state, pendingType, exec, dep
     local safeMethod = depOr(deps, "safeMethod", BenchUtils.safeMethod)
     local REAL_SLEEP_FATIGUE_WAKE_THRESHOLD_DEFAULT = tonumber(deps.realSleepFatigueWakeThresholdDefault) or 0.02
     local REAL_SLEEP_ENTRY_GRACE_SECONDS = tonumber(deps.realSleepEntryGraceSeconds) or 90.0
+    local REAL_SLEEP_SAFETY_HOURS_DEFAULT = tonumber(deps.realSleepSafetyHoursDefault) or 16.0
     if pendingType == "native_driver" then
         return false
     end
@@ -1030,11 +902,9 @@ function BenchRunnerStep.resetPrepareStateCarryover(player, state, deps)
 
     state.thermalModelState = nil
     state.uiRuntimeSnapshot = nil
-    local nowFn = ctx("getWorldAgeMinutes")
-    if type(nowFn) == "function" then
-        state.lastUpdateGameMinutes = tonumber(nowFn()) or state.lastUpdateGameMinutes
-    end
-    state.pendingCatchupMinutes = 0
+    -- A nil tick minute makes the next Physiology.tick rebase instead of
+    -- charging the reset jump as an endurance delta.
+    state.lastTickMinute = nil
     local enduranceNow = type(ctx("getEndurance")) == "function" and ctx("getEndurance")(player) or nil
     state.lastEnduranceObserved = tonumber(enduranceNow)
 end
@@ -1068,6 +938,112 @@ function BenchRunnerStep.resetStepMuscleStrainState(player, deps)
     end
 end
 
+-- -----------------------------------------------------------------------------
+-- Runtime tick ledger
+-- -----------------------------------------------------------------------------
+
+-- Sums the vanilla (natural) and AMS endurance deltas of every production tick
+-- inside the measured window. realized_scale = observed change / vanilla change
+-- is the multiplier AMS actually applied; it does not depend on how long the
+-- character spent sprinting, so one repeat is enough.
+local function readLedgerInputs(player, state)
+    local snapshot = type(state) == "table" and state.uiRuntimeSnapshot or nil
+    local getEndurance = ctx("getEndurance")
+    local endurance = type(getEndurance) == "function" and tonumber(getEndurance(player)) or nil
+    return snapshot, endurance
+end
+
+-- Below this much vanilla change the ratio is rounding noise (a step that
+-- starts at full endurance), so realized_scale is reported as na.
+BenchRunnerStep.LEDGER_MIN_NATURAL = 0.001
+
+function BenchRunnerStep.openLedger(exec, player, state)
+    local snapshot, endurance = readLedgerInputs(player, state)
+    local arm = BenchRunnerEnv.readArmStiffness(player)
+    exec.ledger = {
+        minute = tonumber(snapshot and snapshot.updatedMinute),
+        startEndurance = endurance,
+        lastEndurance = endurance,
+        natural = 0,
+        ams = 0,
+        ticks = 0,
+        gaps = 0,
+        lastArm = arm,
+        armGain = 0,
+        armDecay = 0,
+        frames = 0,
+        openedAt = BenchUtils.nowMinutes(ctx),
+        lastAt = BenchUtils.nowMinutes(ctx),
+    }
+end
+
+-- Vanilla stiffness decays every frame in proportion to the game-time step, so
+-- a net start/end delta depends on game speed. Summing per-frame increases and
+-- adding back the previous frame's decay counts only what swings added.
+local function observeArmStrain(ledger, player)
+    local arm = BenchRunnerEnv.readArmStiffness(player)
+    local delta = arm - ledger.lastArm
+    if arm <= 0 then
+        ledger.armDecay = 0
+    elseif delta < 0 then
+        ledger.armDecay = -delta
+    elseif delta > 0 then
+        ledger.armGain = ledger.armGain + delta + ledger.armDecay
+    end
+    ledger.lastArm = arm
+end
+
+function BenchRunnerStep.observeLedger(exec, player, state)
+    local ledger = exec and exec.ledger
+    if type(ledger) ~= "table" then
+        return
+    end
+    observeArmStrain(ledger, player)
+    local now = BenchUtils.nowMinutes(ctx)
+    if now > ledger.lastAt then
+        ledger.frames = ledger.frames + 1
+        ledger.lastAt = now
+    end
+    local snapshot, endurance = readLedgerInputs(player, state)
+    local minute = tonumber(snapshot and snapshot.updatedMinute)
+    if minute == nil or minute == ledger.minute then
+        return
+    end
+    if ledger.minute ~= nil and (minute - ledger.minute) > 1.5 then
+        ledger.gaps = ledger.gaps + 1
+    end
+    ledger.minute = minute
+    ledger.ticks = ledger.ticks + 1
+    ledger.natural = ledger.natural + (tonumber(snapshot.naturalDelta) or 0)
+    ledger.ams = ledger.ams + (tonumber(snapshot.amsDelta) or 0)
+    ledger.lastEndurance = endurance
+end
+
+function BenchRunnerStep.summarizeLedger(ledger)
+    if type(ledger) ~= "table" then
+        return { tickCount = 0, tickGaps = 0 }
+    end
+    local span = (ledger.lastAt - ledger.openedAt) * 60.0
+    local summary = {
+        tickCount = ledger.ticks,
+        tickGaps = ledger.gaps,
+        armStrainGain = ledger.armGain,
+        gameSecPerFrame = ledger.frames > 0 and (span / ledger.frames) or nil,
+    }
+    if ledger.ticks <= 0 then
+        return summary
+    end
+    local observed = (ledger.lastEndurance ~= nil and ledger.startEndurance ~= nil)
+        and (ledger.lastEndurance - ledger.startEndurance) or nil
+    if observed ~= nil and math.abs(ledger.natural) >= BenchRunnerStep.LEDGER_MIN_NATURAL then
+        summary.realizedScale = observed / ledger.natural
+    end
+    summary.naturalTotal = ledger.natural
+    summary.amsTotal = ledger.ams
+    summary.tickClosure = observed ~= nil and (observed - (ledger.natural + ledger.ams)) or nil
+    return summary
+end
+
 function BenchRunnerStep.processStep(exec, player, state, deps)
     deps = deps or {}
     local refreshWeatherOverrides = deps.refreshWeatherOverrides
@@ -1087,7 +1063,6 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
     local clamp = depOr(deps, "clamp", BenchUtils.clamp)
     local collectMetrics = deps.collectMetrics
     local sampleLog = deps.sampleLog
-    local toBoolArg = depOr(deps, "toBoolArg", BenchUtils.toBoolArg)
     local evaluateStepGates = deps.evaluateStepGates
     local buildStepResult = deps.buildStepResult
     local logStepDone = deps.logStepDone
@@ -1097,6 +1072,9 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
     local maybeLogMidActivitySample = deps.maybeLogMidActivitySample or BenchRunnerStep.maybeLogMidActivitySample
     local resetPrepareStateCarryover = deps.resetPrepareStateCarryover or BenchRunnerStep.resetPrepareStateCarryover
     local blocks = exec.scenario and exec.scenario.blocks or {}
+
+    exec.wallStartMs = exec.wallStartMs or nowMs()
+    BenchRunnerStep.observeLedger(exec, player, state)
 
     if exec.pendingType then
         if exec.weatherOverride then
@@ -1164,13 +1142,7 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
             if type(ctx("resetCharacterToEquilibrium")) == "function" then
                 ctx("resetCharacterToEquilibrium")(player)
             end
-            local caloriesTarget = tonumber(block.calories)
-            if caloriesTarget == nil then
-                caloriesTarget = tonumber(block.calories_target)
-            end
-            if caloriesTarget == nil then
-                caloriesTarget = 300.0
-            end
+            local caloriesTarget = tonumber(block.calories) or 300.0
             local nutrition = safeMethod(player, "getNutrition")
             if nutrition then
                 safeMethod(nutrition, "setCalories", caloriesTarget)
@@ -1213,9 +1185,11 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 ctx("setFatigue")(player, fatigueValue)
             end
         elseif kind == "sample_once" then
+            BenchRunnerStep.observeLedger(exec, player, state)
             local sample = collectMetrics(player)
-            if not exec.startMetrics then
+            if block.baseline == true or not exec.startMetrics then
                 exec.startMetrics = sample
+                BenchRunnerStep.openLedger(exec, player, state)
             end
             sampleLog(exec.runId, exec.setDef, exec.scenarioId, block.tag or "once", 1, sample, exec.activityResult, exec)
             exec.endMetrics = sample
@@ -1238,6 +1212,7 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
         elseif kind == "run_activity" then
             if not exec.startMetrics then
                 exec.startMetrics = collectMetrics(player)
+                BenchRunnerStep.openLedger(exec, player, state)
             end
             if exec.expectedSetHash then
                 local actualHash = snapshotWornHash(player)
@@ -1281,32 +1256,18 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
                 if baselineAt ~= nil then
                     exec.activityResult.clock_rewind_sec = math.max(0, (baselineAt - exec.pendingStartedAt) * 60.0)
                 end
-                local blockMidEnabled = block.mid_activity_samples
-                if blockMidEnabled == nil then
-                    blockMidEnabled = block.mid_samples
+                if block.mid_activity_samples ~= nil then
+                    exec.midSampleEnabled = block.mid_activity_samples == true
                 end
-                if blockMidEnabled ~= nil then
-                    exec.midSampleEnabled = toBoolArg(blockMidEnabled)
+                if block.mid_activity_verbose ~= nil then
+                    exec.midSampleVerbose = block.mid_activity_verbose == true
                 end
-
-                local blockMidVerbose = block.mid_activity_verbose
-                if blockMidVerbose == nil then
-                    blockMidVerbose = block.mid_samples_verbose
-                end
-                if blockMidVerbose ~= nil then
-                    exec.midSampleVerbose = toBoolArg(blockMidVerbose)
-                end
-
                 local blockMidEverySec = tonumber(block.mid_activity_every_sec)
-                    or tonumber(block.mid_samples_every_sec)
-                    or tonumber(block.mid_sample_every_sec)
                 if blockMidEverySec ~= nil then
                     exec.midSampleEverySec = clamp(blockMidEverySec, 0.25, 120.0)
                 end
-
-                local blockMidTag = block.mid_activity_tag or block.mid_sample_tag
-                if blockMidTag ~= nil and tostring(blockMidTag) ~= "" then
-                    exec.midSampleTag = tostring(blockMidTag)
+                if block.mid_activity_tag ~= nil and tostring(block.mid_activity_tag) ~= "" then
+                    exec.midSampleTag = tostring(block.mid_activity_tag)
                 end
                 exec.midSampleIndex = 0
                 exec.midSampleLastAt = exec.pendingStartedAt
@@ -1331,6 +1292,11 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
     end
 
     local summary = summarizeStep(exec.startMetrics, exec.endMetrics)
+    local ledgerSummary = BenchRunnerStep.summarizeLedger(exec.ledger)
+    for key, value in pairs(ledgerSummary) do
+        summary[key] = value
+    end
+    summary.wallSec = math.max(0, nowMs() - exec.wallStartMs) / 1000.0
     local finalActual = snapshotWornHash(player)
     if exec.expectedSetHash then
         local integrity = finalActual == exec.expectedSetHash and "match" or "mismatch"
@@ -1350,6 +1316,15 @@ function BenchRunnerStep.processStep(exec, player, state, deps)
     exec.activityResult.env_source = exec.activityResult.env_source or "scripted"
     exec.activityResult.activity_source = exec.activityResult.activity_source or "scripted"
     exec.activityResult.step_validity = exec.activityResult.step_validity or "valid"
+    if exec.disturbed then
+        exec.activityResult.input_disturbed = exec.disturbed
+        if (tonumber(exec.retryCount) or 0) < BenchRunnerStep.MAX_INPUT_RETRIES then
+            logStepRetry(exec)
+            exec.retry = true
+            clearExecWeatherOverride(exec)
+            return "done", nil
+        end
+    end
     evaluateStepGates(exec, summary)
     exec.stepResult = buildStepResult(exec, summary)
     logStepDone(exec.runId, exec.index, exec.total, exec.setDef, exec.scenarioId, exec.repeatIndex, summary, exec.activityResult, exec)

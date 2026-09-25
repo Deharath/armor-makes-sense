@@ -3,101 +3,78 @@ ArmorMakesSense.PresentationPolicy = ArmorMakesSense.PresentationPolicy or {}
 
 local Policy = ArmorMakesSense.PresentationPolicy
 
-Policy.BURDEN_THRESHOLDS = {
-    light = 7,
-    moderate = 20,
-    heavy = 45,
-    extreme = 75,
-}
+-- Every AMS readout is a strip of PIP_COUNT pips. Each table lists the
+-- value at which pip 1..PIP_COUNT lights up.
+Policy.PIP_COUNT = 4
+Policy.TIERS = { "negligible", "light", "moderate", "heavy", "extreme" }
 
-Policy.BREATHING_THRESHOLDS = {
-    visible = 0.80,
-    restricted = 2.00,
-}
+Policy.LOAD_BANDS = { 0.02, 0.07, 0.13, 0.25 }     -- load fraction of body mass
+-- Starts above 1.0 kg: vanilla leaves most shoes and trousers at the default
+-- script weight, which lands every pair of shoes at exactly 1.0 kg.
+Policy.ITEM_BANDS_KG = { 1.5, 3.0, 4.5, 6.0 }      -- one item's effective kg
+Policy.HEAT_BANDS = { 0.05, 0.20, 0.40, 0.65 }     -- insulation x heat strain
+Policy.BREATHING_BANDS = { 0.10, 0.35, 0.60, 0.90 } -- respiratory severity
+Policy.SLEEP_BANDS = { 0.03, 0.10, 0.20, 0.30 }    -- fatigue recovery lost
+Policy.ARM_BANDS_KG = { 1.5, 3.0, 5.0, 8.0 }       -- swing-chain effective kg
 
-Policy.SLEEP_RIGIDITY_THRESHOLD = 10
-Policy.THERMAL_PRESSURE_VISIBLE_MIN = 0.25
-Policy.ACTIVE_PRESSURE_EPSILON = 0.0001
+Policy.ITEM_TOOLTIP_MIN_KG = Policy.ITEM_BANDS_KG[1]
 
-function Policy.burdenTier(physicalLoad)
-    local value = tonumber(physicalLoad) or 0
-    if value < Policy.BURDEN_THRESHOLDS.light then
-        return "negligible"
+function Policy.pips(value, bands)
+    local v = tonumber(value) or 0
+    local count = 0
+    for i = 1, #bands do
+        if v >= bands[i] then
+            count = i
+        end
     end
-    if value < Policy.BURDEN_THRESHOLDS.moderate then
-        return "light"
-    end
-    if value < Policy.BURDEN_THRESHOLDS.heavy then
-        return "moderate"
-    end
-    if value < Policy.BURDEN_THRESHOLDS.extreme then
-        return "heavy"
-    end
-    return "extreme"
+    return count
 end
 
-function Policy.breathingTier(airflowResistance, sealedRestriction)
-    local resistance = tonumber(airflowResistance) or 0
-    if resistance < Policy.BREATHING_THRESHOLDS.visible then
-        return nil
+-- Continuous 0..#bands: whole cells for passed bands, a partial cell for
+-- progress toward the next one. floor(fill) always equals pips().
+function Policy.fill(value, bands)
+    local v = tonumber(value) or 0
+    local lower = 0
+    for i = 1, #bands do
+        if v < bands[i] then
+            return (i - 1) + math.max(0, (v - lower) / (bands[i] - lower))
+        end
+        lower = bands[i]
     end
-    if (tonumber(sealedRestriction) or 0) > 0 then
-        return "heavy"
-    end
-    if resistance < Policy.BREATHING_THRESHOLDS.restricted then
-        return "mild"
-    end
-    return "restricted"
+    return #bands
 end
 
-function Policy.recoveryPenaltyPercent(regenScale, naturalDelta)
-    if (tonumber(naturalDelta) or 0) <= 0 then
-        return 0
-    end
-    local scale = math.max(0, math.min(1, tonumber(regenScale) or 1))
-    return (1 - scale) * 100
+function Policy.tier(pips)
+    return Policy.TIERS[(tonumber(pips) or 0) + 1] or Policy.TIERS[1]
 end
 
-function Policy.drainPercentPerMinute(drainApplied, elapsedMinutes)
-    local elapsed = math.max(0, tonumber(elapsedMinutes) or 0)
-    if elapsed <= 0 then
-        return 0
-    end
-    return (math.max(0, tonumber(drainApplied) or 0) / elapsed) * 100
+function Policy.loadPips(loadFraction)
+    return Policy.pips(loadFraction, Policy.LOAD_BANDS)
 end
 
-function Policy.sleepPenaltyPercent(penaltyFraction, enabled)
-    if enabled ~= true then
-        return 0
-    end
-    local fraction = math.max(0, math.min(0.95, tonumber(penaltyFraction) or 0))
-    return fraction * 100
+function Policy.itemPips(burdenKg)
+    return Policy.pips(burdenKg, Policy.ITEM_BANDS_KG)
 end
 
-function Policy.snapshotAgeMinutes(currentMinute, updatedMinute)
-    local current = tonumber(currentMinute)
-    local updated = tonumber(updatedMinute)
-    if current == nil or updated == nil then
-        return nil
-    end
-    return math.max(0, current - updated)
+function Policy.heatPips(heat)
+    return Policy.pips(heat, Policy.HEAT_BANDS)
 end
 
-function Policy.hasThermalPressure(contribution)
-    return (tonumber(contribution) or 0) >= Policy.THERMAL_PRESSURE_VISIBLE_MIN
+function Policy.breathingPips(severity)
+    return Policy.pips(severity, Policy.BREATHING_BANDS)
 end
 
-function Policy.hasBreathingPressure(contribution)
-    return (tonumber(contribution) or 0) > Policy.ACTIVE_PRESSURE_EPSILON
+function Policy.sleepPips(penaltyFraction)
+    return Policy.pips(penaltyFraction, Policy.SLEEP_BANDS)
 end
 
-function Policy.hasSleepPressure(penaltyFraction, enabled)
-    return enabled == true
-        and (tonumber(penaltyFraction) or 0) > Policy.ACTIVE_PRESSURE_EPSILON
+function Policy.armPips(armKg)
+    return Policy.pips(armKg, Policy.ARM_BANDS_KG)
 end
 
-function Policy.hasSleepRestriction(rigidityLoad)
-    return (tonumber(rigidityLoad) or 0) >= Policy.SLEEP_RIGIDITY_THRESHOLD
+-- Signed whole-percent change against vanilla for a regen or drain scale.
+function Policy.percentChange(scale)
+    return math.floor(((tonumber(scale) or 1) - 1) * 100 + 0.5)
 end
 
 return Policy

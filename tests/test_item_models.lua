@@ -1,7 +1,6 @@
 local Support = dofile((os.getenv("AMS_ROOT") or ".") .. "/tests/support.lua")
 
 ArmorMakesSense = {}
-local Classifier = require "ArmorMakesSense_ArmorClassifier"
 local BreathingClassifier = require "ArmorMakesSense_BreathingClassifier"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 
@@ -83,25 +82,20 @@ local wearableContainer = Support.makeItem({
     combatSpeedModifier = 0.80,
 })
 
-local civilianClassification = Classifier.evaluateArmorLike(civilian, nil, "Torso1")
-Support.assertFalse(civilianClassification.isArmorLike, "light civilian item classification")
-
-local plateClassification = Classifier.evaluateArmorLike(plateCarrier, nil, "TorsoExtra")
-Support.assertTrue(plateClassification.isArmorLike, "plate carrier classification")
-Support.assertClose(plateClassification.classifierDefenseScore, 59.5, 1e-9, "plate defense score")
-local plateSignals = Classifier.computeArmorLikeSignals(plateCarrier, nil, "TorsoExtra")
-local plateClassificationFromSignals = Classifier.evaluateArmorLikeSignals(plateSignals)
-Support.assertEqual(
-    plateClassificationFromSignals.isArmorLike,
-    plateClassification.isArmorLike,
-    "precomputed plate classification parity"
-)
-Support.assertClose(
-    plateClassificationFromSignals.classifierDefenseScore,
-    plateClassification.classifierDefenseScore,
-    1e-9,
-    "precomputed plate defense parity"
-)
+-- Rigidity is vanilla's authored discomfort, not defense: a leather jacket
+-- protects well but is fine to sleep in.
+local leatherJacket = Support.makeItem({
+    fullType = "Base.Jacket_Leather",
+    bodyLocation = "Jacket",
+    actualWeight = 2.0,
+    scratchDefense = 50,
+    biteDefense = 30,
+    discomfort = 0,
+})
+local leatherSignal = LoadModel.itemToBurdenSignal(leatherJacket, "Jacket")
+Support.assertFalse(leatherSignal.rigid, "protective clothing without discomfort is not rigid")
+Support.assertClose(leatherSignal.rigidKg, 0, 1e-9, "leather jacket costs no sleep")
+Support.assertTrue(LoadModel.itemToBurdenSignal(plateCarrier, "TorsoExtra").rigid, "authored discomfort marks rigid gear")
 
 local respirator = Support.makeItem({
     fullType = "Example.Respirator",
@@ -151,10 +145,33 @@ local decorativeSignals = BreathingClassifier.computeSignals(decorativeMask, nil
 Support.assertEqual(decorativeSignals.class, "face_covering", "decorative mask slot floor")
 Support.assertClose(decorativeSignals.airflowResistance, 0, 1e-9, "decorative mask airflow resistance")
 
+-- Placement, swing chain and sleep contact tables.
+Support.assertClose(LoadModel.placementFactor("Shoes"), 2.0, 1e-9, "feet placement")
+Support.assertClose(LoadModel.placementFactor("TorsoExtraVest"), 1.0, 1e-9, "trunk placement")
+Support.assertClose(LoadModel.placementFactor("Hands"), 1.6, 1e-9, "hand placement")
+Support.assertClose(LoadModel.placementFactor("Pants"), 1.4, 1e-9, "leg placement")
+Support.assertClose(LoadModel.placementFactor("AlienLayer"), 1.0, 1e-9, "unknown slots count as trunk")
+Support.assertTrue(LoadModel.isSwingChainLocation("ShoulderpadLeft"), "shoulder is swing chain")
+Support.assertTrue(LoadModel.isSwingChainLocation("Hands"), "hands are swing chain")
+Support.assertFalse(LoadModel.isSwingChainLocation("ShoulderHolster"), "holster is not swing chain")
+Support.assertFalse(LoadModel.isSwingChainLocation("TorsoExtraVest"), "vest is not swing chain")
+Support.assertClose(LoadModel.sleepContactWeight("MaskFull"), 0.0, 1e-9, "masks never press when sleeping")
+Support.assertClose(LoadModel.sleepContactWeight("Knee_Left"), 0.4, 1e-9, "limb contact")
+Support.assertClose(LoadModel.sleepContactWeight("Thigh_Left"), 0.7, 1e-9, "hip contact")
+Support.assertClose(LoadModel.sleepContactWeight("TorsoExtraVest"), 1.0, 1e-9, "trunk contact")
+
+-- burdenFromStats: (weight - allowance) * placement + bulk.
+local burden, mass, placement, bulk = LoadModel.burdenFromStats(nil, 3.0, 0.5, 0.1, "Shoes")
+Support.assertClose(mass, 2.5, 1e-9, "per-item mass allowance")
+Support.assertClose(placement, 2.0, 1e-9, "stats placement")
+Support.assertClose(bulk, 0.6 + 2.0, 1e-9, "bulk from run penalty and discomfort")
+Support.assertClose(burden, 5.0 + 2.6, 1e-9, "burden from stats")
+Support.assertClose(LoadModel.burdenFromStats(nil, 0.3, 0, 0, "Torso1"), 0, 1e-9, "light garments cost nothing")
+
 local civilianSignal = LoadModel.itemToBurdenSignal(civilian, "Torso1")
-Support.assertClose(civilianSignal.physicalLoad, 1.6, 1e-9, "civilian physical load")
-Support.assertEqual(civilianSignal.thermalLoad, nil, "item model does not infer thermal load")
-Support.assertClose(civilianSignal.rigidityLoad, 2.5, 1e-9, "civilian rigidity")
+Support.assertClose(civilianSignal.burdenKg, 0, 1e-9, "civilian burden")
+Support.assertClose(civilianSignal.rigidKg, 0, 1e-9, "civilian clothing is not rigid")
+Support.assertFalse(civilianSignal.swingChain, "civilian shirt swing chain")
 
 local sparseWearable = Support.makeItem({
     fullType = "Example.SparseWearable",
@@ -162,19 +179,45 @@ local sparseWearable = Support.makeItem({
     actualWeight = 0.5,
 })
 local sparseSignal = LoadModel.itemToBurdenSignal(sparseWearable, "TorsoExtra")
-Support.assertClose(sparseSignal.physicalLoad, 1.6, 1e-9, "missing speed modifiers are neutral")
+Support.assertClose(sparseSignal.burdenKg, 0, 1e-9, "missing speed modifiers are neutral")
 
-local patchedMovement = Support.makeItem({
-    fullType = "Example.PatchedMovement",
+local stiffHarness = Support.makeItem({
+    fullType = "Example.StiffHarness",
     bodyLocation = "TorsoExtra",
     actualWeight = 0.5,
     runSpeedModifier = 0.80,
-    combatSpeedModifier = 0.80,
 })
-ArmorMakesSense._originalRunSpeedModifier = { ["Example.PatchedMovement"] = 0.95 }
-ArmorMakesSense._originalCombatSpeedModifier = { ["Example.PatchedMovement"] = 0.97 }
-local originalMovementSignal = LoadModel.itemToBurdenSignal(patchedMovement, "TorsoExtra")
-Support.assertClose(originalMovementSignal.physicalLoad, 4.42, 1e-9, "burden uses original movement modifiers")
+Support.assertClose(LoadModel.itemToBurdenSignal(stiffHarness, "TorsoExtra").bulkKg, 1.2, 1e-9, "run penalty adds bulk")
+
+local heavyBoots = Support.makeItem({
+    fullType = "Example.HeavyBoots",
+    bodyLocation = "Shoes",
+    actualWeight = 2.0,
+    runSpeedModifier = 0.80,
+})
+local bootSignal = LoadModel.itemToBurdenSignal(heavyBoots, "Shoes")
+Support.assertClose(bootSignal.bulkKg, 0, 1e-9, "footwear run modifiers are traction, not bulk")
+Support.assertClose(bootSignal.burdenKg, 3.0, 1e-9, "footwear mass costs double")
+
+-- Vanilla footwear all sits at the 1.0 kg script default; AMS authors pairs.
+local function shoe(fullType)
+    return LoadModel.itemToBurdenSignal(Support.makeItem({ fullType = fullType, bodyLocation = "Shoes", actualWeight = 1.0 }), "Shoes")
+end
+Support.assertClose(shoe("Base.Shoes_ArmyBoots").weightKg, 1.8, 1e-9, "army boots authored weight")
+Support.assertClose(shoe("Base.Shoes_ArmyBoots").burdenKg, 2.6, 1e-9, "army boots burden")
+Support.assertClose(shoe("Base.Shoes_TrainerTINT").burdenKg, 0.4, 1e-9, "trainers are light")
+Support.assertClose(shoe("Base.Shoes_Slippers").burdenKg, 0, 1e-9, "slippers cost nothing")
+Support.assertClose(shoe("Example.ModdedBoots").weightKg, 1.0, 1e-9, "modded footwear keeps its script weight")
+
+ArmorMakesSense._originalDiscomfort = { ["Example.Rebalanced"] = 0.5 }
+local rebalanced = Support.makeItem({
+    fullType = "Example.Rebalanced",
+    bodyLocation = "TorsoExtra",
+    actualWeight = 0.5,
+    discomfort = 0,
+})
+Support.assertClose(LoadModel.itemToBurdenSignal(rebalanced, "TorsoExtra").bulkKg, 2.0, 1e-9, "burden uses authored discomfort")
+ArmorMakesSense._originalDiscomfort = nil
 
 local forcedContainer = Support.makeItem({
     fullType = "Example.ForcedArmoredRig",
@@ -187,9 +230,9 @@ local forcedContainer = Support.makeItem({
 })
 local forcedContainerSignal = LoadModel.itemToBurdenSignal(forcedContainer, "TorsoExtra")
 Support.assertTrue(forcedContainerSignal ~= nil, "explicit include accepts wearable container")
-Support.assertTrue(forcedContainerSignal.armorLike, "explicit armor category")
+Support.assertTrue(forcedContainerSignal.rigid, "AMSArmor tag marks rigid gear")
+Support.assertClose(forcedContainerSignal.rigidKg, 2.0, 1e-9, "forced armor rigid kg")
 Support.assertEqual(forcedContainerSignal.inclusionReason, "forced_include", "explicit inclusion reason")
-Support.assertEqual(forcedContainerSignal.classificationReason, "forced_armor", "explicit armor reason")
 
 local forcedExclude = Support.makeItem({
     fullType = "Example.ExcludedWearable",
@@ -199,59 +242,72 @@ local forcedExclude = Support.makeItem({
 })
 Support.assertEqual(LoadModel.itemToBurdenSignal(forcedExclude, "TorsoExtra"), nil, "explicit burden exclusion")
 
+local cosmetic = Support.makeItem({
+    fullType = "Example.Cape",
+    bodyLocation = "Back",
+    cosmetic = true,
+    actualWeight = 3,
+})
+Support.assertEqual(LoadModel.itemToBurdenSignal(cosmetic, "Back"), nil, "cosmetic items carry no burden")
+
 local classifierSignalCalls = 0
-local computeArmorLikeSignals = Classifier.computeArmorLikeSignals
-Classifier.computeArmorLikeSignals = function(...)
+local computeSignals = BreathingClassifier.computeSignals
+BreathingClassifier.computeSignals = function(...)
     classifierSignalCalls = classifierSignalCalls + 1
-    return computeArmorLikeSignals(...)
+    return computeSignals(...)
 end
+LoadModel.clearSignalCache()
 local plateSignal = LoadModel.itemToBurdenSignal(plateCarrier, "TorsoExtra")
-Classifier.computeArmorLikeSignals = computeArmorLikeSignals
-Support.assertEqual(classifierSignalCalls, 1, "load model classifier signal pass count")
-Support.assertClose(plateSignal.physicalLoad, 28, 1e-9, "plate physical clamp")
-Support.assertClose(plateSignal.rigidityLoad, 53.7, 1e-9, "plate rigidity")
+LoadModel.itemToBurdenSignal(plateCarrier, "TorsoExtra")
+BreathingClassifier.computeSignals = computeSignals
+Support.assertEqual(classifierSignalCalls, 1, "item signals are cached per type")
+Support.assertClose(plateSignal.massKg, 4.5, 1e-9, "plate mass")
+Support.assertClose(plateSignal.bulkKg, 0.9 + 1.0, 1e-9, "plate bulk")
+Support.assertClose(plateSignal.burdenKg, 6.4, 1e-9, "plate burden")
+Support.assertClose(plateSignal.rigidKg, 5.0, 1e-9, "plate rigid kg on trunk")
 
 local maskSignal = LoadModel.itemToBurdenSignal(gasMaskNoFilter, "MaskFull")
-Support.assertClose(maskSignal.physicalLoad, 0, 1e-9, "mask physical load")
+Support.assertClose(maskSignal.burdenKg, 1.0, 1e-9, "mask burden")
 Support.assertClose(maskSignal.airflowResistance, 1.35, 1e-9, "mask airflow resistance")
 Support.assertClose(maskSignal.sealedRestriction, 0, 1e-9, "mask sealed restriction")
-Support.assertClose(maskSignal.rigidityLoad, 5.1, 1e-9, "mask rigidity")
+Support.assertClose(maskSignal.rigidKg, 0, 1e-9, "masks add no sleep rigidity")
 
 Support.assertEqual(LoadModel.itemToBurdenSignal(wearableContainer, "TorsoExtra"), nil, "wearable container exclusion")
 
-local profile = LoadModel.computeWornProfile(Support.makePlayer({
+local gauntlets = Support.makeItem({
+    fullType = "Example.Gauntlets",
+    bodyLocation = "Hands",
+    actualWeight = 1.0,
+})
+
+local wornSet = {
     { item = civilian, location = "Torso1" },
     { item = plateCarrier, location = "TorsoExtra" },
     { item = gasMaskNoFilter, location = "MaskFull" },
     { item = unfamiliarSlot, location = "AlienLayer" },
     { item = wearableContainer, location = "TorsoExtra" },
-}))
+    { item = gauntlets, location = "Hands" },
+}
+local profile = LoadModel.computeWornProfile(Support.makePlayer(wornSet))
 
-Support.assertClose(profile.physicalLoad, 36.8, 1e-9, "aggregate physical load")
-Support.assertClose(profile.swingChainLoad, 0, 1e-9, "aggregate swing-chain load")
-Support.assertEqual(profile.thermalLoad, nil, "worn profile has no inferred thermal load")
+Support.assertClose(profile.burdenKg, 6.4 + 1.0 + 0.7 + 0.8, 1e-9, "aggregate burden")
+Support.assertClose(profile.massKg, 4.5 + 0.5 + 0.7 + 0.5, 1e-9, "aggregate mass")
+Support.assertClose(profile.bulkKg, 1.9 + 0.4, 1e-9, "aggregate bulk")
+Support.assertClose(profile.armKg, 0.8, 1e-9, "aggregate swing-chain burden")
 Support.assertClose(profile.airflowResistance, 1.35, 1e-9, "aggregate airflow resistance")
 Support.assertClose(profile.sealedRestriction, 0, 1e-9, "aggregate sealed restriction")
-Support.assertClose(profile.rigidityLoad, 60.4, 1e-9, "aggregate rigidity")
-Support.assertEqual(profile.driverCount, 3, "aggregate load-driver count")
-Support.assertClose(profile.weightUsedTotal, 6.7, 1e-9, "aggregate equipped weight")
-Support.assertEqual(profile.fallbackWeightCount, 0, "aggregate weight fallbacks")
+Support.assertEqual(profile.driverCount, 1, "default-weight items are not cost drivers")
 
-local analysis = LoadModel.analyzeWornGear(Support.makePlayer({
-    { item = civilian, location = "Torso1" },
-    { item = plateCarrier, location = "TorsoExtra" },
-    { item = gasMaskNoFilter, location = "MaskFull" },
-    { item = unfamiliarSlot, location = "AlienLayer" },
-    { item = wearableContainer, location = "TorsoExtra" },
-}))
-Support.assertClose(analysis.profile.physicalLoad, profile.physicalLoad, 1e-9, "analysis profile parity")
-Support.assertEqual(#analysis.rows, 5, "analysis worn rows")
-Support.assertEqual(#analysis.costDrivers, 3, "analysis cost drivers")
+local analysis = LoadModel.analyzeWornGear(Support.makePlayer(wornSet))
+Support.assertClose(analysis.profile.burdenKg, profile.burdenKg, 1e-9, "analysis profile parity")
+Support.assertEqual(#analysis.rows, 6, "analysis worn rows")
+Support.assertEqual(#analysis.costDrivers, 1, "analysis cost drivers")
 Support.assertEqual(analysis.costDrivers[1].fullType, "Example.PlateCarrier", "top cost driver")
 Support.assertEqual(analysis.costDrivers[1].label, "Plate carrier", "cost driver display name")
+Support.assertClose(analysis.costDrivers[1].burdenKg, 6.4, 1e-9, "cost driver burden")
 Support.assertEqual(analysis.rows[1].sourceMod, "ExampleMod", "analysis source mod")
-Support.assertEqual(analysis.rows[5].fullType, "Example.ArmoredRig", "excluded item retained in rows")
-Support.assertFalse(analysis.rows[5].included, "excluded row marker")
+Support.assertEqual(analysis.rows[6].fullType, "Example.ArmoredRig", "excluded item retained in rows")
+Support.assertFalse(analysis.rows[6].included, "excluded row marker")
 local noFilterRow = nil
 for i = 1, #analysis.rows do
     if analysis.rows[i].fullType == "Base.Hat_GasMaskNoFilter" then
@@ -263,10 +319,29 @@ Support.assertTrue(noFilterRow ~= nil, "no-filter mask row retained")
 Support.assertFalse(noFilterRow.respiratoryHasFilter, "no-filter row preserves explicit false")
 Support.assertEqual(
     analysis.equipmentSignature,
-    "AlienLayer=Example.UtilityHarness;MaskFull=Base.Hat_GasMaskNoFilter;Torso1=Base.Tshirt_DefaultTEXTURE_TINT;TorsoExtra=Example.ArmoredRig;TorsoExtra=Example.PlateCarrier",
+    "AlienLayer=Example.UtilityHarness;Hands=Example.Gauntlets;MaskFull=Base.Hat_GasMaskNoFilter;Torso1=Base.Tshirt_DefaultTEXTURE_TINT;TorsoExtra=Example.ArmoredRig;TorsoExtra=Example.PlateCarrier",
     "analysis equipment signature"
 )
-Support.assertEqual(analysis.wornCount, 5, "analysis worn count")
+Support.assertEqual(analysis.wornCount, 6, "analysis worn count")
+
+-- Carrier: burden relative to body mass and Strength.
+Support.assertClose(LoadModel.loadFraction(nil, 3.5, { bodyKg = 80, strength = 5 }), 0, 1e-9, "clothing allowance")
+Support.assertClose(LoadModel.loadFraction(nil, 13.5, { bodyKg = 80, strength = 5 }), 0.125, 1e-9, "average carrier")
+Support.assertClose(LoadModel.loadFraction(nil, 13.5, { bodyKg = 80, strength = 10 }), 0.0875, 1e-9, "strong carrier")
+Support.assertClose(LoadModel.loadFraction(nil, 13.5, { bodyKg = 50, strength = 5 }), 0.2, 1e-9, "light carrier")
+Support.assertClose(
+    LoadModel.loadFraction({ BurdenClothingAllowanceKg = 3, PhysicalLoadScale = 2, StrengthFactorBase = 1.3, StrengthFactorPerLevel = 0.06 }, 13.0, { bodyKg = 80, strength = 5 }),
+    0.25,
+    1e-9,
+    "sandbox load scale"
+)
+local carrier = LoadModel.resolveCarrier({
+    getNutrition = function()
+        return { getWeight = function() return 200 end }
+    end,
+}, nil)
+Support.assertClose(carrier.bodyKg, 90, 1e-9, "body mass clamps at lean-mass ceiling")
+Support.assertClose(carrier.strength, 5, 1e-9, "default strength without perks")
 
 local stackedRespirators = LoadModel.computeWornProfile(Support.makePlayer({
     { item = respirator, location = "Mask" },

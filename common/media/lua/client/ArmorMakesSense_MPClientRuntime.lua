@@ -4,7 +4,6 @@ local MP = require "ArmorMakesSense_MPCompat"
 require "ArmorMakesSense_Compat"
 local Logger = require "ArmorMakesSense_Logger"
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
-local SleepOwnership = require "ArmorMakesSense_SleepOwnership"
 local Utils = require "ArmorMakesSense_UtilsShared"
 local MPClientRuntime = {}
 ArmorMakesSense.MPClientRuntime = MPClientRuntime
@@ -22,7 +21,6 @@ local SNAPSHOT_REQUEST_TIMEOUT_SECONDS = math.max(
 )
 local uiHooksEnsured = false
 local markUiDirty
-local SLEEP_FATIGUE_CORRECTION_EPSILON = 0.002
 
 local function log(message)
     Logger.debug("role=mp-client " .. tostring(message))
@@ -106,117 +104,6 @@ local function ensureMpUiHooks(playerObj)
         return true
     end
     return false
-end
-
-local function getFatigue(playerObj)
-    local stats = Utils.safeMethod(playerObj, "getStats")
-    if not stats then
-        return nil
-    end
-    local fatigue = tonumber(Utils.safeMethod(stats, "getFatigue"))
-    if fatigue ~= nil then
-        return fatigue
-    end
-    if CharacterStat and CharacterStat.FATIGUE then
-        return tonumber(Utils.safeMethod(stats, "get", CharacterStat.FATIGUE))
-    end
-    return nil
-end
-
-local function setFatigue(playerObj, value)
-    local stats = Utils.safeMethod(playerObj, "getStats")
-    if not stats then
-        return false
-    end
-    local clamped = math.max(0, math.min(1, tonumber(value) or 0))
-    if type(stats.setFatigue) == "function" then
-        Utils.safeMethod(stats, "setFatigue", clamped)
-        return true
-    end
-    if CharacterStat and CharacterStat.FATIGUE then
-        Utils.safeMethod(stats, "set", CharacterStat.FATIGUE, clamped)
-        return true
-    end
-    return false
-end
-
-local function reconcileAuthoritativeWakeState(playerObj, snapshot)
-    if not playerObj or type(snapshot) ~= "table" then
-        return false
-    end
-    if snapshot.serverSleeping ~= false or tostring(snapshot.reason or "") ~= "WakeTransition" then
-        return false
-    end
-    if not SleepOwnership.amsOwnsFatigue(Options.get()) then
-        return false
-    end
-    if not Utils.toBoolean(Utils.safeMethod(playerObj, "isAsleep")) then
-        return false
-    end
-
-    if type(getSleepingEvent) ~= "function" then
-        Logger.warnOnce(
-            "mp-client:sleeping_event_unavailable",
-            "role=mp-client authoritative wake could not resolve vanilla SleepingEvent"
-        )
-        return false
-    end
-    local okEvent, sleepingEvent = pcall(getSleepingEvent)
-    if not okEvent or not sleepingEvent then
-        Logger.warnOnce(
-            "mp-client:sleeping_event_unavailable",
-            "role=mp-client authoritative wake could not resolve vanilla SleepingEvent"
-        )
-        return false
-    end
-    local okWake, wakeFailure = pcall(function()
-        sleepingEvent:wakeUp(playerObj, true)
-    end)
-    if not okWake then
-        Logger.error("role=mp-client authoritative vanilla wake failed: " .. tostring(wakeFailure))
-        return false
-    end
-    log("reconciled local wake state from authoritative server snapshot")
-    return true
-end
-
-local function applyAuthoritativeFatigue(playerObj, snapshot)
-    if not playerObj or type(snapshot) ~= "table" then
-        return false
-    end
-    if not SleepOwnership.amsOwnsFatigue(Options.get()) then
-        return false
-    end
-    local serverSleeping = snapshot.serverSleeping == true
-    local reason = tostring(snapshot.reason or "")
-    if (not serverSleeping) and reason ~= "WakeTransition" then
-        return false
-    end
-    local authoritative = tonumber(snapshot.authoritativeFatigue)
-    if authoritative == nil then
-        return false
-    end
-    local current = getFatigue(playerObj)
-    if current ~= nil and math.abs(current - authoritative) <= SLEEP_FATIGUE_CORRECTION_EPSILON then
-        return false
-    end
-    local applied = setFatigue(playerObj, authoritative)
-    if applied then
-        if serverSleeping then
-            log(string.format(
-                "applied authoritative sleep fatigue current=%.3f server=%.3f",
-                tonumber(current) or -1,
-                tonumber(authoritative) or -1
-            ))
-        else
-            log(string.format(
-                "applied authoritative wake fatigue current=%.3f server=%.3f",
-                tonumber(current) or -1,
-                tonumber(authoritative) or -1
-            ))
-        end
-    end
-    return applied
 end
 
 local function sendSnapshotRequest(playerObj)
@@ -318,9 +205,9 @@ local function onServerCommand(module, command, args)
         if not mpClient.firstSnapshotLogged then
             mpClient.firstSnapshotLogged = true
             log(string.format(
-                "received first snapshot load_norm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f",
-                tonumber(snapshot.loadNorm) or 0,
-                tonumber(snapshot.physicalLoad) or 0,
+                "received first snapshot load_fraction=%.3f burden_kg=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f",
+                tonumber(snapshot.loadFraction) or 0,
+                tonumber(snapshot.burdenKg) or 0,
                 #(snapshot.drivers or {}),
                 tostring(snapshot.activityLabel or "idle"),
                 tostring((tonumber(snapshot.hotPressure) or 0) > 0),
@@ -329,17 +216,6 @@ local function onServerCommand(module, command, args)
             ))
         end
         markUiDirty()
-        return
-    end
-
-    if tostring(command) == tostring(MP.SLEEP_STATE_COMMAND) then
-        local playerObj = resolveSnapshotPlayer(args)
-        if not playerObj then
-            return
-        end
-        reconcileAuthoritativeWakeState(playerObj, args)
-        applyAuthoritativeFatigue(playerObj, args)
-        return
     end
 end
 
@@ -360,9 +236,9 @@ function ams_mp_snapshot_status()
     local nowSecond = Utils.getWallClockSeconds()
     local ageSeconds = nowSecond - (tonumber(mpClient and mpClient.lastSnapshotWallSecond) or nowSecond)
     Logger.info(string.format(
-        "role=mp-client snapshot status: load_norm=%.3f physical=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f age_s=%.1f",
-        tonumber(snapshot.loadNorm) or 0,
-        tonumber(snapshot.physicalLoad) or 0,
+        "role=mp-client snapshot status: load_fraction=%.3f burden_kg=%.2f drivers=%d activity=%s hot=%s cold=%s updated_minute=%.2f age_s=%.1f",
+        tonumber(snapshot.loadFraction) or 0,
+        tonumber(snapshot.burdenKg) or 0,
         #(snapshot.drivers or {}),
         tostring(snapshot.activityLabel or "idle"),
         tostring((tonumber(snapshot.hotPressure) or 0) > 0),

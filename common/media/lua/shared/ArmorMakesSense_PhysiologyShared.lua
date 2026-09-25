@@ -6,343 +6,262 @@ Models.Physiology = Models.Physiology or {}
 
 local Utils = require "ArmorMakesSense_UtilsShared"
 local Stats = require "ArmorMakesSense_StatsShared"
+local Environment = require "ArmorMakesSense_EnvironmentShared"
+local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local BreathingModel = require "ArmorMakesSense_BreathingModel"
 local EnduranceModel = require "ArmorMakesSense_EnduranceModel"
-local SleepPhysiology = require "ArmorMakesSense_SleepPhysiology"
+local SleepModel = require "ArmorMakesSense_SleepModel"
 local ThermalModel = require "ArmorMakesSense_ThermalModel"
 local Physiology = Models.Physiology
 
--- -----------------------------------------------------------------------------
--- Physiological load + recovery model
--- -----------------------------------------------------------------------------
+-- One authoritative tick per game minute (SP local player, MP server).
 
 local function getCompat()
     return ArmorMakesSense.Compat or rawget(_G, "MakesSenseCompat")
 end
 
-function Physiology.getUiRuntimeSnapshot(player, state, options)
-    local resolvedState = state
-    if type(resolvedState) ~= "table" then
-        return nil
-    end
-    local isMp = Utils.isMultiplayer()
-    if isMp and type(resolvedState.mpServerSnapshot) == "table" then
-        local snapshot = resolvedState.mpServerSnapshot
-        return {
-            loadNorm = tonumber(snapshot.loadNorm) or 0,
-            physicalLoad = tonumber(snapshot.physicalLoad) or 0,
-            thermalResistance = tonumber(snapshot.thermalResistance) or 0,
-            airflowResistance = tonumber(snapshot.airflowResistance) or 0,
-            sealedRestriction = tonumber(snapshot.sealedRestriction) or 0,
-            rigidityLoad = tonumber(snapshot.rigidityLoad) or 0,
-            driverCount = tonumber(snapshot.driverCount) or 0,
-            effectiveLoad = tonumber(snapshot.effectiveLoad) or 0,
-            thermalContribution = tonumber(snapshot.thermalContribution) or 0,
-            breathingContribution = tonumber(snapshot.breathingContribution) or 0,
-            bodyHeatDelta = tonumber(snapshot.bodyHeatDelta) or 0,
-            hotDrive = tonumber(snapshot.hotDrive) or 0,
-            hotPressure = tonumber(snapshot.hotPressure) or 0,
-            coldSuitability = tonumber(snapshot.coldSuitability) or 0,
-            thermalStrainScale = tonumber(snapshot.thermalStrainScale) or 0,
-            metabolicRate = tonumber(snapshot.metabolicRate) or 1.5,
-            metabolicDemand = tonumber(snapshot.metabolicDemand) or 1.5,
-            metabolicNorm = tonumber(snapshot.metabolicNorm) or 0,
-            breathingEffortRamp = tonumber(snapshot.breathingEffortRamp) or 0,
-            breathingDynamicLoad = tonumber(snapshot.breathingDynamicLoad) or 0,
-            breathingSealedLoad = tonumber(snapshot.breathingSealedLoad) or 0,
-            enduranceNaturalDelta = tonumber(snapshot.enduranceNaturalDelta) or 0,
-            amsEnduranceRegenScale = tonumber(snapshot.amsEnduranceRegenScale) or 1,
-            amsEnduranceDrainApplied = tonumber(snapshot.amsEnduranceDrainApplied) or 0,
-            lastAppliedDtMinutes = tonumber(snapshot.lastAppliedDtMinutes) or 0,
-            sleepPenaltyFraction = tonumber(snapshot.sleepPenaltyFraction) or 0,
-            sleepWakeAdjustment = tonumber(snapshot.sleepWakeAdjustment) or 0,
-            activityLabel = tostring(snapshot.activityLabel or "idle"),
-            updatedMinute = tonumber(snapshot.updatedMinute) or 0,
-            drivers = type(snapshot.drivers) == "table" and snapshot.drivers or {},
-        }
-    end
-    local snapshot = resolvedState.uiRuntimeSnapshot
-    if type(snapshot) ~= "table" then
-        return nil
-    end
-    return {
-        loadNorm = tonumber(snapshot.loadNorm) or 0,
-        effectiveLoad = tonumber(snapshot.effectiveLoad) or 0,
-        physicalLoad = tonumber(snapshot.physicalLoad) or 0,
-        thermalResistance = tonumber(snapshot.thermalResistance) or 0,
-        airflowResistance = tonumber(snapshot.airflowResistance) or 0,
-        sealedRestriction = tonumber(snapshot.sealedRestriction) or 0,
-        rigidityLoad = tonumber(snapshot.rigidityLoad) or 0,
-        driverCount = tonumber(snapshot.driverCount) or 0,
-        thermalContribution = tonumber(snapshot.thermalContribution) or 0,
-        breathingContribution = tonumber(snapshot.breathingContribution) or 0,
-        bodyHeatDelta = tonumber(snapshot.bodyHeatDelta) or 0,
-        hotDrive = tonumber(snapshot.hotDrive) or 0,
-        hotPressure = tonumber(snapshot.hotPressure) or 0,
-        coldSuitability = tonumber(snapshot.coldSuitability) or 0,
-        thermalStrainScale = tonumber(snapshot.thermalStrainScale) or 0,
-        enduranceNaturalDelta = tonumber(snapshot.enduranceNaturalDelta) or 0,
-        amsEnduranceRegenScale = tonumber(snapshot.amsEnduranceRegenScale) or 1,
-        amsEnduranceDrainApplied = tonumber(snapshot.amsEnduranceDrainApplied) or 0,
-        lastAppliedDtMinutes = tonumber(snapshot.lastAppliedDtMinutes) or 0,
-        sleepPenaltyFraction = tonumber(resolvedState.lastSleepPenaltyFraction) or 0,
-        sleepWakeAdjustment = tonumber(resolvedState.lastSleepWakeAdjustment) or 0,
-        activityLabel = tostring(snapshot.activityLabel or "idle"),
-        updatedMinute = tonumber(snapshot.updatedMinute) or 0,
-    }
-end
-
-function Physiology.applySleepTransition(player, state, options, dtMinutes, profile)
-    return SleepPhysiology.applyTransition(player, state, options, dtMinutes, profile)
-end
-
-function Physiology.computeSleepPlannerPenalty(player, state, options, profile, currentFatigue)
-    return SleepPhysiology.computePlannerPenalty(player, state, options, profile, currentFatigue)
-end
-
-function Physiology.computeSleepPenaltyContribution(player, state, options, dtMinutes, profile, currentFatigue)
-    return SleepPhysiology.computePenaltyContribution(
-        player,
-        state,
-        options,
-        dtMinutes,
-        profile,
-        currentFatigue
-    )
-end
-
-local function computeThermalContribution(player, state, options, dtMinutes)
-    if type(state.thermalModelState) ~= "table" then
-        state.thermalModelState = {}
-    end
-    return ThermalModel.advance(
-        ThermalModel.sample(player),
-        state.thermalModelState,
-        dtMinutes,
-        options
-    )
-end
-
-local function resolveNmsEnduranceContribution(player, dtMinutes, naturalDelta, endurance, previous)
+local function nmsCallback(name)
     local compat = getCompat()
     if type(compat) ~= "table" or type(compat.getCallback) ~= "function" then
         return nil
     end
+    local callback = compat:getCallback("NutritionMakesSense", name)
+    return type(callback) == "function" and callback or nil
+end
 
-    local callback = compat:getCallback("NutritionMakesSense", "computeEnduranceContribution")
-    if type(callback) ~= "function" then
-        return nil
+local function resolveNmsContribution(player, dtMinutes, naturalDelta, endurance, previous)
+    local callback = nmsCallback("computeEnduranceContribution")
+    if not callback then
+        return 1, 0
     end
-
     local ok, contribution = pcall(callback, player, {
         dtMinutes = dtMinutes,
-        dtHours = math.max(0, tonumber(dtMinutes) or 0) / 60.0,
+        dtHours = dtMinutes / 60.0,
         naturalDelta = naturalDelta,
         currentEndurance = endurance,
         previousEndurance = previous,
     })
     if not ok or type(contribution) ~= "table" then
-        return nil
+        return 1, 0
     end
-
-    return contribution
+    return tonumber(contribution.regenScale) or 1, math.max(0, tonumber(contribution.extraDrain) or 0)
 end
 
-local function recordNmsEnduranceResult(player, controlledEndurance, regenScale, extraDrain)
-    local compat = getCompat()
-    if type(compat) ~= "table" or type(compat.getCallback) ~= "function" then
-        return
+local function recordNmsResult(player, controlled, regenScale, extraDrain)
+    local callback = nmsCallback("recordEnduranceResult")
+    if callback then
+        pcall(callback, player, {
+            controlledEndurance = controlled,
+            regenScale = regenScale,
+            extraDrain = extraDrain,
+        })
     end
+end
 
-    local callback = compat:getCallback("NutritionMakesSense", "recordEnduranceResult")
-    if type(callback) ~= "function" then
-        return
-    end
-
-    pcall(callback, player, {
-        controlledEndurance = controlledEndurance,
-        regenScale = regenScale,
-        extraDrain = extraDrain,
+local function scalesFor(options, loadFraction, heat, breathingInput, activityLabel, resting)
+    local breathing = BreathingModel.calculate(options, {
+        airflowResistance = breathingInput.airflowResistance,
+        sealedRestriction = breathingInput.sealedRestriction,
+        metabolicRate = breathingInput.metabolicRate,
+        activityLabel = activityLabel,
     })
+    return EnduranceModel.scales(options, {
+        loadFraction = loadFraction,
+        heat = heat,
+        breathing = breathing.pressure,
+        activityLabel = activityLabel,
+        resting = resting,
+    }), breathing
 end
 
-local function applyEnduranceCorrection(player, controlled, endurance)
-    controlled = Utils.clamp(controlled, 0, 1)
-    if math.abs(controlled - endurance) > 0.0002 then
-        Stats.setEndurance(player, controlled)
+-- Presentation: what the current loadout costs at each pace, right now.
+local function buildSnapshot(player, state, options, profile, thermal, activityLabel, postureLabel)
+    local carrier = LoadModel.resolveCarrier(player, options)
+    local loadFraction = LoadModel.loadFraction(options, profile.burdenKg, carrier)
+    local heat = tonumber(thermal.heat) or 0
+    local breathingInput = {
+        airflowResistance = profile.airflowResistance,
+        sealedRestriction = profile.sealedRestriction,
+    }
+    local walk = scalesFor(options, loadFraction, heat, breathingInput, "walk", false)
+    local run = scalesFor(options, loadFraction, heat, breathingInput, "run", false)
+    local sprint, sprintBreathing = scalesFor(options, loadFraction, heat, breathingInput, "sprint", false)
+    local stand = scalesFor(options, loadFraction, heat, breathingInput, "idle", false)
+    local rest = scalesFor(options, loadFraction, heat, breathingInput, "idle", true)
+    return {
+        activityLabel = activityLabel,
+        postureLabel = postureLabel,
+        burdenKg = profile.burdenKg,
+        armKg = profile.armKg,
+        rigidKg = profile.rigidKg,
+        driverCount = profile.driverCount,
+        bodyKg = carrier.bodyKg,
+        strength = carrier.strength,
+        loadFraction = loadFraction,
+        heat = heat,
+        thermalResistance = tonumber(thermal.resistance) or 0,
+        hotPressure = tonumber(thermal.hotPressure) or 0,
+        coldSuitability = tonumber(thermal.coldSuitability) or 0,
+        airflowResistance = profile.airflowResistance,
+        sealedRestriction = profile.sealedRestriction,
+        breathingSeverity = sprintBreathing.severity,
+        breathingEnabled = Utils.toBoolean(options.EnableBreathingModel),
+        restRegenScale = rest.regenScale,
+        standRegenScale = stand.regenScale,
+        walkRegenScale = walk.physicalRegen * walk.thermalRegen,
+        runDrainScale = run.drainScale,
+        sprintDrainScale = sprint.drainScale,
+        sleepPenaltyFraction = SleepModel.penaltyFraction(options, profile.rigidKg),
+        updatedMinute = tonumber(Utils.getWorldAgeMinutes()) or 0,
+    }
+end
+
+local function advanceThermal(player, state, options, dtMinutes)
+    state.thermalModelState = type(state.thermalModelState) == "table" and state.thermalModelState or {}
+    return ThermalModel.advance(ThermalModel.sample(player), state.thermalModelState, dtMinutes, options)
+end
+
+local function rebase(player, state)
+    state.lastEnduranceObserved = Stats.getEndurance(player)
+end
+
+function Physiology.tick(player, state, options, profile, nowMinutes)
+    local now = tonumber(nowMinutes) or 0
+    local last = tonumber(state.lastTickMinute)
+    state.lastTickMinute = now
+    local elapsed = last and (now - last) or 0
+
+    local sleep = SleepModel.step(player, state, options, profile)
+    local postureLabel = Environment.getPostureLabel(player)
+    local activityLabel = Environment.resolveActivity(player)
+
+    if sleep.sleeping or last == nil or elapsed <= 0 or elapsed > (tonumber(options.MaxStepMinutes) or 30) then
+        rebase(player, state)
+        local thermal = advanceThermal(player, state, options, 0)
+        state.uiRuntimeSnapshot = buildSnapshot(player, state, options, profile, thermal, activityLabel, postureLabel)
+        return state.uiRuntimeSnapshot
     end
-    return controlled
-end
 
-function Physiology.applyEnduranceModel(player, state, options, dtMinutes, profile, activityFactor, activityLabel, postureLabel)
+    local thermal = advanceThermal(player, state, options, elapsed)
+    local snapshot = buildSnapshot(player, state, options, profile, thermal, activityLabel, postureLabel)
     local endurance = Stats.getEndurance(player)
+    local previous = tonumber(state.lastEnduranceObserved)
     if endurance == nil then
-        return nil
+        state.uiRuntimeSnapshot = snapshot
+        return snapshot
     end
-    local sampleMinutes = math.max(0, tonumber(dtMinutes) or 0)
-    local canApplyEndurance = sampleMinutes > 0
 
-    local physicalLoad = tonumber(profile.physicalLoad) or 0
-    local thermal = computeThermalContribution(player, state, options, sampleMinutes)
-    local thermalContribution = thermal.contribution
+    local naturalDelta = previous and (endurance - previous) or 0
+    local nmsRegenScale, nmsDrain = resolveNmsContribution(player, elapsed, naturalDelta, endurance, previous)
     local breathing = BreathingModel.calculate(options, {
         airflowResistance = profile.airflowResistance,
         sealedRestriction = profile.sealedRestriction,
         metabolicRate = Stats.getMetabolicRate(player),
         activityLabel = activityLabel,
     })
-    local breathingContribution = breathing.contribution
-    local airflowResistance = breathing.airflowResistance
-    local sealedRestriction = breathing.sealedRestriction
-    local effectiveLoad = physicalLoad + thermalContribution + breathingContribution
-    local loadMin = tonumber(options.ArmorLoadMin)
-    assert(loadMin ~= nil, "resolved ArmorLoadMin required")
-    loadMin = math.max(0, loadMin)
-    local loadNorm = Utils.softNorm(effectiveLoad - loadMin, 50.0, 2.5)
-    local activityLoadScale = Utils.clamp((0.55 + (0.45 * (tonumber(activityFactor) or 1.0))), 0.45, 1.85)
-    local previous = state.lastEnduranceObserved
-    local naturalDelta = 0
-    if previous ~= nil then
-        naturalDelta = endurance - previous
-    end
-    local isSitting = postureLabel and (string.find(postureLabel, "sit", 1, true) ~= nil)
-    local nmsContribution = nil
-    if canApplyEndurance then
-        nmsContribution = resolveNmsEnduranceContribution(player, sampleMinutes, naturalDelta, endurance, previous)
-    end
-    local nmsRegenScale = tonumber(nmsContribution and nmsContribution.regenScale) or 1.0
-    local nmsDrain = math.max(0, tonumber(nmsContribution and nmsContribution.extraDrain) or 0)
-
-    local endMoodle = -1
-    local moodles = Utils.safeMethod(player, "getMoodles")
-    if moodles and MoodleType and MoodleType.ENDURANCE then
-        endMoodle = tonumber(Utils.safeMethod(moodles, "getMoodleLevel", MoodleType.ENDURANCE)) or -1
-    end
-
-    local enduranceResult = EnduranceModel.calculate(options, {
+    local result = EnduranceModel.calculate(options, {
         previous = previous,
         current = endurance,
-        naturalDelta = naturalDelta,
-        loadNorm = loadNorm,
-        activityLoadScale = activityLoadScale,
+        loadFraction = snapshot.loadFraction,
+        heat = snapshot.heat,
+        breathing = breathing.pressure,
         activityLabel = activityLabel,
-        isSitting = isSitting,
-        enduranceMoodle = endMoodle,
-        dtMinutes = sampleMinutes,
+        resting = Environment.isResting(postureLabel),
         nmsRegenScale = nmsRegenScale,
         nmsDrain = nmsDrain,
     })
-    local controlled = enduranceResult.controlledEndurance
-
-    if canApplyEndurance then
-        controlled = applyEnduranceCorrection(player, controlled, endurance)
-        recordNmsEnduranceResult(
-            player,
-            controlled,
-            enduranceResult.nmsRegenScale,
-            enduranceResult.nmsDrainApplied
-        )
+    local controlled = result.controlledEndurance
+    if result.canApply then
+        if math.abs(controlled - endurance) > 0.00001 then
+            Stats.setEndurance(player, controlled)
+        end
+        recordNmsResult(player, controlled, result.nmsRegenScale, result.nmsDrainApplied)
     end
-
-    local enduranceDelta = controlled - endurance
     state.lastEnduranceObserved = controlled
-    local nowMinute = tonumber(Utils.getWorldAgeMinutes()) or 0
-    local hotPressure = tonumber(thermal.hotPressure) or 0
-    local coldSuitability = tonumber(thermal.coldSuitability) or 0
-    state.uiRuntimeSnapshot = {
-        loadNorm = loadNorm,
-        effectiveLoad = effectiveLoad,
-        physicalLoad = physicalLoad,
-        thermalAvailable = thermal.available == true,
-        thermalResistance = tonumber(thermal.resistance) or 0,
-        airflowResistance = airflowResistance,
-        sealedRestriction = sealedRestriction,
-        metabolicRate = breathing.metabolicRate,
-        metabolicDemand = breathing.metabolicDemand,
-        metabolicNorm = breathing.metabolicNorm,
-        breathingEffortRamp = breathing.effortRamp,
-        breathingDynamicLoad = breathing.dynamicLoad,
-        breathingSealedLoad = breathing.sealedDynamicLoad,
-        thermalContribution = thermalContribution,
-        breathingContribution = breathingContribution,
-        bodyHeatDelta = tonumber(thermal.bodyHeatDelta) or 0,
-        hotDrive = tonumber(thermal.hotDrive) or 0,
-        hotPressure = hotPressure,
-        bodyTemp = tonumber(thermal.bodyTemp) or nil,
-        coldSuitability = coldSuitability,
-        thermalStrainScale = tonumber(thermal.strainScale) or 0,
-        enduranceBeforeAms = endurance,
-        enduranceAfterAms = controlled,
-        enduranceNaturalDelta = naturalDelta,
-        enduranceAppliedDelta = enduranceDelta,
-        amsEnduranceRegenScale = enduranceResult.amsRegenScale,
-        nmsEnduranceRegenScale = enduranceResult.nmsRegenScale,
-        composedEnduranceRegenScale = enduranceResult.composedRegenScale,
-        amsEnduranceDrainApplied = enduranceResult.amsDrainApplied,
-        nmsEnduranceDrainApplied = enduranceResult.nmsDrainApplied,
-        lastAppliedDtMinutes = sampleMinutes,
-        activityLabel = activityLabel,
-        updatedMinute = nowMinute,
-    }
-    return enduranceDelta
+
+    snapshot.naturalDelta = result.naturalDelta
+    snapshot.amsDelta = result.amsDelta
+    snapshot.regenScale = result.regenScale
+    snapshot.drainScale = result.drainScale
+    snapshot.nmsRegenScale = result.nmsRegenScale
+    snapshot.nmsDrain = result.nmsDrainApplied
+    snapshot.dtMinutes = elapsed
+    snapshot.metabolicRate = breathing.metabolicRate
+    snapshot.breathingEffortRamp = breathing.effortRamp
+    snapshot.breathingPressure = breathing.pressure
+    state.uiRuntimeSnapshot = snapshot
+    return snapshot
 end
 
-function Physiology.projectRuntimeSnapshot(player, state, options, profile, activityFactor, activityLabel, postureLabel)
-    local sourceState = type(state) == "table" and state or {}
-    local thermalProjection = {}
-    for key, value in pairs(sourceState.thermalModelState or {}) do
-        if type(value) ~= "table" then
-            thermalProjection[key] = value
-        end
+-- Read-only projection for UI refreshes between ticks.
+function Physiology.project(player, state, options, profile)
+    local thermalCopy = {}
+    for key, value in pairs(type(state) == "table" and state.thermalModelState or {}) do
+        thermalCopy[key] = value
     end
-    local projectionState = {
-        lastEnduranceObserved = tonumber(sourceState.lastEnduranceObserved),
-        thermalModelState = thermalProjection,
-    }
-    Physiology.applyEnduranceModel(
+    local thermal = ThermalModel.advance(ThermalModel.sample(player), thermalCopy, 0, options)
+    return buildSnapshot(
         player,
-        projectionState,
+        state,
         options,
-        0,
         profile,
-        activityFactor,
-        activityLabel,
-        postureLabel
+        thermal,
+        Environment.resolveActivity(player),
+        Environment.getPostureLabel(player)
     )
-    return projectionState.uiRuntimeSnapshot
+end
+
+-- MP presentation: gear-derived values from the local worn items (identical
+-- to the server's), thermal state from the latest server snapshot.
+function Physiology.projectWithServerThermal(player, options, profile, serverSnapshot)
+    local server = type(serverSnapshot) == "table" and serverSnapshot or {}
+    return buildSnapshot(
+        player,
+        nil,
+        options,
+        profile,
+        {
+            heat = server.heat,
+            resistance = server.thermalResistance,
+            hotPressure = server.hotPressure,
+            coldSuitability = server.coldSuitability,
+        },
+        Environment.resolveActivity(player),
+        Environment.getPostureLabel(player)
+    )
+end
+
+function Physiology.getUiRuntimeSnapshot(state)
+    if type(state) ~= "table" then
+        return nil
+    end
+    if Utils.isMultiplayer() then
+        return type(state.mpServerSnapshot) == "table" and state.mpServerSnapshot or nil
+    end
+    return type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or nil
+end
+
+function Physiology.sleepPenaltyContribution(player, options, profile)
+    return {
+        penaltyFraction = SleepModel.penaltyFraction(options, profile and profile.rigidKg),
+        sleeping = Utils.toBoolean(Utils.safeMethod(player, "isAsleep")),
+    }
 end
 
 function Physiology.buildCompatTraceSnapshot(state)
     local snapshot = type(state) == "table" and type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or {}
     return {
         activity_label = tostring(snapshot.activityLabel or ""),
-        load_norm = tonumber(snapshot.loadNorm) or 0,
-        effective_load = tonumber(snapshot.effectiveLoad) or 0,
-        physical_load = tonumber(snapshot.physicalLoad) or 0,
-        thermal_resistance = tonumber(snapshot.thermalResistance) or 0,
-        airflow_resistance = tonumber(snapshot.airflowResistance) or 0,
-        sealed_restriction = tonumber(snapshot.sealedRestriction) or 0,
-        metabolic_rate = tonumber(snapshot.metabolicRate) or 1.5,
-        metabolic_demand = tonumber(snapshot.metabolicDemand) or 1.5,
-        thermal_contribution = tonumber(snapshot.thermalContribution) or 0,
-        breathing_contribution = tonumber(snapshot.breathingContribution) or 0,
-        body_heat_delta = tonumber(snapshot.bodyHeatDelta) or 0,
-        hot_drive = tonumber(snapshot.hotDrive) or 0,
-        hot_pressure = tonumber(snapshot.hotPressure) or 0,
-        thermal_strain_scale = tonumber(snapshot.thermalStrainScale) or 0,
-        cold_suitability = tonumber(snapshot.coldSuitability) or 0,
-        endurance_before = tonumber(snapshot.enduranceBeforeAms) or nil,
-        endurance_after = tonumber(snapshot.enduranceAfterAms) or nil,
-        endurance_natural_delta = tonumber(snapshot.enduranceNaturalDelta) or 0,
-        endurance_applied_delta = tonumber(snapshot.enduranceAppliedDelta) or 0,
-        ams_regen_scale = tonumber(snapshot.amsEnduranceRegenScale) or 1,
-        nms_regen_scale = tonumber(snapshot.nmsEnduranceRegenScale) or 1,
-        composed_regen_scale = tonumber(snapshot.composedEnduranceRegenScale) or 1,
-        ams_drain_applied = tonumber(snapshot.amsEnduranceDrainApplied) or 0,
-        nms_drain_applied = tonumber(snapshot.nmsEnduranceDrainApplied) or 0,
-        sleep_penalty_fraction = tonumber(state and state.lastSleepPenaltyFraction) or 0,
-        sleep_wake_adjustment = tonumber(state and state.lastSleepWakeAdjustment) or 0,
-        sleep_bed_type = tostring(state and state.sleepSnapshot and state.sleepSnapshot.bedType or ""),
+        burden_kg = tonumber(snapshot.burdenKg) or 0,
+        load_fraction = tonumber(snapshot.loadFraction) or 0,
+        heat = tonumber(snapshot.heat) or 0,
+        regen_scale = tonumber(snapshot.regenScale) or 1,
+        drain_scale = tonumber(snapshot.drainScale) or 1,
+        natural_delta = tonumber(snapshot.naturalDelta) or 0,
+        ams_delta = tonumber(snapshot.amsDelta) or 0,
+        nms_regen_scale = tonumber(snapshot.nmsRegenScale) or 1,
+        nms_drain = tonumber(snapshot.nmsDrain) or 0,
+        sleep_penalty_fraction = tonumber(snapshot.sleepPenaltyFraction) or 0,
     }
 end
 

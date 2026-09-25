@@ -5,27 +5,15 @@ if not runningOnServer then
     return
 end
 
-local okMpCompat, mpCompatOrErr = pcall(require, "ArmorMakesSense_MPCompat")
-if not okMpCompat then
-    print("[ArmorMakesSense][MP][DIAG][SERVER][ERROR] optional require failed: ArmorMakesSense_MPCompat :: " .. tostring(mpCompatOrErr))
-    return
-end
-
-local MP = (type(mpCompatOrErr) == "table" and mpCompatOrErr) or ArmorMakesSense.MP
-if type(MP) ~= "table" then
-    print("[ArmorMakesSense][MP][DIAG][SERVER][ERROR] MP compat constants unavailable; diagnostics disabled")
-    return
-end
-
-local SLEEP_WAKE_DIAG_COMMAND = "sleep_wake_diag"
-
-local okLoadModel, loadModelOrErr = pcall(require, "ArmorMakesSense_LoadModelShared")
-local LoadModel = okLoadModel and type(loadModelOrErr) == "table" and loadModelOrErr or nil
+local MP = require "ArmorMakesSense_MPCompat"
+local LoadModel = require "ArmorMakesSense_LoadModelShared"
+local BreathingClassifier = require "ArmorMakesSense_BreathingClassifier"
+local Options = require "ArmorMakesSense_Options"
 local RuntimeState = require "ArmorMakesSense_RuntimeState"
 
-local function sleepDiagnosticsEnabled()
-    return true
-end
+-- Every diagnostics line is `[TAG] key=value ...` so
+-- tools/armor_makes_sense/scripts/parse_debug.py can read it generically.
+-- `name=` is always last because display names contain spaces.
 
 local function log(message)
     print("[ArmorMakesSense][MP][DIAG][SERVER] " .. tostring(message))
@@ -46,10 +34,24 @@ local function safeCall(target, methodName, ...)
     return result
 end
 
-local function playerName(playerObj)
-    if not playerObj then
-        return "unknown"
+local function fmt(value, digits)
+    local number = tonumber(value)
+    if number == nil then
+        return value == nil and "na" or tostring(value)
     end
+    return string.format("%." .. tostring(digits or 3) .. "f", number)
+end
+
+local function kv(tag, fields)
+    local parts = { tag }
+    for i = 1, #fields do
+        local field = fields[i]
+        parts[#parts + 1] = field[1] .. "=" .. fmt(field[2], field[3])
+    end
+    return table.concat(parts, " ")
+end
+
+local function playerName(playerObj)
     local username = safeCall(playerObj, "getUsername")
     if username and tostring(username) ~= "" then
         return tostring(username)
@@ -67,248 +69,110 @@ end
 
 local function getWorldAgeMinutes()
     local gameTime = type(getGameTime) == "function" and getGameTime() or nil
-    local worldAgeHours = tonumber(gameTime and safeCall(gameTime, "getWorldAgeHours") or nil)
-    if worldAgeHours == nil then
-        return 0
-    end
-    return worldAgeHours * 60.0
+    return (tonumber(gameTime and safeCall(gameTime, "getWorldAgeHours")) or 0) * 60.0
 end
 
 local function getTimeOfDay()
     local gameTime = type(getGameTime) == "function" and getGameTime() or nil
-    return tonumber(gameTime and safeCall(gameTime, "getTimeOfDay") or nil) or 0
+    return tonumber(gameTime and safeCall(gameTime, "getTimeOfDay")) or 0
 end
 
-local function readStat(playerObj, directMethod, charStat)
+local function readStat(playerObj, charStat)
     local stats = safeCall(playerObj, "getStats")
-    if not stats then
+    if not stats or charStat == nil then
         return nil
     end
-    local direct = tonumber(safeCall(stats, directMethod))
-    if direct ~= nil then
-        return direct
-    end
-    if charStat ~= nil then
-        return tonumber(safeCall(stats, "get", charStat))
-    end
-    return nil
+    return tonumber(safeCall(stats, "get", charStat))
 end
 
-local function getEndurance(playerObj)
-    return readStat(playerObj, "getEndurance", CharacterStat and CharacterStat.ENDURANCE)
-end
-
-local function getFatigue(playerObj)
-    return readStat(playerObj, "getFatigue", CharacterStat and CharacterStat.FATIGUE)
-end
-
-local function getThirst(playerObj)
-    return readStat(playerObj, "getThirst", CharacterStat and CharacterStat.THIRST)
-end
-
-local function getPlayerState(playerObj)
+local function getMpState(playerObj)
     local state = RuntimeState.peek(playerObj, RuntimeState.ROLE_MP_SERVER)
-    if type(state) ~= "table" then
-        return nil, nil
+    if type(state) ~= "table" or type(state.mpServer) ~= "table" then
+        return {}
     end
-    local mpState = type(state.mpServer) == "table" and state.mpServer or nil
-    return state, mpState
+    return state.mpServer
 end
 
-local function getForceWakeUpTime(playerObj)
-    return tonumber(safeCall(playerObj, "getForceWakeUpTime"))
-end
-
-local function getAsleepTime(playerObj)
-    return tonumber(safeCall(playerObj, "getAsleepTime"))
-end
-
-local function isAsleep(playerObj)
-    return safeCall(playerObj, "isAsleep") == true
-end
-
-local function computeHoursUntilWake(timeOfDay, wakeHour)
-    local now = tonumber(timeOfDay)
-    local wake = tonumber(wakeHour)
-    if now == nil or wake == nil then
-        return nil
-    end
-    local delta = wake - now
-    if delta < 0 then
-        delta = delta + 24.0
-    end
-    return delta
+local function getSnapshot(mpState)
+    return type(mpState.runtimeSnapshot) == "table" and mpState.runtimeSnapshot or {}
 end
 
 local function getMovementFlags(playerObj)
     return {
         moving = safeCall(playerObj, "isMoving") == true,
-        playerMoving = safeCall(playerObj, "isPlayerMoving") == true,
         running = safeCall(playerObj, "isRunning") == true,
         sprinting = safeCall(playerObj, "isSprinting") == true,
         aiming = safeCall(playerObj, "isAiming") == true,
-        attackStarted = safeCall(playerObj, "isAttackStarted") == true,
+        attack = safeCall(playerObj, "isAttackStarted") == true,
     }
 end
 
-local sleepDiagByPlayer = {}
+-- -----------------------------------------------------------------------------
+-- Sleep trace: transitions and activity-while-asleep anomalies.
+-- -----------------------------------------------------------------------------
 
-local function getSleepDiagState(playerObj)
-    local key = tostring(playerOnlineID(playerObj))
-    local entry = sleepDiagByPlayer[key]
-    if type(entry) ~= "table" then
-        entry = {}
-        sleepDiagByPlayer[key] = entry
-    end
-    return entry
+local sleepTraceByPlayer = {}
+
+local function sleepFields(playerObj, mpState)
+    local snapshot = getSnapshot(mpState)
+    local flags = getMovementFlags(playerObj)
+    return {
+        { "user", playerName(playerObj) },
+        { "id", playerOnlineID(playerObj), 0 },
+        { "tod", getTimeOfDay(), 2 },
+        { "world", getWorldAgeMinutes(), 2 },
+        { "fatigue", readStat(playerObj, CharacterStat and CharacterStat.FATIGUE), 4 },
+        { "rigid_kg", snapshot.rigidKg, 2 },
+        { "penalty", mpState.sleepPenaltyFraction, 4 },
+        { "extra_fatigue", mpState.lastSleepExtraFatigue, 6 },
+        { "moving", tostring(flags.moving) },
+        { "running", tostring(flags.running) },
+        { "sprinting", tostring(flags.sprinting) },
+        { "aiming", tostring(flags.aiming) },
+        { "attack", tostring(flags.attack) },
+    }, flags
 end
 
 local function emitSleepDiagnostics(playerObj)
-    if not sleepDiagnosticsEnabled() then
-        return
+    local key = tostring(playerOnlineID(playerObj))
+    local trace = sleepTraceByPlayer[key] or {}
+    sleepTraceByPlayer[key] = trace
+
+    local mpState = getMpState(playerObj)
+    local sleeping = safeCall(playerObj, "isAsleep") == true
+    local fields, flags = sleepFields(playerObj, mpState)
+
+    if trace.lastSleeping ~= sleeping then
+        table.insert(fields, 1, { "transition", sleeping and "start" or "end" })
+        log(kv("[SLEEP]", fields))
+        table.remove(fields, 1)
     end
 
-    local _, mpState = getPlayerState(playerObj)
-    local snapshot = (mpState and type(mpState.runtimeSnapshot) == "table") and mpState.runtimeSnapshot or {}
-    local trace = getSleepDiagState(playerObj)
-    local worldMinute = tonumber(getWorldAgeMinutes()) or 0
-    local minuteKey = math.floor(worldMinute)
-    local timeOfDay = tonumber(getTimeOfDay()) or 0
-    local sleeping = isAsleep(playerObj)
-    local forceWake = getForceWakeUpTime(playerObj)
-    local hoursUntilWake = computeHoursUntilWake(timeOfDay, forceWake)
-    local asleepTime = getAsleepTime(playerObj)
-    local fatigue = tonumber(getFatigue(playerObj)) or -1
-    local penalty = tonumber(mpState and mpState.lastSleepPenaltyFraction) or 0
-    local rigidity = tonumber(snapshot.rigidityLoad) or 0
-    local pending = tonumber(mpState and mpState.pendingCatchupMinutes) or 0
-    local flags = getMovementFlags(playerObj)
-
-    if trace.lastSleeping == nil or trace.lastSleeping ~= sleeping then
-        log(string.format(
-            "[SLEEP] side=server transition=%s user=%s id=%d tod=%.2f world=%.2f fat=%.3f wake=%s until=%s asleepTime=%s rigidity=%.2f penalty=%.4f pending=%.3f moving=%s playerMoving=%s running=%s sprinting=%s aiming=%s attack=%s",
-            sleeping and "start" or "end",
-            tostring(playerName(playerObj)),
-            playerOnlineID(playerObj),
-            timeOfDay,
-            worldMinute,
-            fatigue,
-            forceWake ~= nil and string.format("%.2f", forceWake) or "nil",
-            hoursUntilWake ~= nil and string.format("%.2f", hoursUntilWake) or "nil",
-            asleepTime ~= nil and string.format("%.2f", asleepTime) or "nil",
-            rigidity,
-            penalty,
-            pending,
-            tostring(flags.moving),
-            tostring(flags.playerMoving),
-            tostring(flags.running),
-            tostring(flags.sprinting),
-            tostring(flags.aiming),
-            tostring(flags.attackStarted)
-        ))
-    end
-
-    local movingWhileAsleep = sleeping and (
-        flags.moving or flags.playerMoving or flags.running or flags.sprinting or flags.aiming or flags.attackStarted
-    )
-    if movingWhileAsleep and trace.lastMovementAnomalyMinute ~= minuteKey then
-        trace.lastMovementAnomalyMinute = minuteKey
-        log(string.format(
-            "[SLEEP_ANOM] side=server kind=asleep_with_activity user=%s id=%d tod=%.2f world=%.2f fat=%.3f wake=%s until=%s asleepTime=%s rigidity=%.2f penalty=%.4f moving=%s playerMoving=%s running=%s sprinting=%s aiming=%s attack=%s",
-            tostring(playerName(playerObj)),
-            playerOnlineID(playerObj),
-            timeOfDay,
-            worldMinute,
-            fatigue,
-            forceWake ~= nil and string.format("%.2f", forceWake) or "nil",
-            hoursUntilWake ~= nil and string.format("%.2f", hoursUntilWake) or "nil",
-            asleepTime ~= nil and string.format("%.2f", asleepTime) or "nil",
-            rigidity,
-            penalty,
-            tostring(flags.moving),
-            tostring(flags.playerMoving),
-            tostring(flags.running),
-            tostring(flags.sprinting),
-            tostring(flags.aiming),
-            tostring(flags.attackStarted)
-        ))
+    local minuteKey = math.floor(getWorldAgeMinutes())
+    local activeWhileAsleep = sleeping and (flags.moving or flags.running or flags.sprinting or flags.aiming or flags.attack)
+    if activeWhileAsleep and trace.lastAnomalyMinute ~= minuteKey then
+        trace.lastAnomalyMinute = minuteKey
+        table.insert(fields, 1, { "kind", "asleep_with_activity" })
+        log(kv("[SLEEP_ANOM]", fields))
     end
 
     trace.lastSleeping = sleeping
-    trace.lastForceWake = forceWake
-    trace.lastWorldMinute = worldMinute
 end
 
-local function handleSleepWakeDiag(playerObj, args)
-    local timeOfDay = tonumber(getTimeOfDay()) or 0
-    local worldMinute = tonumber(getWorldAgeMinutes()) or 0
-    local forceWake = getForceWakeUpTime(playerObj)
-    local hoursUntilWake = computeHoursUntilWake(timeOfDay, forceWake)
-    local asleepTime = getAsleepTime(playerObj)
-    local fatigue = tonumber(getFatigue(playerObj)) or -1
-    local sleeping = isAsleep(playerObj)
-    local flags = getMovementFlags(playerObj)
-    local _, mpState = getPlayerState(playerObj)
-    local snapshot = (mpState and type(mpState.runtimeSnapshot) == "table") and mpState.runtimeSnapshot or {}
-
-    log(string.format(
-        "[SLEEP_WAKE_DIAG] side=server recv user=%s id=%d client_tod=%s client_world=%s client_fat=%s client_wake=%s client_until=%s client_asleepTime=%s client_mult=%s server_sleeping=%s server_tod=%.2f server_world=%.2f server_fat=%.3f server_wake=%s server_until=%s server_asleepTime=%s rigidity=%.2f penalty=%.4f pending=%.3f moving=%s playerMoving=%s running=%s sprinting=%s aiming=%s attack=%s version=%s build=%s",
-        tostring(playerName(playerObj)),
-        playerOnlineID(playerObj),
-        args and args.tod ~= nil and string.format("%.2f", tonumber(args.tod) or -1) or "nil",
-        args and args.world ~= nil and string.format("%.2f", tonumber(args.world) or -1) or "nil",
-        args and args.fat ~= nil and string.format("%.3f", tonumber(args.fat) or -1) or "nil",
-        args and args.wake ~= nil and string.format("%.2f", tonumber(args.wake) or -1) or "nil",
-        args and args.wakeUntil ~= nil and string.format("%.2f", tonumber(args.wakeUntil) or -1) or "nil",
-        args and args.asleepTime ~= nil and string.format("%.2f", tonumber(args.asleepTime) or -1) or "nil",
-        args and args.mult ~= nil and string.format("%.2f", tonumber(args.mult) or -1) or "nil",
-        tostring(sleeping),
-        timeOfDay,
-        worldMinute,
-        fatigue,
-        forceWake ~= nil and string.format("%.2f", forceWake) or "nil",
-        hoursUntilWake ~= nil and string.format("%.2f", hoursUntilWake) or "nil",
-        asleepTime ~= nil and string.format("%.2f", asleepTime) or "nil",
-        tonumber(snapshot.rigidityLoad) or 0,
-        tonumber(mpState and mpState.lastSleepPenaltyFraction) or 0,
-        tonumber(mpState and mpState.pendingCatchupMinutes) or 0,
-        tostring(flags.moving),
-        tostring(flags.playerMoving),
-        tostring(flags.running),
-        tostring(flags.sprinting),
-        tostring(flags.aiming),
-        tostring(flags.attackStarted),
-        tostring(args and args.script_version or "unknown"),
-        tostring(args and args.script_build or "unknown")
-    ))
-end
+-- -----------------------------------------------------------------------------
+-- Diagnostic dump
+-- -----------------------------------------------------------------------------
 
 local function getItemFullType(item)
     local fullType = tostring(safeCall(item, "getFullType") or "")
     if fullType ~= "" then
         return fullType
     end
-
-    local scriptItem = safeCall(item, "getScriptItem")
-    fullType = tostring(safeCall(scriptItem, "getFullName") or "")
-    if fullType ~= "" then
-        return fullType
-    end
-
-    local moduleName = tostring(safeCall(scriptItem, "getModuleName") or "")
-    local typeName = tostring(safeCall(scriptItem, "getName") or safeCall(item, "getType") or "unknown")
-    if moduleName ~= "" and typeName ~= "" then
-        return moduleName .. "." .. typeName
-    end
-    return typeName
+    return tostring(safeCall(safeCall(item, "getScriptItem"), "getFullName") or "unknown")
 end
 
-local function collectDetailedItems(playerObj)
+local function collectDetailedItems(playerObj, options)
     local rows = {}
-    if not LoadModel or type(LoadModel.itemToBurdenSignal) ~= "function" then
-        return rows
-    end
-
     local wornItems = safeCall(playerObj, "getWornItems")
     local count = tonumber(wornItems and safeCall(wornItems, "size")) or 0
     for i = 0, count - 1 do
@@ -316,40 +180,40 @@ local function collectDetailedItems(playerObj)
         local item = safeCall(worn, "getItem")
         if item then
             local wornLocation = tostring(safeCall(worn, "getLocation") or "")
-            local bodyLocation = tostring(safeCall(item, "getBodyLocation") or "")
-            local signal = LoadModel.itemToBurdenSignal(item, wornLocation)
+            local signal = LoadModel.itemToBurdenSignal(item, wornLocation, options)
             if type(signal) == "table" then
-                local reasons = type(signal.respiratoryReasons) == "table" and signal.respiratoryReasons or {}
-                local row = {
-                    idx = #rows + 1,
+                local respiratory = BreathingClassifier.computeSignals(item, safeCall(item, "getScriptItem"), wornLocation)
+                local reasons = type(respiratory.reasons) == "table" and respiratory.reasons or {}
+                rows[#rows + 1] = {
                     name = tostring(safeCall(item, "getDisplayName") or safeCall(item, "getName") or "Unknown Item"),
-                    type = tostring(getItemFullType(item)),
+                    type = getItemFullType(item),
                     worn = wornLocation,
-                    body = bodyLocation,
-                    phy = tonumber(signal.physicalLoad) or 0,
-                    br = tonumber(signal.airflowResistance) or 0,
-                    sealed = tonumber(signal.sealedRestriction) or 0,
-                    rig = tonumber(signal.rigidityLoad) or 0,
+                    burden_kg = signal.burdenKg,
+                    mass_kg = signal.massKg,
+                    bulk_kg = signal.bulkKg,
+                    placement = signal.placement,
+                    rigid_kg = signal.rigidKg,
+                    rigid = signal.rigid == true,
+                    airflow = signal.airflowResistance,
+                    sealed = signal.sealedRestriction,
                     br_class = tostring(signal.respiratoryClass or "none"),
                     br_filter = signal.respiratoryHasFilter == true and "filter" or (signal.respiratoryHasFilter == false and "nofilter" or "na"),
                     br_slot = tostring(reasons.slotClass or ""),
                     br_tag = tostring(reasons.tagClass or ""),
                     br_kw = tostring(reasons.keywordClass or ""),
                 }
-                rows[#rows + 1] = row
             end
         end
     end
 
     table.sort(rows, function(a, b)
-        local aScore = math.max(a.phy or 0, a.br or 0, a.rig or 0)
-        local bScore = math.max(b.phy or 0, b.br or 0, b.rig or 0)
-        if aScore == bScore then
+        local left = math.max(tonumber(a.burden_kg) or 0, tonumber(a.airflow) or 0)
+        local right = math.max(tonumber(b.burden_kg) or 0, tonumber(b.airflow) or 0)
+        if left == right then
             return tostring(a.name) < tostring(b.name)
         end
-        return aScore > bScore
+        return left > right
     end)
-
     for i = 1, #rows do
         rows[i].idx = i
     end
@@ -359,7 +223,7 @@ end
 local function countBreathingItems(items)
     local n = 0
     for i = 1, #items do
-        if (tonumber(items[i].br) or 0) > 0 then
+        if (tonumber(items[i].airflow) or 0) > 0 then
             n = n + 1
         end
     end
@@ -367,126 +231,112 @@ local function countBreathingItems(items)
 end
 
 local function buildDumpPayload(playerObj, reason)
-    local _, mpState = getPlayerState(playerObj)
-    local snapshot = (mpState and type(mpState.runtimeSnapshot) == "table") and mpState.runtimeSnapshot or {}
-    local uiSnapshot = (mpState and type(mpState.uiRuntimeSnapshot) == "table") and mpState.uiRuntimeSnapshot or {}
-    local worldMinute = tonumber(getWorldAgeMinutes()) or 0
-    local detailedItems = collectDetailedItems(playerObj)
-    local breathingItems = countBreathingItems(detailedItems)
-
+    local mpState = getMpState(playerObj)
+    local snapshot = getSnapshot(mpState)
+    local items = collectDetailedItems(playerObj, Options.get())
     local payload = {
         kind = "server_dump",
         reason = tostring(reason or "manual"),
-        script_version = tostring(MP.SCRIPT_VERSION or "unknown"),
-        script_build = tostring(MP.SCRIPT_BUILD or "unknown"),
-        world_minute = worldMinute,
-        player = tostring(playerName(playerObj)),
+        script_version = tostring(MP.SCRIPT_VERSION),
+        script_build = tostring(MP.SCRIPT_BUILD),
+        world_minute = getWorldAgeMinutes(),
+        player = playerName(playerObj),
         online_id = playerOnlineID(playerObj),
-        endurance = tonumber(getEndurance(playerObj)) or -1,
-        fatigue = tonumber(getFatigue(playerObj)) or -1,
-        thirst = tonumber(getThirst(playerObj)) or -1,
-        load_norm = tonumber(snapshot.loadNorm) or 0,
-        physical_load = tonumber(snapshot.physicalLoad) or 0,
-        thermal_resistance = tonumber(snapshot.thermalResistance) or 0,
-        airflow_resistance = tonumber(snapshot.airflowResistance) or 0,
-        sealed_restriction = tonumber(snapshot.sealedRestriction) or 0,
-        rigidity_load = tonumber(snapshot.rigidityLoad) or 0,
-        driver_count = tonumber(snapshot.driverCount) or 0,
-        effective_load = tonumber(snapshot.effectiveLoad) or 0,
-        breathing_contribution = tonumber(uiSnapshot.breathingContribution) or 0,
-        thermal_contribution = tonumber(uiSnapshot.thermalContribution) or 0,
-        hot_pressure = tonumber(uiSnapshot.hotPressure) or 0,
-        cold_suitability = tonumber(uiSnapshot.coldSuitability) or 0,
-        thermal_strain_scale = tonumber(uiSnapshot.thermalStrainScale) or 0,
-        endurance_before_ams = tonumber(uiSnapshot.enduranceBeforeAms),
-        endurance_after_ams = tonumber(uiSnapshot.enduranceAfterAms),
-        endurance_natural_delta = tonumber(uiSnapshot.enduranceNaturalDelta),
-        endurance_applied_delta = tonumber(uiSnapshot.enduranceAppliedDelta),
-        activity_label = tostring(snapshot.activityLabel or "idle"),
-        thermal_hot = (tonumber(uiSnapshot.thermalStrainScale) or 0) >= 0.15,
-        thermal_cold = (tonumber(uiSnapshot.coldSuitability) or 0) > 0.45,
-        updated_minute = tonumber(snapshot.updatedMinute) or worldMinute,
-        pending_catchup = tonumber(mpState and mpState.pendingCatchupMinutes) or 0,
+        endurance = readStat(playerObj, CharacterStat and CharacterStat.ENDURANCE) or -1,
+        fatigue = readStat(playerObj, CharacterStat and CharacterStat.FATIGUE) or -1,
+        thirst = readStat(playerObj, CharacterStat and CharacterStat.THIRST) or -1,
+        sleep_extra_fatigue = tonumber(mpState.lastSleepExtraFatigue) or 0,
         drivers = type(snapshot.drivers) == "table" and snapshot.drivers or {},
-        items = detailedItems,
-        items_count = #detailedItems,
-        breathing_item_count = breathingItems,
+        items = items,
+        items_count = #items,
+        breathing_item_count = countBreathingItems(items),
     }
-
+    for key, value in pairs(snapshot) do
+        if type(value) ~= "table" and payload[key] == nil then
+            payload[key] = value
+        end
+    end
     return payload
 end
 
-local function sendDiagDump(playerObj, reason)
-    if type(sendServerCommand) ~= "function" then
-        log("sendServerCommand unavailable; diag dump cannot be delivered")
-        return false
-    end
+local DUMP_FIELDS = {
+    { "burden_kg", "burdenKg", 3 },
+    { "arm_kg", "armKg", 3 },
+    { "rigid_kg", "rigidKg", 3 },
+    { "body_kg", "bodyKg", 1 },
+    { "strength", "strength", 0 },
+    { "load_fraction", "loadFraction", 5 },
+    { "heat", "heat", 4 },
+    { "resistance", "thermalResistance", 3 },
+    { "hot_pressure", "hotPressure", 3 },
+    { "cold_suitability", "coldSuitability", 3 },
+    { "airflow", "airflowResistance", 3 },
+    { "sealed", "sealedRestriction", 3 },
+    { "breathing_severity", "breathingSeverity", 4 },
+    { "breathing_pressure", "breathingPressure", 4 },
+    { "regen_scale", "regenScale", 4 },
+    { "drain_scale", "drainScale", 4 },
+    { "natural_delta", "naturalDelta", 6 },
+    { "ams_delta", "amsDelta", 6 },
+    { "sleep_penalty", "sleepPenaltyFraction", 4 },
+    { "sleep_extra_fatigue", "sleep_extra_fatigue", 6 },
+    { "dt_minutes", "dtMinutes", 3 },
+    { "updated_minute", "updatedMinute", 2 },
+}
 
-    local payload = buildDumpPayload(playerObj, reason)
-    local ok, err = pcall(
-        sendServerCommand,
-        playerObj,
-        tostring(MP.NET_MODULE),
-        tostring(MP.DIAG_DUMP_COMMAND),
-        payload
-    )
-    if not ok then
-        log("diag dump send failed user=" .. tostring(playerName(playerObj)) .. " err=" .. tostring(err))
-        return false
+local function logDump(payload)
+    local fields = {
+        { "user", payload.player },
+        { "id", payload.online_id, 0 },
+        { "reason", payload.reason },
+        { "version", payload.script_version },
+        { "build", payload.script_build },
+        { "endurance", payload.endurance, 4 },
+        { "fatigue", payload.fatigue, 4 },
+        { "thirst", payload.thirst, 4 },
+    }
+    for i = 1, #DUMP_FIELDS do
+        local spec = DUMP_FIELDS[i]
+        fields[#fields + 1] = { spec[1], payload[spec[2]], spec[3] }
     end
+    fields[#fields + 1] = { "drivers", #(payload.drivers or {}), 0 }
+    fields[#fields + 1] = { "items", payload.items_count, 0 }
+    fields[#fields + 1] = { "breathing_items", payload.breathing_item_count, 0 }
+    fields[#fields + 1] = { "activity", payload.activityLabel or "idle" }
+    fields[#fields + 1] = { "posture", payload.postureLabel or "stand" }
+    log(kv("[DUMP] sent", fields))
 
-    log(string.format(
-        "[DUMP] sent user=%s id=%d reason=%s version=%s build=%s loadNorm=%.3f physical=%.2f resistance=%.3f breathing=%.2f rigidity=%.2f eff=%.2f bcontrib=%.4f tcontrib=%.4f heat=%.3f endBefore=%s endAfter=%s endNatD=%s endAppD=%s drivers=%d items=%d breathing_items=%d activity=%s hot=%s cold=%s",
-        tostring(payload.player),
-        tonumber(payload.online_id) or -1,
-        tostring(payload.reason),
-        tostring(payload.script_version or "unknown"),
-        tostring(payload.script_build or "unknown"),
-        tonumber(payload.load_norm) or 0,
-        tonumber(payload.physical_load) or 0,
-        tonumber(payload.thermal_resistance) or 0,
-        tonumber(payload.airflow_resistance) or 0,
-        tonumber(payload.rigidity_load) or 0,
-        tonumber(payload.effective_load) or 0,
-        tonumber(payload.breathing_contribution) or 0,
-        tonumber(payload.thermal_contribution) or 0,
-        tonumber(payload.thermal_strain_scale) or 0,
-        payload.endurance_before_ams ~= nil and string.format("%.4f", payload.endurance_before_ams) or "na",
-        payload.endurance_after_ams ~= nil and string.format("%.4f", payload.endurance_after_ams) or "na",
-        payload.endurance_natural_delta ~= nil and string.format("%.4f", payload.endurance_natural_delta) or "na",
-        payload.endurance_applied_delta ~= nil and string.format("%.4f", payload.endurance_applied_delta) or "na",
-        #(payload.drivers or {}),
-        tonumber(payload.items_count) or 0,
-        tonumber(payload.breathing_item_count) or 0,
-        tostring(payload.activity_label or "idle"),
-        tostring(payload.thermal_hot == true),
-        tostring(payload.thermal_cold == true)
-    ))
-    local items = type(payload.items) == "table" and payload.items or {}
-    local maxRows = math.min(#items, 24)
-    for i = 1, maxRows do
+    local items = payload.items
+    for i = 1, math.min(#items, 24) do
         local row = items[i]
-        if type(row) == "table" then
-            log(string.format(
-                "[DUMP_ITEM] reason=%s id=%d idx=%d type=%s worn=%s body=%s phy=%.2f br=%.2f rig=%.2f class=%s filter=%s slot=%s tag=%s kw=%s name=%s",
-                tostring(payload.reason),
-                tonumber(payload.online_id) or -1,
-                tonumber(row.idx) or i,
-                tostring(row.type or "unknown"),
-                tostring(row.worn or ""),
-                tostring(row.body or ""),
-                tonumber(row.phy) or 0,
-                tonumber(row.br) or 0,
-                tonumber(row.rig) or 0,
-                tostring(row.br_class or "none"),
-                tostring(row.br_filter or "na"),
-                tostring(row.br_slot or ""),
-                tostring(row.br_tag or ""),
-                tostring(row.br_kw or ""),
-                tostring(row.name or "Unknown Item")
-            ))
-        end
+        log(kv("[DUMP_ITEM]", {
+            { "reason", payload.reason },
+            { "id", payload.online_id, 0 },
+            { "idx", row.idx, 0 },
+            { "type", row.type },
+            { "worn", row.worn },
+            { "burden_kg", row.burden_kg, 3 },
+            { "mass_kg", row.mass_kg, 3 },
+            { "bulk_kg", row.bulk_kg, 3 },
+            { "placement", row.placement, 2 },
+            { "rigid_kg", row.rigid_kg, 3 },
+            { "rigid", tostring(row.rigid) },
+            { "airflow", row.airflow, 3 },
+            { "sealed", row.sealed, 3 },
+            { "class", row.br_class },
+            { "filter", row.br_filter },
+            { "slot", row.br_slot },
+            { "tag", row.br_tag },
+            { "kw", row.br_kw },
+            { "name", row.name },
+        }))
     end
+end
+
+local function sendDiagDump(playerObj, reason)
+    local payload = buildDumpPayload(playerObj, reason)
+    sendServerCommand(playerObj, tostring(MP.NET_MODULE), tostring(MP.DIAG_DUMP_COMMAND), payload)
+    logDump(payload)
     return true
 end
 
@@ -496,19 +346,14 @@ local function onClientCommand(module, command, playerObj, args)
     end
     if tostring(command) == tostring(MP.DIAG_DUMP_REQUEST_COMMAND) then
         sendDiagDump(playerObj, args and args.reason or "client_request")
-        return
-    end
-    if tostring(command) == SLEEP_WAKE_DIAG_COMMAND then
-        handleSleepWakeDiag(playerObj, args)
-        return
     end
 end
 
 local function onEveryOneMinute()
-    local onlinePlayers = type(getOnlinePlayers) == "function" and getOnlinePlayers() or nil
-    local count = tonumber(onlinePlayers and safeCall(onlinePlayers, "size")) or 0
+    local onlinePlayers = getOnlinePlayers()
+    local count = tonumber(onlinePlayers and onlinePlayers:size()) or 0
     for i = 0, count - 1 do
-        local playerObj = safeCall(onlinePlayers, "get", i)
+        local playerObj = onlinePlayers:get(i)
         if playerObj then
             emitSleepDiagnostics(playerObj)
         end
@@ -520,18 +365,8 @@ local function registerEvents()
         return
     end
     ArmorMakesSense._mpDiagnosticsServerRegistered = true
-
-    if Events and Events.OnClientCommand and type(Events.OnClientCommand.Add) == "function" then
-        Events.OnClientCommand.Add(onClientCommand)
-    else
-        log("OnClientCommand.Add unavailable; diag dump request handler inactive")
-    end
-
-    if Events and Events.EveryOneMinute and type(Events.EveryOneMinute.Add) == "function" then
-        Events.EveryOneMinute.Add(onEveryOneMinute)
-    else
-        log("EveryOneMinute.Add unavailable; sleep diagnostics inactive")
-    end
+    Events.OnClientCommand.Add(onClientCommand)
+    Events.EveryOneMinute.Add(onEveryOneMinute)
 end
 
 registerEvents()

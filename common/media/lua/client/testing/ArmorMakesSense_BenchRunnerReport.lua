@@ -5,7 +5,15 @@ local Testing = ArmorMakesSense.Testing
 Testing.BenchRunnerReport = Testing.BenchRunnerReport or {}
 
 local BenchRunnerReport = Testing.BenchRunnerReport
+local BenchUtils = Testing.BenchUtils
 local C = {}
+
+local REPORT_DEFAULTS = {
+    stability_cv_warn = 0.15,
+    monotonic_cost_tolerance = 0.002,
+    separation_ratio_denominator_min = 0.005,
+    separation_ratio_min = 1.2,
+}
 
 -- -----------------------------------------------------------------------------
 -- Context wiring and numeric coercion helpers
@@ -36,6 +44,24 @@ end
 -- Step result shaping
 -- -----------------------------------------------------------------------------
 
+-- Endurance cost of wearing the set relative to vanilla: >1 means the set made
+-- this step harder. Drain steps cost the realized scale directly; regen steps
+-- cost its inverse (slower recovery = higher cost).
+function BenchRunnerReport.enduranceCost(naturalTotal, realizedScale)
+    local natural = asMetricValue(naturalTotal)
+    local scale = asMetricValue(realizedScale)
+    if natural == nil or scale == nil then
+        return nil
+    end
+    if natural < 0 then
+        return scale
+    end
+    if scale > 0.000001 then
+        return 1.0 / scale
+    end
+    return nil
+end
+
 function BenchRunnerReport.buildStepResult(exec, summary)
     local activity = exec and exec.activityResult or {}
     local result = {
@@ -55,6 +81,12 @@ function BenchRunnerReport.buildStepResult(exec, summary)
         armStiffnessDelta = asMetricValue(summary and summary.armStiffnessDelta),
         stiffnessPerSwing = asMetricValue(summary and summary.stiffnessPerSwing),
         swingsPerMinute = asMetricValue(summary and summary.swingsPerMinute),
+        tickCount = tonumber(summary and summary.tickCount) or 0,
+        tickGaps = tonumber(summary and summary.tickGaps) or 0,
+        naturalTotal = asMetricValue(summary and summary.naturalTotal),
+        realizedScale = asMetricValue(summary and summary.realizedScale),
+        tickClosure = asMetricValue(summary and summary.tickClosure),
+        enduranceCost = BenchRunnerReport.enduranceCost(summary and summary.naturalTotal, summary and summary.realizedScale),
         validityGatesPassed = activity.validity_gates_passed == true,
         gateRejected = activity.gate_rejected == true,
         gateFailed = tostring(activity.gate_failed or "none"),
@@ -208,20 +240,15 @@ local function findSetByClass(scenarioData, className, excludeSetId)
     return nil
 end
 
-local function monotonicBurden(value)
-    local parsed = asMetricValue(value)
-    if parsed == nil then
-        return nil
-    end
-    return -parsed
-end
-
-local function checkMonotonicPair(leftLabel, leftValue, rightLabel, rightValue, scenarioId)
-    if leftValue == nil or rightValue == nil then
-        return true, nil
-    end
-    if leftValue > (rightValue + 0.000001) then
-        return false, string.format("%s > %s in endDelta for %s", tostring(leftLabel), tostring(rightLabel), tostring(scenarioId))
+local function checkMonotonicSequence(sequence, metricLabel, tolerance, scenarioId)
+    local previous = nil
+    for _, entry in ipairs(sequence) do
+        if entry.value ~= nil then
+            if previous and previous.value > (entry.value + tolerance) then
+                return false, string.format("%s > %s in %s for %s", tostring(previous.label), tostring(entry.label), tostring(metricLabel), tostring(scenarioId))
+            end
+            previous = entry
+        end
     end
     return true, nil
 end
@@ -232,9 +259,7 @@ end
 
 function BenchRunnerReport.buildBenchmarkReport(runner, deps)
     deps = deps or {}
-    local resolveThreshold = deps.resolveThreshold
-    local resolveScenarioGateProfile = deps.resolveScenarioGateProfile
-    local reportDefaults = deps.reportDefaults or {}
+    local resolveThreshold = BenchUtils.resolveThreshold
     local benchScenarios = deps.benchScenarios
 
     local report = {
@@ -251,16 +276,17 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
             breakDescription = "none",
         },
         stability = {
-            status = "pass",
+            status = "na",
             flagged = {},
-            insufficient = {},
         },
     }
 
-    local thresholds = runner and runner.reportThresholds or {}
-    local cvWarnThreshold = resolveThreshold and resolveThreshold(thresholds.stability_cv_warn, reportDefaults.stability_cv_warn, 0.0) or tonumber(thresholds.stability_cv_warn) or 0.15
-    local separationDenominatorMin = resolveThreshold and resolveThreshold(thresholds.separation_ratio_denominator_min, reportDefaults.separation_ratio_denominator_min, 0.000001) or tonumber(thresholds.separation_ratio_denominator_min) or 0.005
-    local separationRatioMin = resolveThreshold and resolveThreshold(thresholds.separation_ratio_min, reportDefaults.separation_ratio_min, 0.0) or tonumber(thresholds.separation_ratio_min) or 1.2
+    local thresholds = runner and runner.thresholds or {}
+    local cvWarnThreshold = resolveThreshold(thresholds.stability_cv_warn, REPORT_DEFAULTS.stability_cv_warn, 0.0)
+    local separationDenominatorMin = resolveThreshold(thresholds.separation_ratio_denominator_min, REPORT_DEFAULTS.separation_ratio_denominator_min, 0.000001)
+    local separationRatioMin = resolveThreshold(thresholds.separation_ratio_min, REPORT_DEFAULTS.separation_ratio_min, 0.0)
+    local costTolerance = REPORT_DEFAULTS.monotonic_cost_tolerance
+    local stabilityChecked = false
 
     local results = runner and runner.stepResults or {}
     report.total_steps = #results
@@ -359,6 +385,13 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
             local pctRunStats = metricStats(setStats.validSamples, "pctRun")
             local pctSprintStats = metricStats(setStats.validSamples, "pctSprint")
             local pctCombatStats = metricStats(setStats.validSamples, "pctCombat")
+            local realizedStats = metricStats(setStats.validSamples, "realizedScale")
+            local costStats = metricStats(setStats.validSamples, "enduranceCost")
+            local closureStats = metricStats(setStats.validSamples, "tickClosure")
+            local tickGaps = 0
+            for _, sample in ipairs(setStats.validSamples) do
+                tickGaps = tickGaps + (tonumber(sample.tickGaps) or 0)
+            end
 
             setStats.mean_end_delta = endStats.mean
             setStats.stddev_end_delta = endStats.stddev
@@ -392,15 +425,24 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
             setStats.mean_pct_run = pctRunStats.mean
             setStats.mean_pct_sprint = pctSprintStats.mean
             setStats.mean_pct_combat = pctCombatStats.mean
+            setStats.mean_realized_scale = realizedStats.mean
+            setStats.mean_cost = costStats.mean
+            setStats.cv_cost = setStats.valid_count >= 2 and costStats.cv or nil
+            setStats.mean_tick_closure = closureStats.mean
+            setStats.tick_gaps = tickGaps
 
+            -- Cost is deterministic per tick, so its spread flags a broken
+            -- measurement; raw endDelta spread only reflects activity mix.
+            local stabilityCv = costStats.count >= 2 and setStats.cv_cost or setStats.cv_end_delta
             if setStats.valid_count < 2 then
-                setStats.stability = "insufficient_data"
-                report.stability.insufficient[#report.stability.insufficient + 1] = string.format("%s:%s", tostring(scenarioId), tostring(setId))
-            elseif setStats.cv_end_delta ~= nil and setStats.cv_end_delta > cvWarnThreshold then
+                setStats.stability = "single"
+            elseif stabilityCv ~= nil and stabilityCv > cvWarnThreshold then
+                stabilityChecked = true
                 setStats.stability = "warn"
                 local metricOrNa = deps.metricOrNa or function(value) return tostring(value) end
-                report.stability.flagged[#report.stability.flagged + 1] = string.format("%s:%s(cv=%s)", tostring(scenarioId), tostring(setId), metricOrNa(setStats.cv_end_delta, 4))
+                report.stability.flagged[#report.stability.flagged + 1] = string.format("%s:%s(cv=%s)", tostring(scenarioId), tostring(setId), metricOrNa(stabilityCv, 4))
             else
+                stabilityChecked = true
                 setStats.stability = "pass"
             end
         end
@@ -433,26 +475,26 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
         local lightSetId = scenario.sets.bulletproof_vest and "bulletproof_vest" or nil
         local lightStats = lightSetId and scenario.sets[lightSetId] or nil
         local heavyStats = scenario.sets.heavy
-        if lightStats and heavyStats and lightStats.mean_end_delta ~= nil and heavyStats.mean_end_delta ~= nil and math.abs(lightStats.mean_end_delta) > 0.000001 then
-            scenario.heavy_light_ratio = math.abs(heavyStats.mean_end_delta) / math.abs(lightStats.mean_end_delta)
+        if lightStats and heavyStats and lightStats.mean_cost ~= nil and heavyStats.mean_cost ~= nil and lightStats.mean_cost > 0.000001 then
+            scenario.heavy_light_ratio = heavyStats.mean_cost / lightStats.mean_cost
         end
         if lightStats and heavyStats and lightStats.mean_achieved_sec ~= nil and heavyStats.mean_achieved_sec ~= nil and math.abs(lightStats.mean_achieved_sec) > 0.000001 then
             scenario.heavy_light_duration_ratio = math.abs(heavyStats.mean_achieved_sec) / math.abs(lightStats.mean_achieved_sec)
         end
 
-        if not scenario.baseline_missing and lightStats and heavyStats and baseline and baseline.mean_end_delta ~= nil and lightStats.mean_end_delta ~= nil and heavyStats.mean_end_delta ~= nil then
-            local denominator = lightStats.mean_end_delta - baseline.mean_end_delta
+        if lightStats and heavyStats and baseline and baseline.mean_cost ~= nil and lightStats.mean_cost ~= nil and heavyStats.mean_cost ~= nil then
+            local denominator = lightStats.mean_cost - baseline.mean_cost
             if math.abs(denominator) < separationDenominatorMin then
                 scenario.separation_ratio = "undefined_low_baseline"
                 scenario.separation_ratio_check = "na"
             else
-                scenario.separation_ratio = (heavyStats.mean_end_delta - lightStats.mean_end_delta) / denominator
+                scenario.separation_ratio = (heavyStats.mean_cost - lightStats.mean_cost) / denominator
                 scenario.separation_ratio_check = scenario.separation_ratio >= separationRatioMin and "pass" or "fail"
             end
         end
 
         local scenarioDef = benchScenarios and type(benchScenarios.get) == "function" and benchScenarios.get(scenarioId) or nil
-        local scenarioGateProfile = resolveScenarioGateProfile and resolveScenarioGateProfile(scenarioDef) or {}
+        local scenarioGateProfile = Testing.BenchRunnerStep.resolveScenarioGateProfile(scenarioDef)
         if scenarioGateProfile.realSleep then
             local civilianId = scenario.sets.civilian_baseline and "civilian_baseline" or findSetByClass(scenario, "civilian", "naked")
             local lightId = lightSetId
@@ -464,27 +506,20 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
                 { label = "heavy", value = heavyId and asMetricValue(scenario.sets[heavyId].mean_achieved_sec) or nil },
             }
 
-            for i = 1, #sequence - 1 do
-                local left = sequence[i]
-                local right = sequence[i + 1]
-                local ok, breakReason = checkMonotonicPair(left.label, left.value, right.label, right.value, scenarioId)
-                if not ok then
-                    scenario.monotonicity = "fail"
-                    scenario.monotonicity_break = tostring(breakReason)
-                    break
-                end
+            local ok, breakReason = checkMonotonicSequence(sequence, "sleep_sec", 0.000001, scenarioId)
+            if not ok then
+                scenario.monotonicity = "fail"
+                scenario.monotonicity_break = tostring(breakReason)
             end
         elseif isThermalScenarioId(scenarioId) then
-            local lightId = lightSetId
-            local heavyId = scenario.sets.heavy and "heavy" or nil
-            if lightId and heavyId then
-                local left = monotonicBurden(scenario.sets[lightId].marginal_end_delta)
-                local right = monotonicBurden(scenario.sets[heavyId].marginal_end_delta)
-                local ok, breakReason = checkMonotonicPair("bulletproof_vest", left, "heavy", right, scenarioId)
-                if not ok then
-                    scenario.monotonicity = "fail"
-                    scenario.monotonicity_break = tostring(breakReason)
-                end
+            local sequence = {
+                { label = "bulletproof_vest", value = lightStats and lightStats.mean_cost or nil },
+                { label = "heavy", value = heavyStats and heavyStats.mean_cost or nil },
+            }
+            local ok, breakReason = checkMonotonicSequence(sequence, "cost", costTolerance, scenarioId)
+            if not ok then
+                scenario.monotonicity = "fail"
+                scenario.monotonicity_break = tostring(breakReason)
             end
         else
             local civilianId = scenario.sets.civilian_baseline and "civilian_baseline" or findSetByClass(scenario, "civilian", "naked")
@@ -492,21 +527,15 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
             local heavyId = scenario.sets.heavy and "heavy" or nil
 
             local sequence = {
-                { label = "naked", value = monotonicBurden(0.0) },
-                { label = "civilian", value = civilianId and monotonicBurden(scenario.sets[civilianId].marginal_end_delta) or nil },
-                { label = "bulletproof_vest", value = lightId and monotonicBurden(scenario.sets[lightId].marginal_end_delta) or nil },
-                { label = "heavy", value = heavyId and monotonicBurden(scenario.sets[heavyId].marginal_end_delta) or nil },
+                { label = "naked", value = baseline and baseline.mean_cost or nil },
+                { label = "civilian", value = civilianId and scenario.sets[civilianId].mean_cost or nil },
+                { label = "bulletproof_vest", value = lightId and scenario.sets[lightId].mean_cost or nil },
+                { label = "heavy", value = heavyId and scenario.sets[heavyId].mean_cost or nil },
             }
-
-            for i = 1, #sequence - 1 do
-                local left = sequence[i]
-                local right = sequence[i + 1]
-                local ok, breakReason = checkMonotonicPair(left.label, left.value, right.label, right.value, scenarioId)
-                if not ok then
-                    scenario.monotonicity = "fail"
-                    scenario.monotonicity_break = tostring(breakReason)
-                    break
-                end
+            local ok, breakReason = checkMonotonicSequence(sequence, "cost", costTolerance, scenarioId)
+            if not ok then
+                scenario.monotonicity = "fail"
+                scenario.monotonicity_break = tostring(breakReason)
             end
         end
 
@@ -518,9 +547,7 @@ function BenchRunnerReport.buildBenchmarkReport(runner, deps)
 
     if #report.stability.flagged > 0 then
         report.stability.status = "warn"
-    elseif #report.stability.insufficient > 0 then
-        report.stability.status = "insufficient_data"
-    else
+    elseif stabilityChecked then
         report.stability.status = "pass"
     end
 
@@ -567,12 +594,11 @@ function BenchRunnerReport.logBenchmarkReport(runner, report, deps)
         joinList(report.rejected_steps)
     ))
     emit(string.format(
-        "[AMS_BENCHMARK_REPORT] monotonicity=%s break=%s stability=%s flagged=%s insufficient=%s",
+        "[AMS_BENCHMARK_REPORT] monotonicity=%s break=%s stability=%s flagged=%s",
         tostring(report.monotonicity and report.monotonicity.status or "pass"),
         tostring(report.monotonicity and report.monotonicity.breakDescription or "none"),
-        tostring(report.stability and report.stability.status or "pass"),
-        joinList(report.stability and report.stability.flagged or {}),
-        joinList(report.stability and report.stability.insufficient or {})
+        tostring(report.stability and report.stability.status or "na"),
+        joinList(report.stability and report.stability.flagged or {})
     ))
 
     if #report.warnings > 0 then
@@ -604,12 +630,17 @@ function BenchRunnerReport.logBenchmarkReport(runner, report, deps)
                 local setStats = scenario.sets and scenario.sets[setId] or nil
                 if setStats then
                     emit(string.format(
-                        "[AMS_BENCHMARK_REPORT] scenario=%s set=%s class=%s valid=%d/%d mean_end_delta=%s stddev_end_delta=%s cv_end_delta=%s mean_thirst_delta=%s stddev_thirst_delta=%s cv_thirst_delta=%s mean_fatigue_delta=%s stddev_fatigue_delta=%s cv_fatigue_delta=%s mean_temp_delta=%s stddev_temp_delta=%s cv_temp_delta=%s mean_strain_delta=%s stddev_strain_delta=%s cv_strain_delta=%s mean_arm_stiffness_delta=%s stddev_arm_stiffness_delta=%s cv_arm_stiffness_delta=%s mean_stiffness_per_swing=%s stddev_stiffness_per_swing=%s cv_stiffness_per_swing=%s mean_achieved_sec=%s stddev_achieved_sec=%s cv_achieved_sec=%s swings_per_minute=%s stddev_swings_per_minute=%s cv_swings_per_minute=%s mean_pct_idle=%s mean_pct_walk=%s mean_pct_run=%s mean_pct_sprint=%s mean_pct_combat=%s marginal_end_delta=%s marginal_thirst_delta=%s marginal_temp_delta=%s marginal_strain_delta=%s marginal_arm_stiffness_delta=%s marginal_achieved_sec=%s stability=%s",
+                        "[AMS_BENCHMARK_REPORT] scenario=%s set=%s class=%s valid=%d/%d mean_cost=%s cv_cost=%s mean_realized_scale=%s mean_tick_closure=%s tick_gaps=%d mean_end_delta=%s stddev_end_delta=%s cv_end_delta=%s mean_thirst_delta=%s stddev_thirst_delta=%s cv_thirst_delta=%s mean_fatigue_delta=%s stddev_fatigue_delta=%s cv_fatigue_delta=%s mean_temp_delta=%s stddev_temp_delta=%s cv_temp_delta=%s mean_strain_delta=%s stddev_strain_delta=%s cv_strain_delta=%s mean_arm_stiffness_delta=%s stddev_arm_stiffness_delta=%s cv_arm_stiffness_delta=%s mean_stiffness_per_swing=%s stddev_stiffness_per_swing=%s cv_stiffness_per_swing=%s mean_achieved_sec=%s stddev_achieved_sec=%s cv_achieved_sec=%s swings_per_minute=%s stddev_swings_per_minute=%s cv_swings_per_minute=%s mean_pct_idle=%s mean_pct_walk=%s mean_pct_run=%s mean_pct_sprint=%s mean_pct_combat=%s marginal_end_delta=%s marginal_thirst_delta=%s marginal_temp_delta=%s marginal_strain_delta=%s marginal_arm_stiffness_delta=%s marginal_achieved_sec=%s stability=%s",
                         tostring(scenarioId),
                         tostring(setId),
                         tostring(setStats.class or "na"),
                         tonumber(setStats.valid_count) or 0,
                         tonumber(setStats.total_count) or 0,
+                        metricOrNa(setStats.mean_cost, 4),
+                        metricOrNa(setStats.cv_cost, 6),
+                        metricOrNa(setStats.mean_realized_scale, 4),
+                        metricOrNa(setStats.mean_tick_closure, 6),
+                        tonumber(setStats.tick_gaps) or 0,
                         metricOrNa(setStats.mean_end_delta, 6),
                         metricOrNa(setStats.stddev_end_delta, 6),
                         metricOrNa(setStats.cv_end_delta, 6),

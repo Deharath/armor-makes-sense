@@ -8,7 +8,7 @@ local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local Environment = require "ArmorMakesSense_EnvironmentShared"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local Options = require "ArmorMakesSense_Options"
-local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
+local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local Stats = require "ArmorMakesSense_StatsShared"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
@@ -116,17 +116,6 @@ local function closeWriterQuietly(writer)
     end)
 end
 
-local function burdenTierLabel(physicalLoad)
-    local labels = {
-        negligible = "Negligible",
-        light = "Light",
-        moderate = "Moderate",
-        heavy = "Heavy",
-        extreme = "Extreme",
-    }
-    return labels[PresentationPolicy.burdenTier(physicalLoad)] or labels.negligible
-end
-
 local function javaListToArray(list)
     local out = {}
     if type(list) ~= "userdata" and type(list) ~= "table" then
@@ -154,7 +143,9 @@ local function collectActiveMods()
 end
 
 local PLAYER_FACING_OPTIONS = {
+    PhysicalLoadScale = true,
     EnableThermalModel = true,
+    EnableBreathingModel = true,
     EnableMuscleStrainModel = true,
     EnableSleepPenaltyModel = true,
 }
@@ -174,10 +165,8 @@ local function collectOptions(options)
 end
 
 
-
 local function resolveActivityLabel(player)
-    local activity = Environment.resolveActivity(player, Options.get())
-    return tostring(activity.label or "idle")
+    return tostring(Environment.resolveActivity(player) or "idle")
 end
 
 local function resolvePostureFlags(player)
@@ -188,14 +177,7 @@ local function resolvePostureFlags(player)
         resting = false,
         posture = postureLabel ~= "" and postureLabel or "na",
     }
-    if postureLabel == "sit" or postureLabel == "rest" or postureLabel == "resting" then
-        flags.resting = true
-    else
-        local resting = callMethodIfPresent(player, "isResting")
-        if type(resting) == "boolean" then
-            flags.resting = resting == true
-        end
-    end
+    flags.resting = Environment.isResting(postureLabel)
     return flags
 end
 
@@ -266,8 +248,8 @@ local function topContributorsOneLiner(wornRows, limit)
     local maxRows = math.min(limit or 3, #wornRows)
     for i = 1, maxRows do
         local row = wornRows[i]
-        if row.physical >= 1.5 then
-            parts[#parts + 1] = string.format("%s (%s)", row.displayName, formatNumber(row.physical, 1))
+        if row.burdenKg >= LoadModel.COST_DRIVER_THRESHOLD_KG then
+            parts[#parts + 1] = string.format("%s (%s kg)", row.displayName, formatNumber(row.burdenKg, 1))
         end
     end
     if #parts == 0 then
@@ -276,70 +258,40 @@ local function topContributorsOneLiner(wornRows, limit)
     return table.concat(parts, ", ")
 end
 
-local function collectMpSnapshot(state)
-    if type(state) ~= "table" then
+local function snapshotAgeSeconds(state)
+    local mpClient = type(state) == "table" and type(state.mpClient) == "table" and state.mpClient or nil
+    local last = tonumber(mpClient and mpClient.lastSnapshotWallSecond) or 0
+    if last <= 0 then
         return nil
     end
-    local snapshot = state.mpServerSnapshot
-    if type(snapshot) ~= "table" then
-        return nil
-    end
-    local ageSeconds = nil
-    local mpClient = type(state.mpClient) == "table" and state.mpClient or nil
-    local lastSnapshotWallSecond = tonumber(mpClient and mpClient.lastSnapshotWallSecond) or nil
-    if lastSnapshotWallSecond ~= nil and lastSnapshotWallSecond > 0 then
-        local nowSeconds = Utils.getWallClockSeconds()
-        if nowSeconds ~= nil and nowSeconds > 0 then
-            ageSeconds = math.max(0, nowSeconds - lastSnapshotWallSecond)
-        end
-    end
-    return {
-        updatedMinute = tonumber(snapshot.updatedMinute) or nil,
-        loadNorm = tonumber(snapshot.loadNorm) or nil,
-        physicalLoad = tonumber(snapshot.physicalLoad) or nil,
-        thermalResistance = tonumber(snapshot.thermalResistance) or nil,
-        airflowResistance = tonumber(snapshot.airflowResistance) or nil,
-        sealedRestriction = tonumber(snapshot.sealedRestriction) or nil,
-        rigidityLoad = tonumber(snapshot.rigidityLoad) or nil,
-        effectiveLoad = tonumber(snapshot.effectiveLoad) or nil,
-        thermalContribution = tonumber(snapshot.thermalContribution) or nil,
-        breathingContribution = tonumber(snapshot.breathingContribution) or nil,
-        bodyHeatDelta = tonumber(snapshot.bodyHeatDelta) or nil,
-        hotDrive = tonumber(snapshot.hotDrive) or nil,
-        metabolicRate = tonumber(snapshot.metabolicRate) or nil,
-        metabolicDemand = tonumber(snapshot.metabolicDemand) or nil,
-        metabolicNorm = tonumber(snapshot.metabolicNorm) or nil,
-        breathingEffortRamp = tonumber(snapshot.breathingEffortRamp) or nil,
-        breathingDynamicLoad = tonumber(snapshot.breathingDynamicLoad) or nil,
-        breathingSealedLoad = tonumber(snapshot.breathingSealedLoad) or nil,
-        hotPressure = tonumber(snapshot.hotPressure) or nil,
-        coldSuitability = tonumber(snapshot.coldSuitability) or nil,
-        thermalStrainScale = tonumber(snapshot.thermalStrainScale) or nil,
-        enduranceBeforeAms = tonumber(snapshot.enduranceBeforeAms) or nil,
-        enduranceAfterAms = tonumber(snapshot.enduranceAfterAms) or nil,
-        enduranceNaturalDelta = tonumber(snapshot.enduranceNaturalDelta) or nil,
-        enduranceAppliedDelta = tonumber(snapshot.enduranceAppliedDelta) or nil,
-        amsEnduranceRegenScale = tonumber(snapshot.amsEnduranceRegenScale) or nil,
-        amsEnduranceDrainApplied = tonumber(snapshot.amsEnduranceDrainApplied) or nil,
-        sleepPenaltyFraction = tonumber(snapshot.sleepPenaltyFraction) or nil,
-        sleepWakeAdjustment = tonumber(snapshot.sleepWakeAdjustment) or nil,
-        lastAppliedDtMinutes = tonumber(snapshot.lastAppliedDtMinutes) or nil,
-        catchupPendingMinutes = tonumber(snapshot.catchupPendingMinutes) or nil,
-        activityLabel = tostring(snapshot.activityLabel or "idle"),
-        ageSeconds = ageSeconds,
-        drivers = type(snapshot.drivers) == "table" and snapshot.drivers or {},
-    }
+    return math.max(0, (Utils.getWallClockSeconds() or last) - last)
 end
 
-local function collectRuntime(state)
-    if type(state) ~= "table" then
-        return nil
+-- Snapshot fields in report order.
+local SNAPSHOT_FIELDS = {
+    { "activityLabel" }, { "postureLabel" },
+    { "burdenKg", 3 }, { "armKg", 3 }, { "rigidKg", 3 }, { "driverCount", 0 },
+    { "bodyKg", 1 }, { "strength", 0 }, { "loadFraction", 4 },
+    { "heat", 4 }, { "thermalResistance", 4 }, { "hotPressure", 4 }, { "coldSuitability", 4 },
+    { "airflowResistance", 3 }, { "sealedRestriction", 3 }, { "breathingSeverity", 3 }, { "breathingEnabled" },
+    { "restRegenScale", 4 }, { "standRegenScale", 4 }, { "walkRegenScale", 4 }, { "runDrainScale", 4 }, { "sprintDrainScale", 4 },
+    { "sleepPenaltyFraction", 4 },
+    { "naturalDelta", 6 }, { "amsDelta", 6 }, { "regenScale", 4 }, { "drainScale", 4 },
+    { "nmsRegenScale", 4 }, { "nmsDrain", 6 }, { "dtMinutes", 3 }, { "updatedMinute", 3 },
+}
+
+local function appendSnapshot(lines, snapshot, worldMinutes)
+    for _, field in ipairs(SNAPSHOT_FIELDS) do
+        local value = snapshot[field[1]]
+        if field[2] then
+            appendLine(lines, string.format("%s=%s", field[1], formatNumber(value, field[2])))
+        else
+            appendLine(lines, string.format("%s=%s", field[1], formatScalar(value)))
+        end
     end
-    local snapshot = state.uiRuntimeSnapshot
-    if type(snapshot) ~= "table" then
-        return nil
-    end
-    return snapshot
+    appendLine(lines, string.format("snapshotAgeMinutes=%s", formatNumber(
+        math.max(0, (tonumber(worldMinutes) or 0) - (tonumber(snapshot.updatedMinute) or 0)), 3
+    )))
 end
 
 local function openWriter(path)
@@ -359,14 +311,13 @@ local function buildReport(player)
     local state = ClientRuntime.ensureState(player)
     local resolvedOptions = Options.get()
     local options = collectOptions(resolvedOptions)
-    local analysis = LoadModel.analyzeWornGear(player)
+    local analysis = LoadModel.analyzeWornGear(player, resolvedOptions)
     local profile = analysis.profile
-    local runtime = collectRuntime(state)
+    local runtime = Physiology.getUiRuntimeSnapshot(state)
     local playerState = collectPlayerState(player)
     local climateState = collectClimateState(player)
     local wornRows = analysis.rows
     local activeMods = collectActiveMods()
-    local mpSnapshot = isMp and collectMpSnapshot(state) or nil
 
     local lines = {}
 
@@ -427,151 +378,37 @@ local function buildReport(player)
     -- AMS Totals (always from the local worn profile)
     appendLine(lines, "## AMS Totals")
     appendLine(lines, string.format("source=%s", "local"))
-    appendLine(lines, string.format("physical_load=%s", formatNumber(profile.physicalLoad, 3)))
+    appendLine(lines, string.format("burden_kg=%s", formatNumber(profile.burdenKg, 3)))
+    appendLine(lines, string.format("mass_kg=%s", formatNumber(profile.massKg, 3)))
+    appendLine(lines, string.format("bulk_kg=%s", formatNumber(profile.bulkKg, 3)))
+    appendLine(lines, string.format("arm_kg=%s", formatNumber(profile.armKg, 3)))
+    appendLine(lines, string.format("rigid_kg=%s", formatNumber(profile.rigidKg, 3)))
     appendLine(lines, string.format("airflow_resistance=%s", formatNumber(profile.airflowResistance, 3)))
     appendLine(lines, string.format("sealed_restriction=%s", formatNumber(profile.sealedRestriction, 3)))
-    appendLine(lines, string.format("rigidity_load=%s", formatNumber(profile.rigidityLoad, 3)))
-    appendLine(lines, string.format("burden_tier=%s", burdenTierLabel(profile.physicalLoad)))
     appendLine(lines, string.format("driver_count=%s", formatScalar(profile.driverCount)))
     appendLine(lines, string.format("top_contributors=%s", topContributorsOneLiner(wornRows, 3)))
     appendLine(lines, "")
 
-    -- Runtime snapshot -- SP only. In MP the client physiology tick does not run,
-    -- so state.uiRuntimeSnapshot is stale. Server-authoritative data is in MP Snapshot.
-    if not isMp then
-        appendLine(lines, "## Runtime")
-        if type(runtime) == "table" then
-            appendLine(lines, string.format("loadNorm=%s", formatNumber(runtime.loadNorm, 4)))
-            appendLine(lines, string.format("effectiveLoad=%s", formatNumber(runtime.effectiveLoad, 4)))
-            appendLine(lines, string.format("thermalContribution=%s", formatNumber(runtime.thermalContribution, 4)))
-            appendLine(lines, string.format("breathingContribution=%s", formatNumber(runtime.breathingContribution, 4)))
-            appendLine(lines, string.format("bodyHeatDelta=%s", formatNumber(runtime.bodyHeatDelta, 4)))
-            appendLine(lines, string.format("hotDrive=%s", formatNumber(runtime.hotDrive, 4)))
-            appendLine(lines, string.format("metabolicRate=%s", formatNumber(runtime.metabolicRate, 4)))
-            appendLine(lines, string.format("metabolicDemand=%s", formatNumber(runtime.metabolicDemand, 4)))
-            appendLine(lines, string.format("metabolicNorm=%s", formatNumber(runtime.metabolicNorm, 4)))
-            appendLine(lines, string.format("breathingEffortRamp=%s", formatNumber(runtime.breathingEffortRamp, 4)))
-            appendLine(lines, string.format("breathingDynamicLoad=%s", formatNumber(runtime.breathingDynamicLoad, 4)))
-            appendLine(lines, string.format("breathingSealedLoad=%s", formatNumber(runtime.breathingSealedLoad, 4)))
-            appendLine(lines, string.format("thermalResistance=%s", formatNumber(runtime.thermalResistance, 4)))
-            appendLine(lines, string.format("hotPressure=%s", formatNumber(runtime.hotPressure, 4)))
-            appendLine(lines, string.format("coldSuitability=%s", formatNumber(runtime.coldSuitability, 4)))
-            appendLine(lines, string.format("thermalStrainScale=%s", formatNumber(runtime.thermalStrainScale, 4)))
-            appendLine(lines, string.format("activityLabel=%s", formatScalar(runtime.activityLabel)))
-            appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(runtime.enduranceBeforeAms, 4)))
-            appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(runtime.enduranceAfterAms, 4)))
-            appendLine(lines, string.format("enduranceNaturalDelta=%s", formatNumber(runtime.enduranceNaturalDelta, 4)))
-            appendLine(lines, string.format("enduranceAppliedDelta=%s", formatNumber(runtime.enduranceAppliedDelta, 4)))
-            appendLine(lines, string.format("amsEnduranceRegenScale=%s", formatNumber(runtime.amsEnduranceRegenScale, 4)))
-            appendLine(lines, string.format("recoveryPenaltyPercent=%s", formatNumber(PresentationPolicy.recoveryPenaltyPercent(
-                runtime.amsEnduranceRegenScale,
-                runtime.enduranceNaturalDelta
-            ), 2)))
-            appendLine(lines, string.format("amsEnduranceDrainApplied=%s", formatNumber(runtime.amsEnduranceDrainApplied, 6)))
-            appendLine(lines, string.format("drainPercentPerMinute=%s", formatNumber(PresentationPolicy.drainPercentPerMinute(
-                runtime.amsEnduranceDrainApplied,
-                runtime.lastAppliedDtMinutes
-            ), 4)))
-            appendLine(lines, string.format("lastAppliedDtMinutes=%s", formatNumber(runtime.lastAppliedDtMinutes, 4)))
-            appendLine(lines, string.format("updatedMinute=%s", formatNumber(runtime.updatedMinute, 3)))
-            appendLine(lines, string.format("snapshotAgeMinutes=%s", formatNumber(PresentationPolicy.snapshotAgeMinutes(
-                worldMinutes,
-                runtime.updatedMinute
-            ), 3)))
-        else
-            appendLine(lines, "runtime=unavailable")
+    -- Runtime: the SP tick snapshot, or the server-authoritative snapshot in MP.
+    appendLine(lines, "## Runtime")
+    appendLine(lines, string.format("source=%s", isMp and "server" or "local"))
+    if type(runtime) == "table" then
+        if isMp then
+            appendLine(lines, string.format("ageSeconds=%s", formatNumber(snapshotAgeSeconds(state), 1)))
         end
-        appendLine(lines, "")
-    end
-
-    -- MP Snapshot (server-authoritative, shown alongside local data for comparison)
-    if isMp then
-        appendLine(lines, "## MP Snapshot")
-        if type(mpSnapshot) == "table" then
-            appendLine(lines, string.format("source=%s", "server"))
-            appendLine(lines, string.format("updatedMinute=%s", formatNumber(mpSnapshot.updatedMinute, 3)))
-            appendLine(lines, string.format("ageSeconds=%s", formatNumber(mpSnapshot.ageSeconds, 1)))
-            appendLine(lines, string.format("loadNorm=%s", formatNumber(mpSnapshot.loadNorm, 4)))
-            appendLine(lines, string.format("physicalLoad=%s", formatNumber(mpSnapshot.physicalLoad, 3)))
-            appendLine(lines, string.format("thermalResistance=%s", formatNumber(mpSnapshot.thermalResistance, 3)))
-            appendLine(lines, string.format("airflowResistance=%s", formatNumber(mpSnapshot.airflowResistance, 3)))
-            appendLine(lines, string.format("sealedRestriction=%s", formatNumber(mpSnapshot.sealedRestriction, 3)))
-            appendLine(lines, string.format("rigidityLoad=%s", formatNumber(mpSnapshot.rigidityLoad, 3)))
-            appendLine(lines, string.format("effectiveLoad=%s", formatNumber(mpSnapshot.effectiveLoad, 3)))
-            appendLine(lines, string.format("thermalContribution=%s", formatNumber(mpSnapshot.thermalContribution, 4)))
-            appendLine(lines, string.format("breathingContribution=%s", formatNumber(mpSnapshot.breathingContribution, 4)))
-            appendLine(lines, string.format("bodyHeatDelta=%s", formatNumber(mpSnapshot.bodyHeatDelta, 4)))
-            appendLine(lines, string.format("hotDrive=%s", formatNumber(mpSnapshot.hotDrive, 4)))
-            appendLine(lines, string.format("metabolicRate=%s", formatNumber(mpSnapshot.metabolicRate, 4)))
-            appendLine(lines, string.format("metabolicDemand=%s", formatNumber(mpSnapshot.metabolicDemand, 4)))
-            appendLine(lines, string.format("metabolicNorm=%s", formatNumber(mpSnapshot.metabolicNorm, 4)))
-            appendLine(lines, string.format("breathingEffortRamp=%s", formatNumber(mpSnapshot.breathingEffortRamp, 4)))
-            appendLine(lines, string.format("breathingDynamicLoad=%s", formatNumber(mpSnapshot.breathingDynamicLoad, 4)))
-            appendLine(lines, string.format("breathingSealedLoad=%s", formatNumber(mpSnapshot.breathingSealedLoad, 4)))
-            appendLine(lines, string.format("activityLabel=%s", formatScalar(mpSnapshot.activityLabel)))
-            appendLine(lines, string.format("hotPressure=%s", formatNumber(mpSnapshot.hotPressure, 4)))
-            appendLine(lines, string.format("coldSuitability=%s", formatNumber(mpSnapshot.coldSuitability, 4)))
-            appendLine(lines, string.format("thermalStrainScale=%s", formatNumber(mpSnapshot.thermalStrainScale, 4)))
-            appendLine(lines, string.format("enduranceBeforeAms=%s", formatNumber(mpSnapshot.enduranceBeforeAms, 4)))
-            appendLine(lines, string.format("enduranceAfterAms=%s", formatNumber(mpSnapshot.enduranceAfterAms, 4)))
-            appendLine(lines, string.format("enduranceNaturalDelta=%s", formatNumber(mpSnapshot.enduranceNaturalDelta, 4)))
-            appendLine(lines, string.format("enduranceAppliedDelta=%s", formatNumber(mpSnapshot.enduranceAppliedDelta, 4)))
-            appendLine(lines, string.format("amsEnduranceRegenScale=%s", formatNumber(mpSnapshot.amsEnduranceRegenScale, 4)))
-            appendLine(lines, string.format("recoveryPenaltyPercent=%s", formatNumber(PresentationPolicy.recoveryPenaltyPercent(
-                mpSnapshot.amsEnduranceRegenScale,
-                mpSnapshot.enduranceNaturalDelta
-            ), 2)))
-            appendLine(lines, string.format("amsEnduranceDrainApplied=%s", formatNumber(mpSnapshot.amsEnduranceDrainApplied, 6)))
-            appendLine(lines, string.format("drainPercentPerMinute=%s", formatNumber(PresentationPolicy.drainPercentPerMinute(
-                mpSnapshot.amsEnduranceDrainApplied,
-                mpSnapshot.lastAppliedDtMinutes
-            ), 4)))
-            appendLine(lines, string.format("lastAppliedDtMinutes=%s", formatNumber(mpSnapshot.lastAppliedDtMinutes, 4)))
-            appendLine(lines, string.format("catchupPendingMinutes=%s", formatNumber(mpSnapshot.catchupPendingMinutes, 4)))
-            appendLine(lines, string.format("snapshotAgeMinutes=%s", formatNumber(PresentationPolicy.snapshotAgeMinutes(
-                worldMinutes,
-                mpSnapshot.updatedMinute
-            ), 3)))
-            local serverDrivers = mpSnapshot.drivers or {}
-            if #serverDrivers > 0 then
-                for i = 1, #serverDrivers do
-                    local driver = serverDrivers[i] or {}
-                    appendLine(lines, string.format(
-                        "server_driver[%d]=%s | physical=%s",
-                        i,
-                        formatScalar(driver.label),
-                        formatNumber(driver.physical, 3)
-                    ))
-                end
-            else
-                appendLine(lines, "server_drivers=none")
-            end
-        else
-            appendLine(lines, "server_snapshot=unavailable")
+        appendSnapshot(lines, runtime, worldMinutes)
+        local drivers = isMp and (runtime.drivers or {}) or {}
+        for i = 1, #drivers do
+            appendLine(lines, string.format(
+                "server_driver[%d]=%s | burden_kg=%s",
+                i,
+                formatScalar(drivers[i].label),
+                formatNumber(drivers[i].burdenKg, 3)
+            ))
         end
-        appendLine(lines, "")
+    else
+        appendLine(lines, "runtime=unavailable")
     end
-
-    -- Current authoritative sleep-model state. This is option-aware and never
-    -- infers a penalty solely from worn rigidity.
-    local sleepEnabled = type(resolvedOptions) == "table"
-        and resolvedOptions.EnableSleepPenaltyModel == true
-    local sleepPenaltyFraction = isMp
-        and tonumber(mpSnapshot and mpSnapshot.sleepPenaltyFraction)
-        or tonumber(state and state.lastSleepPenaltyFraction)
-    local sleepWakeAdjustment = isMp
-        and tonumber(mpSnapshot and mpSnapshot.sleepWakeAdjustment)
-        or tonumber(state and state.lastSleepWakeAdjustment)
-    appendLine(lines, "## Sleep")
-    appendLine(lines, string.format("model_enabled=%s", formatScalar(sleepEnabled)))
-    appendLine(lines, string.format("bed_type=%s", formatScalar(callMethodIfPresent(player, "getBedType"))))
-    appendLine(lines, string.format("force_wake_time=%s", formatNumber(callMethodIfPresent(player, "getForceWakeUpTime"), 3)))
-    appendLine(lines, string.format("penalty_fraction=%s", formatNumber(sleepEnabled and sleepPenaltyFraction or 0, 4)))
-    appendLine(lines, string.format("recovery_penalty_percent=%s", formatNumber(PresentationPolicy.sleepPenaltyPercent(
-        sleepPenaltyFraction,
-        sleepEnabled
-    ), 2)))
-    appendLine(lines, string.format("wake_adjustment=%s", formatNumber(sleepEnabled and sleepWakeAdjustment or 0, 4)))
     appendLine(lines, "")
 
     -- Worn Items
@@ -590,27 +427,27 @@ local function buildReport(player)
                     formatNumber(row.sealedRestriction, 2))
             end
             appendLine(lines, string.format(
-                "[%02d] loc=%s | type=%s | name=%s%s\n     phy=%s thm=%s airflow=%s rig=%s | weight=%s source=%s | discomfort=%s%s",
+                "[%02d] loc=%s | type=%s | name=%s%s\n     burden=%s mass=%s x%s bulk=%s rigid=%s | weight=%s | discomfort=%s airflow=%s%s",
                 i,
                 formatScalar(row.bodyLocation),
                 formatScalar(row.fullType),
                 formatScalar(row.displayName),
                 modPart,
-                formatNumber(row.physical, 3),
-                formatNumber(row.thermal, 3),
-                formatNumber(row.airflow, 3),
-                formatNumber(row.rigidity, 3),
-                formatNumber(row.weightUsed, 3),
-                formatScalar(row.weightSource),
+                formatNumber(row.burdenKg, 3),
+                formatNumber(row.massKg, 3),
+                formatNumber(row.placement, 2),
+                formatNumber(row.bulkKg, 3),
+                formatNumber(row.rigidKg, 3),
+                formatNumber(row.weightKg, 3),
                 formatNumber(row.discomfort, 3),
+                formatNumber(row.airflow, 3),
                 breathingPart
             ))
             appendLine(lines, string.format(
-                "     included=%s reason=%s | armor_like=%s classification=%s",
+                "     included=%s reason=%s | rigid=%s",
                 formatScalar(row.included),
                 formatScalar(row.inclusionReason),
-                formatScalar(row.armorLike),
-                formatScalar(row.classificationReason)
+                formatScalar(row.rigid)
             ))
         end
     end

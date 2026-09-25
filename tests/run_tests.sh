@@ -9,21 +9,18 @@ tests=(
   test_environment_strain.lua
   test_thermal_model.lua
   test_physiology.lua
-  test_sleep_ownership.lua
   test_calculation_models.lua
   test_presentation_policy.lua
   test_mp_snapshot_codec.lua
-  test_mp_snapshot_builder.lua
   test_mp_request_policy.lua
-  test_mp_sleep_wake.lua
   test_runtime_state.lua
   test_options.lua
   test_logger.lua
   test_stats_authority.lua
   test_local_player_ownership.lua
-  test_simulation.lua
   test_ui_tooltip.lua
-  test_sleep_hooks.lua
+  test_burden_view.lua
+  test_burden_panel.lua
   test_slot_compat.lua
   test_speed_rebalance_lifecycle.lua
   test_tick_coordinator.lua
@@ -35,6 +32,7 @@ tests=(
   test_bench_runner_env.lua
   test_bench_runner_snapshot.lua
   test_bench_runner_step.lua
+  test_bench_runner_report.lua
 )
 
 for test_name in "${tests[@]}"; do

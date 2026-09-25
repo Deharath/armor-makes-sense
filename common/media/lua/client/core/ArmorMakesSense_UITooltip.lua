@@ -4,24 +4,31 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 local Core = ArmorMakesSense.Core
 Core.UITooltip = Core.UITooltip or {}
 
+local BreathingModel = require "ArmorMakesSense_BreathingModel"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local Draw = require "core/ArmorMakesSense_Draw"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
-local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
+local Options = require "ArmorMakesSense_Options"
+local Policy = require "ArmorMakesSense_PresentationPolicy"
 local Utils = require "ArmorMakesSense_UtilsShared"
 
 local UITooltip = Core.UITooltip
+local safeCall = ClientRuntime.safeMethod
 
-local TOOLTIP_DISPLAY_THRESHOLD = 1.5
-local TOOLTIP_BAR_MAX = 28
 local TOOLTIP_MIN_LABEL_WIDTH = 80
-local TOOLTIP_VALUE_WIDTH = 80
+local TOOLTIP_MIN_VALUE_WIDTH = 80
+local TOOLTIP_MIN_WIDTH = 150
 local TOOLTIP_TITLE_GAP = 5
-local TT_LABEL_DEFAULT = { 1.0, 1.0, 0.8, 1.0 }
-local TT_LABEL_ACCENT = { 1.0, 0.85, 0.55, 1.0 }
-local TT_VALUE_DEFAULT = { 1.0, 1.0, 1.0, 1.0 }
-local TT_VALUE_BREATHING = { 1.0, 0.80, 0.40, 1.0 }
-local TT_VALUE_BREATHING_HEAVY = { 1.0, 0.45, 0.35, 1.0 }
-local TT_BAR_BURDEN = { 0.95, 0.70, 0.25, 1.0 }
+local PIP_BLOCK_GAP = 3
+
+-- Labels vanilla clothing tooltips can emit; the pip column clears all of them
+-- so AMS pips line up with vanilla values.
+local VANILLA_LABEL_KEYS = {
+    "Tooltip_item_Weight", "Tooltip_item_Insulation", "Tooltip_item_Windresist",
+    "Tooltip_item_Waterresist", "Tooltip_BiteDefense", "Tooltip_ScratchDefense",
+    "Tooltip_BulletDefense", "Tooltip_CombatSpeedModifier", "Tooltip_RunSpeedModifier",
+    "Tooltip_weapon_Condition",
+}
 
 local function tr(key, fallback)
     if not getText then
@@ -34,153 +41,135 @@ local function tr(key, fallback)
     return value
 end
 
-local function clamp01(value)
-    return Utils.clamp(tonumber(value) or 0, 0, 1)
-end
-
-local function tooltipLayoutGeometry(tooltip)
-    local lineSpacing = tonumber(ClientRuntime.safeMethod(tooltip, "getLineSpacing")) or 14
-    local font = ClientRuntime.safeMethod(tooltip, "getFont")
-    local textManager = nil
-    if type(getTextManager) == "function" then
-        local ok, value = pcall(getTextManager)
-        if ok then
-            textManager = value
-        end
+local function bodyLocation(item)
+    local location = tostring(safeCall(item, "getBodyLocation") or "")
+    if location ~= "" then
+        return location
     end
+    return tostring(safeCall(safeCall(item, "getScriptItem"), "getBodyLocation") or "")
+end
 
-    local digitWidth = tonumber(ClientRuntime.safeMethod(textManager, "MeasureStringX", font, "0"))
-    if digitWidth == nil then
-        return 5, lineSpacing + 10, 5
+local function isShoulderpad(item)
+    return string.find(Utils.lower(bodyLocation(item)), "shoulderpad", 1, true) ~= nil
+        or string.find(Utils.lower(safeCall(item, "getFullType")), "shoulderpad", 1, true) ~= nil
+end
+
+function UITooltip.buildRows(item)
+    if not item or bodyLocation(item) == "" or Utils.toBoolean(safeCall(item, "IsInventoryContainer")) then
+        return {}
     end
-
-    local horizontalPad = math.max(0, math.floor(digitWidth))
-    local verticalPad = math.max(0, math.floor(digitWidth / 2))
-    return horizontalPad, verticalPad + lineSpacing + TOOLTIP_TITLE_GAP, verticalPad
-end
-
-local function burdenBarFraction(physicalLoad)
-    local value = tonumber(physicalLoad) or 0
-    if value <= 0 then
-        return 0
-    end
-    return math.min(1.0, value / TOOLTIP_BAR_MAX)
-end
-
-local function breathingTierFromResistance(resistance, sealedRestriction)
-    local tier = PresentationPolicy.breathingTier(resistance, sealedRestriction)
-    local labels = {
-        mild = { "UI_AMS_Label_BreathingMild", "Mild" },
-        restricted = { "UI_AMS_Label_BreathingRestricted", "Restricted" },
-        heavy = { "UI_AMS_Label_BreathingHeavyRestricted", "Heavily Restricted" },
-    }
-    local label = tier and labels[tier] or nil
-    return label and tr(label[1], label[2]) or nil
-end
-
-local function getBodyLocation(item)
-    return tostring(ClientRuntime.safeMethod(item, "getBodyLocation") or "")
-end
-
-local function stripAmsPrefix(text)
-    return string.gsub(tostring(text or ""), "^%s*AMS%s+", "")
-end
-
-local function isTooltipWearable(item)
-    if not item then
-        return false
-    end
-    if getBodyLocation(item) ~= "" then
-        return true
-    end
-    local scriptItem = ClientRuntime.safeMethod(item, "getScriptItem")
-    return tostring(ClientRuntime.safeMethod(scriptItem, "getBodyLocation") or "") ~= ""
-end
-
-local function isShoulderpadFamilyItem(item)
-    local location = Utils.lower(getBodyLocation(item))
-    if string.find(location, "shoulderpad", 1, true) then
-        return true
-    end
-    local fullType = Utils.lower(tostring(ClientRuntime.safeMethod(item, "getFullType") or ""))
-    return string.find(fullType, "shoulderpad", 1, true) ~= nil
-end
-
-local function buildTooltipRows(item)
-    if not item or not isTooltipWearable(item) then
-        return nil
-    end
-    local signal = LoadModel.itemToBurdenSignal(item, getBodyLocation(item))
+    local options = Options.get()
+    local signal = LoadModel.itemToBurdenSignal(item, bodyLocation(item), options)
     if not signal then
-        return nil
+        return {}
     end
-    local hasPhysical = (tonumber(signal.physicalLoad) or 0) >= TOOLTIP_DISPLAY_THRESHOLD
-    local hasBreathing = PresentationPolicy.breathingTier(
-        signal.airflowResistance,
-        signal.sealedRestriction
-    ) ~= nil
-    if not hasPhysical and not hasBreathing then
-        return nil
-    end
-
     local rows = {}
-    if hasPhysical then
+    local burdenPips = Policy.itemPips(signal.burdenKg)
+    if burdenPips > 0 then
         rows[#rows + 1] = {
-            label = stripAmsPrefix(tr("UI_AMS_Label_Burden", "Burden")) .. ":",
-            labelColor = TT_LABEL_ACCENT,
-            progress = burdenBarFraction(signal.physicalLoad),
-            barColor = TT_BAR_BURDEN,
+            label = tr("UI_AMS_Label_Burden", "Burden"),
+            pips = burdenPips,
+            color = Draw.C.burden,
         }
     end
-
-    local breathingTier = breathingTierFromResistance(signal.airflowResistance, signal.sealedRestriction)
-    if breathingTier then
-        rows[#rows + 1] = {
-            label = stripAmsPrefix(tr("UI_AMS_Label_Breathing", "Breathing")) .. ":",
-            labelColor = TT_LABEL_ACCENT,
-            value = breathingTier,
-            valueColor = (tonumber(signal.sealedRestriction) or 0) > 0
-                and TT_VALUE_BREATHING_HEAVY or TT_VALUE_BREATHING,
-        }
+    if Utils.toBoolean(options.EnableBreathingModel) then
+        local breathingPips = Policy.breathingPips(
+            BreathingModel.severity(signal.airflowResistance, signal.sealedRestriction)
+        )
+        if breathingPips > 0 then
+            rows[#rows + 1] = {
+                label = tr("UI_AMS_Label_Breathing", "Breathing"),
+                pips = breathingPips,
+                color = Draw.C.breathing,
+            }
+        end
     end
     return rows
 end
 
-local function buildProviderRows(item)
-    local sourceRows = buildTooltipRows(item)
-    local rows = {}
-    for _, source in ipairs(sourceRows or {}) do
-        rows[#rows + 1] = {
-            label = source.label,
-            value = source.progress ~= nil
-                and string.format("%.0f%%", clamp01(source.progress) * 100)
-                or tostring(source.value or ""),
-            labelR = source.labelColor and source.labelColor[1] or nil,
-            labelG = source.labelColor and source.labelColor[2] or nil,
-            labelB = source.labelColor and source.labelColor[3] or nil,
-        }
-    end
-    return #rows > 0 and rows or nil
+local function tooltipLayoutGeometry(tooltip)
+    local lineSpacing = tonumber(safeCall(tooltip, "getLineSpacing")) or 14
+    local digitWidth = math.max(1, Draw.textWidth(safeCall(tooltip, "getFont"), "0"))
+    local horizontalPad = math.floor(digitWidth)
+    local verticalPad = math.floor(digitWidth / 2)
+    return horizontalPad, verticalPad + lineSpacing + TOOLTIP_TITLE_GAP, verticalPad
 end
 
-local function registerProvider()
-    local controller = rawget(_G, "EuryTooltipController")
-    if type(controller) ~= "table" or type(controller.registerProvider) ~= "function" then
-        return false
+local function labelColumnWidth(font, rows)
+    local width = TOOLTIP_MIN_LABEL_WIDTH
+    for _, key in ipairs(VANILLA_LABEL_KEYS) do
+        local text = getText and getText(key) or nil
+        if text and text ~= key then
+            width = math.max(width, Draw.textWidth(font, text .. ":"))
+        end
     end
+    for _, row in ipairs(rows) do
+        width = math.max(width, Draw.textWidth(font, row.label .. ":"))
+    end
+    return width
+end
 
-    UITooltip._provider = UITooltip._provider or {
-        priority = 90,
-        getRows = function(_, ctx)
-            return buildProviderRows(ctx and ctx.item)
-        end,
-    }
-    local ok = pcall(controller.registerProvider, controller, "ArmorMakesSense", UITooltip._provider)
-    if ok then
-        UITooltip._registeredController = controller
-        ClientRuntime.logOnce("ui_tooltip_provider_installed", "[UI] AMS tooltip rows registered with the shared tooltip controller.")
+local function renderPipBlock(tooltip, rows, padLeft, top, labelColumn)
+    local font = safeCall(tooltip, "getFont")
+    local lineSpacing = tonumber(safeCall(tooltip, "getLineSpacing")) or 14
+    local measureOnly = safeCall(tooltip, "isMeasureOnly") == true
+    local valueX = padLeft + labelColumn + math.max(Draw.textWidth(font, "W"), 8)
+    local size, gap = Draw.pipGeometry(lineSpacing)
+    local sink = (not measureOnly) and Draw.tooltipSink(tooltip) or nil
+    local label = Draw.C.tooltipLabel
+    local y = top + PIP_BLOCK_GAP
+    for _, row in ipairs(rows) do
+        if sink then
+            tooltip:DrawText(font, row.label .. ":", padLeft, y, label.r, label.g, label.b, 1)
+            Draw.pips(sink, valueX, y + math.floor((lineSpacing - size) / 2), Policy.PIP_COUNT, row.pips, size, gap, row.color)
+        end
+        y = y + lineSpacing
     end
-    return ok
+    return y, valueX + Draw.pipStripWidth(Policy.PIP_COUNT, size, gap)
+end
+
+local function renderCombinedTooltip(tooltip, item, rows)
+    local layout = tooltip:beginLayout()
+    local labelColumn = labelColumnWidth(safeCall(tooltip, "getFont"), rows)
+    layout:setMinLabelWidth(labelColumn)
+    layout:setMinValueWidth(TOOLTIP_MIN_VALUE_WIDTH)
+    item:DoTooltipEmbedded(tooltip, layout, 0)
+    local padLeft, contentY, padBottom = tooltipLayoutGeometry(tooltip)
+    local height = tonumber(layout:render(padLeft, contentY, tooltip)) or contentY
+    tooltip:endLayout(layout)
+    local right
+    height, right = renderPipBlock(tooltip, rows, padLeft, height, labelColumn)
+    tooltip:setHeight(math.floor(height + padBottom))
+    local needed = math.max(TOOLTIP_MIN_WIDTH, right + padLeft)
+    if (tonumber(tooltip:getWidth()) or 0) < needed then
+        tooltip:setWidth(needed)
+    end
+end
+
+UITooltip._renderCombined = renderCombinedTooltip
+
+-- One persistent DoTooltip wrapper per item class. It only takes over while
+-- ISToolTipInv.render has published a matching item/tooltip pair.
+UITooltip._wrappedMethods = UITooltip._wrappedMethods or {}
+
+local function ensureDoTooltipWrapped(item)
+    local ok, metatable = pcall(getmetatable, item)
+    local methods = ok and type(metatable) == "table" and metatable.__index or nil
+    if type(methods) ~= "table" or UITooltip._wrappedMethods[methods] then
+        return
+    end
+    local original = methods.DoTooltip
+    if type(original) ~= "function" then
+        return
+    end
+    UITooltip._wrappedMethods[methods] = original
+    methods.DoTooltip = function(target, tooltip, ...)
+        local active = UITooltip._active
+        if active and active.item == target and active.tooltip == tooltip then
+            return UITooltip._renderCombined(tooltip, target, active.rows)
+        end
+        return original(target, tooltip, ...)
+    end
 end
 
 local function providerOwnsRows()
@@ -192,130 +181,33 @@ local function providerOwnsRows()
         and controller.providers.ArmorMakesSense == UITooltip._provider
 end
 
-local function addRowsToLayout(layout, item)
-    local rows = buildTooltipRows(item)
-    if not rows then
-        return 0
-    end
-
-    for _, row in ipairs(rows) do
-        local layoutItem = ClientRuntime.safeMethod(layout, "addItem")
-        if not layoutItem then
-            return 0
-        end
-        local labelColor = row.labelColor or TT_LABEL_DEFAULT
-        ClientRuntime.safeMethod(
-            layoutItem,
-            "setLabel",
-            row.label or "",
-            labelColor[1],
-            labelColor[2],
-            labelColor[3],
-            labelColor[4]
-        )
-
-        if row.progress ~= nil then
-            local barColor = row.barColor or TT_BAR_BURDEN
-            ClientRuntime.safeMethod(
-                layoutItem,
-                "setProgress",
-                clamp01(row.progress),
-                barColor[1],
-                barColor[2],
-                barColor[3],
-                barColor[4]
-            )
-        elseif row.value ~= nil then
-            local valueColor = row.valueColor or TT_VALUE_DEFAULT
-            ClientRuntime.safeMethod(
-                layoutItem,
-                "setValue",
-                tostring(row.value),
-                valueColor[1],
-                valueColor[2],
-                valueColor[3],
-                valueColor[4]
-            )
-        end
-    end
-    return #rows
-end
-
-local function renderCombinedTooltip(tooltip, item)
-    local layout = ClientRuntime.safeMethod(tooltip, "beginLayout")
-    if not layout then
+local function registerProvider()
+    local controller = rawget(_G, "EuryTooltipController")
+    if type(controller) ~= "table" or type(controller.registerProvider) ~= "function" then
         return false
     end
-
-    ClientRuntime.safeMethod(layout, "setMinLabelWidth", TOOLTIP_MIN_LABEL_WIDTH)
-    ClientRuntime.safeMethod(layout, "setMinValueWidth", TOOLTIP_VALUE_WIDTH)
-
-    local embedded = item and item.DoTooltipEmbedded
-    if type(embedded) ~= "function" then
-        ClientRuntime.safeMethod(tooltip, "endLayout", layout)
-        error("42.20 tooltip contract missing InventoryItem.DoTooltipEmbedded")
-    end
-    local ok, failure = pcall(embedded, item, tooltip, layout, 0)
-    if not ok then
-        ClientRuntime.safeMethod(tooltip, "endLayout", layout)
-        error(failure)
-    end
-
-    addRowsToLayout(layout, item)
-    local padLeft, y, padBottom = tooltipLayoutGeometry(tooltip)
-    local height = tonumber(ClientRuntime.safeMethod(layout, "render", padLeft, y, tooltip)) or y
-    ClientRuntime.safeMethod(tooltip, "endLayout", layout)
-    ClientRuntime.safeMethod(tooltip, "setHeight", math.floor(height + padBottom))
-
-    local width = tonumber(ClientRuntime.safeMethod(tooltip, "getWidth")) or 0
-    if width < 150 then
-        ClientRuntime.safeMethod(tooltip, "setWidth", 150)
-    end
-    return true
-end
-
-local function renderWithItemExtension(panel, originalRender)
-    local item = panel and panel.item
-    if not item then
-        return originalRender(panel)
-    end
-
-    local tooltipKey = tostring(ClientRuntime.safeMethod(item, "getTooltip") or "")
-    local suppressNoBackpack = isShoulderpadFamilyItem(item)
-        and (tooltipKey == "Tooltip_item_NoBackpack" or tooltipKey == "")
-        and type(item.setTooltip) == "function"
-    if suppressNoBackpack then
-        pcall(item.setTooltip, item, nil)
-    end
-
-    local tooltip = panel.tooltip
-    local extendRows = tooltip
-        and isTooltipWearable(item)
-        and not Utils.toBoolean(ClientRuntime.safeMethod(item, "IsInventoryContainer"))
-        and not providerOwnsRows()
-    local okMetatable, metatable = pcall(getmetatable, item)
-    local methods = okMetatable and type(metatable) == "table" and metatable.__index or nil
-    local originalDoTooltip = type(methods) == "table" and methods.DoTooltip or nil
-    if extendRows and type(originalDoTooltip) == "function" then
-        methods.DoTooltip = function(target, targetTooltip, ...)
-            if target == item and targetTooltip == tooltip then
-                return renderCombinedTooltip(targetTooltip, target)
+    UITooltip._provider = UITooltip._provider or {
+        priority = 90,
+        getRows = function(_, ctx)
+            local rows = {}
+            for _, row in ipairs(UITooltip.buildRows(ctx and ctx.item)) do
+                rows[#rows + 1] = {
+                    label = row.label,
+                    value = string.format("%d/%d", row.pips, Policy.PIP_COUNT),
+                    labelR = Draw.C.tooltipLabel.r,
+                    labelG = Draw.C.tooltipLabel.g,
+                    labelB = Draw.C.tooltipLabel.b,
+                }
             end
-            return originalDoTooltip(target, targetTooltip, ...)
-        end
+            return #rows > 0 and rows or nil
+        end,
+    }
+    local ok = pcall(controller.registerProvider, controller, "ArmorMakesSense", UITooltip._provider)
+    if ok then
+        UITooltip._registeredController = controller
+        ClientRuntime.logOnce("ui_tooltip_provider_installed", "[UI] AMS tooltip rows registered with the shared tooltip controller.")
     end
-
-    local ok, result = pcall(originalRender, panel)
-    if extendRows and type(originalDoTooltip) == "function" and methods.DoTooltip ~= originalDoTooltip then
-        methods.DoTooltip = originalDoTooltip
-    end
-    if suppressNoBackpack then
-        pcall(item.setTooltip, item, tooltipKey)
-    end
-    if not ok then
-        error(result)
-    end
-    return result
+    return ok
 end
 
 local function installRenderPatch()
@@ -325,22 +217,36 @@ local function installRenderPatch()
     if ISToolTipInv.render == ISToolTipInv._amsTooltipRenderWrapper then
         return true
     end
-
     local originalRender = ISToolTipInv.render
     local wrapper = function(self)
-        local nested = self and self._amsTooltipRenderActive == true
-        if nested then
-            return originalRender(self)
+        local item = self and self.item
+        -- Vanilla's "no backpack" note is wrong once AMS reslots shoulderpads;
+        -- hide it for this render only.
+        local hiddenTooltipKey = nil
+        if item and isShoulderpad(item) then
+            local key = safeCall(item, "getTooltip")
+            if key == nil or key == "" or key == "Tooltip_item_NoBackpack" then
+                hiddenTooltipKey = key or ""
+                safeCall(item, "setTooltip", nil)
+            end
         end
-        self._amsTooltipRenderActive = true
-        local ok, result = pcall(renderWithItemExtension, self, originalRender)
-        self._amsTooltipRenderActive = nil
+        UITooltip._active = nil
+        if item and self.tooltip and not providerOwnsRows() then
+            local rows = UITooltip.buildRows(item)
+            if #rows > 0 then
+                ensureDoTooltipWrapped(item)
+                UITooltip._active = { item = item, tooltip = self.tooltip, rows = rows }
+            end
+        end
+        local ok, err = pcall(originalRender, self)
+        UITooltip._active = nil
+        if hiddenTooltipKey ~= nil and hiddenTooltipKey ~= "" then
+            safeCall(item, "setTooltip", hiddenTooltipKey)
+        end
         if not ok then
-            error(result)
+            error(err, 0)
         end
-        return result
     end
-
     ISToolTipInv._amsTooltipRenderWrapper = wrapper
     ISToolTipInv.render = wrapper
     ClientRuntime.logOnce("ui_tooltip_patch_installed", "[UI] AMS tooltip rows registered around the inventory tooltip owner.")

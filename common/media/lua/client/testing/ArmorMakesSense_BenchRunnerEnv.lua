@@ -30,6 +30,18 @@ end
 -- Player readers and coordinate helpers
 -- -----------------------------------------------------------------------------
 
+function BenchRunnerEnv.setIsoPlayerTestAIMode(enabled)
+    local classRef = type(rawget) == "function" and rawget(_G, "IsoPlayer") or (_G and _G.IsoPlayer)
+    if classRef == nil then return false end
+    local target = enabled == true
+    local ok = pcall(function() classRef.isTestAIMode = target end)
+    if not ok then return false end
+    local readOk, value = pcall(function() return classRef.isTestAIMode end)
+    if readOk and type(value) == "boolean" then return value == target end
+    return true
+end
+
+
 function BenchRunnerEnv.distance2D(ax, ay, bx, by)
     local dx = (tonumber(ax) or 0) - (tonumber(bx) or 0)
     local dy = (tonumber(ay) or 0) - (tonumber(by) or 0)
@@ -734,7 +746,7 @@ function BenchRunnerEnv.equipSet(player, setDef)
     if type(wearProfile) ~= "function" then
         return 0, #entries
     end
-    local worn, missing = wearProfile(player, entries, "virtual")
+    local worn, missing = wearProfile(player, entries)
     return tonumber(worn) or 0, tonumber(missing) or 0
 end
 
@@ -742,33 +754,50 @@ local function nowMinutes()
     return BenchUtils.nowMinutes(ctx)
 end
 
-function BenchRunnerEnv.normalizeLoad(profile)
-    profile = profile or {}
-    local phy = tonumber(profile.physicalLoad) or 0
-    local swingChainLoad = tonumber(profile.swingChainLoad) or 0
-    local br = tonumber(profile.airflowResistance) or 0
-    local driverCount = tonumber(profile.driverCount) or 0
-    local weightUsedTotal = tonumber(profile.weightUsedTotal) or 0
-    local equippedWeightTotal = tonumber(profile.equippedWeightTotal) or 0
-    local actualWeightTotal = tonumber(profile.actualWeightTotal) or 0
-    local fallbackWeightTotal = tonumber(profile.fallbackWeightTotal) or 0
-    local fallbackWeightCount = tonumber(profile.fallbackWeightCount) or 0
-    local sourceActualCount = tonumber(profile.sourceActualCount) or 0
-    local sourceFallbackCount = tonumber(profile.sourceFallbackCount) or 0
+-- Runtime snapshot fields emitted by bench logs. `wire` names are what the
+-- external parser (tools/armor_makes_sense/scripts/parse_bench.py) reads.
+BenchRunnerEnv.RUNTIME_METRICS = {
+    { key = "burdenKg", wire = "burden_kg", digits = 3 },
+    { key = "armKg", wire = "arm_kg", digits = 3 },
+    { key = "rigidKg", wire = "rigid_kg", digits = 3 },
+    { key = "bodyKg", wire = "body_kg", digits = 2 },
+    { key = "strength", wire = "strength", digits = 0 },
+    { key = "loadFraction", wire = "load_fraction", digits = 5 },
+    { key = "heat", wire = "heat", digits = 4 },
+    { key = "thermalResistance", wire = "thermal_resistance", digits = 4 },
+    { key = "hotPressure", wire = "thermal_hot_pressure", digits = 4 },
+    { key = "coldSuitability", wire = "cold_suitability", digits = 4 },
+    { key = "airflowResistance", wire = "airflow_resistance_runtime", digits = 4 },
+    { key = "sealedRestriction", wire = "sealed_restriction_runtime", digits = 4 },
+    { key = "breathingSeverity", wire = "breathing_severity", digits = 4 },
+    { key = "metabolicRate", wire = "metabolic_rate", digits = 4 },
+    { key = "breathingEffortRamp", wire = "breathing_effort_ramp", digits = 4 },
+    { key = "breathingPressure", wire = "breathing_pressure", digits = 4 },
+    { key = "walkRegenScale", wire = "walk_regen_scale", digits = 4 },
+    { key = "restRegenScale", wire = "rest_regen_scale", digits = 4 },
+    { key = "standRegenScale", wire = "stand_regen_scale", digits = 4 },
+    { key = "runDrainScale", wire = "run_drain_scale", digits = 4 },
+    { key = "sprintDrainScale", wire = "sprint_drain_scale", digits = 4 },
+    { key = "regenScale", wire = "regen_scale", digits = 4 },
+    { key = "drainScale", wire = "drain_scale", digits = 4 },
+    { key = "naturalDelta", wire = "end_natural_delta", digits = 6 },
+    { key = "amsDelta", wire = "end_applied_delta", digits = 6 },
+    { key = "nmsRegenScale", wire = "nms_regen_scale", digits = 4 },
+    { key = "nmsDrain", wire = "nms_drain", digits = 6 },
+    { key = "sleepPenaltyFraction", wire = "sleep_penalty_fraction", digits = 4 },
+    { key = "dtMinutes", wire = "runtime_dt_min", digits = 3 },
+    { key = "updatedMinute", wire = "runtime_updated_min", digits = 3 },
+    { key = "snapshotAgeMinutes", wire = "runtime_snapshot_age_min", digits = 3 },
+}
 
-    return {
-        driverCount = driverCount,
-        phy = phy,
-        swingChainLoad = swingChainLoad,
-        br = br,
-        weightUsedTotal = weightUsedTotal,
-        equippedWeightTotal = equippedWeightTotal,
-        actualWeightTotal = actualWeightTotal,
-        fallbackWeightTotal = fallbackWeightTotal,
-        fallbackWeightCount = fallbackWeightCount,
-        sourceActualCount = sourceActualCount,
-        sourceFallbackCount = sourceFallbackCount,
-    }
+function BenchRunnerEnv.formatRuntimeMetrics(runtime, formatValue)
+    local parts = {}
+    local source = type(runtime) == "table" and runtime or {}
+    for i = 1, #BenchRunnerEnv.RUNTIME_METRICS do
+        local field = BenchRunnerEnv.RUNTIME_METRICS[i]
+        parts[#parts + 1] = field.wire .. "=" .. formatValue(source[field.key], field.digits)
+    end
+    return table.concat(parts, " ")
 end
 
 -- -----------------------------------------------------------------------------
@@ -818,18 +847,28 @@ function BenchRunnerEnv.readMuscleStrainMetrics(player)
     }
 end
 
+function BenchRunnerEnv.readArmStiffness(player)
+    local body = safeMethod(player, "getBodyDamage")
+    if not body or not BodyPartType then
+        return 0
+    end
+    local total = 0
+    for _, partType in ipairs({
+        BodyPartType.Hand_R, BodyPartType.ForeArm_R, BodyPartType.UpperArm_R,
+        BodyPartType.Hand_L, BodyPartType.ForeArm_L, BodyPartType.UpperArm_L,
+    }) do
+        local part = safeMethod(body, "getBodyPart", partType)
+        total = total + (tonumber(part and safeMethod(part, "getStiffness")) or 0)
+    end
+    return total
+end
+
 function BenchRunnerEnv.collectMetrics(player)
     local getEndurance = ctx("getEndurance")
     local getThirst = ctx("getThirst")
     local getFatigue = ctx("getFatigue")
     local getBodyTemperature = ctx("getBodyTemperature")
     local getWetness = ctx("getWetness")
-    local computeWornProfile = ctx("computeWornProfile")
-    local getOptions = ctx("getOptions")
-    local options = type(getOptions) == "function" and getOptions() or {}
-
-    local profile = type(computeWornProfile) == "function" and computeWornProfile(player) or {}
-    local load = BenchRunnerEnv.normalizeLoad(profile)
     local climate = BenchRunnerEnv.readClimateSnapshot(player)
     local thermoreg = BenchRunnerEnv.readThermoregulatorMetrics(player)
     local skinTemp = BenchRunnerEnv.readSkinTemperature(player, thermoreg.thermoregulator)
@@ -838,27 +877,18 @@ function BenchRunnerEnv.collectMetrics(player)
     local ambientAirTemp = tonumber(climate.airTemp) or tonumber(climate.ambient)
     local ensureState = ctx("ensureState")
     local state = type(ensureState) == "function" and ensureState(player) or nil
-    local runtime = type(state) == "table" and type(state.uiRuntimeSnapshot) == "table" and state.uiRuntimeSnapshot or nil
-    local runtimeLoadNorm = tonumber(runtime and runtime.loadNorm)
-    if runtimeLoadNorm == nil then
-        local getUiRuntimeSnapshot = ctx("getUiRuntimeSnapshot")
-        if type(getUiRuntimeSnapshot) == "function" then
-            local runtimeSnapshot = getUiRuntimeSnapshot(player, state, options)
-            if type(runtimeSnapshot) == "table" then
-                runtime = runtimeSnapshot
-            end
-            runtimeLoadNorm = tonumber(runtimeSnapshot and runtimeSnapshot.loadNorm)
+    local source = ctx("getUiRuntimeSnapshot")(state)
+    if type(source) ~= "table" then
+        source = ctx("projectRuntime")(player, state)
+    end
+    local runtime = {}
+    for key, value in pairs(type(source) == "table" and source or {}) do
+        if type(value) == "number" then
+            runtime[key] = value
         end
     end
-    local runtimeEffectiveLoad = tonumber(runtime and runtime.effectiveLoad)
-    local loadMin = math.max(0, tonumber(options and options.ArmorLoadMin) or 7)
-    local runtimeCompAdj = runtimeEffectiveLoad and math.max(0, runtimeEffectiveLoad - loadMin) or nil
-    local runtimeUpdatedMinute = tonumber(runtime and runtime.updatedMinute)
-    local runtimeSnapshotAgeMinutes = runtimeUpdatedMinute and math.max(0, nowMinutes() - runtimeUpdatedMinute) or nil
-    local enduranceBeforeAms = tonumber(runtime and runtime.enduranceBeforeAms)
-    local enduranceAfterAms = tonumber(runtime and runtime.enduranceAfterAms)
-    local enduranceNaturalDelta = tonumber(runtime and runtime.enduranceNaturalDelta)
-    local enduranceAppliedDelta = tonumber(runtime and runtime.enduranceAppliedDelta)
+    local updatedMinute = tonumber(runtime.updatedMinute)
+    runtime.snapshotAgeMinutes = updatedMinute and math.max(0, nowMinutes() - updatedMinute) or nil
 
     return {
         t = nowMinutes(),
@@ -878,41 +908,9 @@ function BenchRunnerEnv.collectMetrics(player)
         strainTorsoUpper = tonumber(strain.torsoUpper) or 0, strainTorsoLower = tonumber(strain.torsoLower) or 0,
         strainUpperLegR = tonumber(strain.upperLegR) or 0, strainLowerLegR = tonumber(strain.lowerLegR) or 0,
         strainFootR = tonumber(strain.footR) or 0, strainNeck = tonumber(strain.neck) or 0,
-        driverCount = load.driverCount, phy = load.phy, swingChainLoad = load.swingChainLoad, br = load.br,
-        compAdj = runtimeCompAdj, norm = runtimeLoadNorm,
-        effectiveLoad = runtimeEffectiveLoad,
-        loadNormRuntime = runtimeLoadNorm,
-        runtimeUpdatedMinute = runtimeUpdatedMinute,
-        runtimeSnapshotAgeMinutes = runtimeSnapshotAgeMinutes,
-        physicalLoadRuntime = tonumber(runtime and runtime.physicalLoad),
-        thermalResistance = tonumber(runtime and runtime.thermalResistance),
-        airflowResistanceRuntime = tonumber(runtime and runtime.airflowResistance),
-        sealedRestrictionRuntime = tonumber(runtime and runtime.sealedRestriction),
-        thermalStrainScale = tonumber(runtime and runtime.thermalStrainScale),
-        hotPressure = tonumber(runtime and runtime.hotPressure),
-        coldSuitability = tonumber(runtime and runtime.coldSuitability),
-        bodyTempRuntime = tonumber(runtime and runtime.bodyTemp),
-        thermalContribution = tonumber(runtime and runtime.thermalContribution),
-        breathingContribution = tonumber(runtime and runtime.breathingContribution),
-        metabolicRate = tonumber(runtime and runtime.metabolicRate),
-        metabolicDemand = tonumber(runtime and runtime.metabolicDemand),
-        metabolicNorm = tonumber(runtime and runtime.metabolicNorm),
-        breathingEffortRamp = tonumber(runtime and runtime.breathingEffortRamp),
-        breathingDynamicLoad = tonumber(runtime and runtime.breathingDynamicLoad),
-        breathingSealedLoad = tonumber(runtime and runtime.breathingSealedLoad),
-        enduranceBeforeAms = enduranceBeforeAms,
-        enduranceAfterAms = enduranceAfterAms,
-        enduranceNaturalDelta = enduranceNaturalDelta,
-        enduranceAppliedDelta = enduranceAppliedDelta,
-        enduranceBeforeVanilla = nil,
-        enduranceAfterVanilla = enduranceBeforeAms,
-        weightUsedTotal = load.weightUsedTotal,
-        equippedWeightTotal = load.equippedWeightTotal,
-        actualWeightTotal = load.actualWeightTotal,
-        fallbackWeightTotal = load.fallbackWeightTotal,
-        fallbackWeightCount = load.fallbackWeightCount,
-        sourceActualCount = load.sourceActualCount,
-        sourceFallbackCount = load.sourceFallbackCount,
+        driverCount = tonumber(runtime.driverCount) or 0,
+        loadFraction = tonumber(runtime.loadFraction),
+        runtime = runtime,
         x = climate.x, y = climate.y, z = climate.z,
         outdoors = climate.outdoors, inVehicle = climate.inVehicle, climbing = climate.climbing,
         ambient = climate.ambient, ambientAirTemp = ambientAirTemp,

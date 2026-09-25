@@ -37,7 +37,6 @@ local Utils = {
 
 ArmorMakesSense = {
     Utils = Utils,
-    Classifier = {},
     MP = {
         SCRIPT_VERSION = "test",
         SCRIPT_BUILD = "test-build",
@@ -74,7 +73,8 @@ ArmorMakesSense = {
     },
     Models = {
         Physiology = {
-            getUiRuntimeSnapshot = function() return {} end,
+            getUiRuntimeSnapshot = function(state) return state and state.uiRuntimeSnapshot end,
+            project = function() return {} end,
         },
     },
 }
@@ -114,8 +114,8 @@ Support.assertEqual(#eventHandlers.OnGameStart, 1, "development startup registra
 Support.assertTrue(eventHandlers.OnGameStart[1](), "development bootstrap initialization")
 Support.assertEqual(capturedContext.getCurrentGameSpeed(), 5, "configured game speed uses the vanilla true multiplier")
 Support.assertEqual(sampledMultiplierCalls, 0, "per-tick multiplier is not mistaken for configured speed")
-Support.assertTrue(type(_G.ams_bench_status) == "function", "development globals bound")
-Support.assertTrue(type(_G.AMS_DevPanel) == "function", "development panel global bound")
+Support.assertEqual(_G.ams_bench_status, nil, "no console command globals")
+Support.assertEqual(_G.AMS_DevPanel, nil, "dev panel opens from the context menu only")
 Support.assertTrue(type(ArmorMakesSense.Testing.Reset) == "table", "development reset module loaded")
 Support.assertTrue(type(ArmorMakesSense.Testing.DevPanel) == "table", "development panel module loaded")
 Support.assertEqual(#eventHandlers.EveryOneMinute, 1, "development minute pump registration")
@@ -123,14 +123,13 @@ Support.assertEqual(#eventHandlers.OnPlayerUpdate, 1, "development frame pump re
 eventHandlers.OnPlayerUpdate[1](player)
 Support.assertTrue(type(playerState.testLock) == "table", "development test-lock state initialized")
 Support.assertTrue(type(playerState.gearProfiles) == "table", "development gear-profile state initialized")
-Support.assertEqual(_G.ams_ui_probe_suite, nil, "obsolete instant UI probe suite is not exported")
 
 playerState.uiRuntimeSnapshot = {
-    physicalLoad = 12,
+    burdenKg = 12,
     airflowResistance = 2,
     thermalResistance = 0.7,
-    effectiveLoad = 18,
-    loadNorm = 0.6,
+    heat = 0.1,
+    loadFraction = 0.11,
     updatedMinute = 10,
 }
 Support.assertTrue(ArmorMakesSense.Testing.Commands.uiProbeCurrentGear(), "current gear probe reads production runtime")

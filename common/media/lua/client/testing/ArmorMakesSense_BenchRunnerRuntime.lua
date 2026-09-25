@@ -124,7 +124,6 @@ function BenchRunnerRuntime.syncStateBenchRunnerHandle(state, runner)
         id = tostring(runner.id or ""),
         preset = tostring(runner.preset or ""),
         label = tostring(runner.label or ""),
-        mode = tostring(runner.mode or "lab"),
         speedReq = tonumber(runner.speedReq) or 0,
         startedAt = tonumber(runner.startedAt) or nowMinutes(),
         index = math.max(0, math.floor(tonumber(runner.index) or 0)),

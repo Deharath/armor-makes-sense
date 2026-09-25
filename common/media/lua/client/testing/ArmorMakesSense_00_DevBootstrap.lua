@@ -28,7 +28,6 @@ local TEST_MODULES = {
     "testing/ArmorMakesSense_Gear",
     "testing/ArmorMakesSense_Reset",
     "testing/ArmorMakesSense_Commands",
-    "testing/ArmorMakesSense_API",
     "testing/ArmorMakesSense_DevPanel",
     "testing/ArmorMakesSense_Benches",
     "testing/ArmorMakesSense_Weapons",
@@ -41,6 +40,7 @@ local TEST_MODULES = {
     "testing/ArmorMakesSense_BenchRunnerReport",
     "testing/ArmorMakesSense_BenchRunnerNative",
     "testing/ArmorMakesSense_BenchRunnerStep",
+    "testing/ArmorMakesSense_BenchCurtain",
     "testing/ArmorMakesSense_BenchRunner",
 }
 
@@ -109,15 +109,8 @@ local function sanitizeBenchHandle(state)
         return
     end
 
-    local hasLegacyRuntimeBlob = bench.steps ~= nil
-        or bench.snapshot ~= nil
-        or bench.stepResults ~= nil
-        or bench.baselineOutfit ~= nil
-        or bench.nativeDriver ~= nil
-        or bench.weatherOverride ~= nil
-    local active = bench.active == true
     local id = tostring(bench.id or "")
-    if hasLegacyRuntimeBlob or not active or id == "" then
+    if bench.active ~= true or id == "" then
         state.benchRunner = nil
         return
     end
@@ -127,9 +120,8 @@ local function sanitizeBenchHandle(state)
         id = id,
         preset = tostring(bench.preset or ""),
         label = tostring(bench.label or ""),
-        mode = tostring(bench.mode or "lab"),
         speedReq = tonumber(bench.speedReq) or 0,
-        startedAt = tonumber(bench.startedAt) or tonumber(state.lastUpdateGameMinutes) or 0,
+        startedAt = tonumber(bench.startedAt) or tonumber(state.lastTickMinute) or 0,
         index = math.max(0, math.floor(tonumber(bench.index) or 0)),
         total = math.max(0, math.floor(tonumber(bench.total) or 0)),
         repeats = math.max(1, math.floor(tonumber(bench.repeats) or 1)),
@@ -158,7 +150,6 @@ local function buildContext(modules)
     local Gear = modules.Gear
     local gearDeps = {
         safeMethod = Utils.safeMethod,
-        toBoolean = Utils.toBoolean,
         lower = Utils.lower,
     }
 
@@ -167,7 +158,6 @@ local function buildContext(modules)
     end
 
     return {
-        Classifier = modules.Classifier,
         Commands = modules.Commands,
         clamp = Utils.clamp,
         softNorm = Utils.softNorm,
@@ -194,12 +184,25 @@ local function buildContext(modules)
         isClientSide = isClientSide,
         ensureState = ensureState,
         getOptions = modules.Options.get,
-        computeWornProfile = modules.LoadModel.computeWornProfile,
-        analyzeWornGear = modules.LoadModel.analyzeWornGear,
-        itemToBurdenSignal = modules.LoadModel.itemToBurdenSignal,
+        computeWornProfile = function(player)
+            return modules.LoadModel.computeWornProfile(player, modules.Options.get())
+        end,
+        analyzeWornGear = function(player)
+            return modules.LoadModel.analyzeWornGear(player, modules.Options.get())
+        end,
+        itemToBurdenSignal = function(item, wornLocation)
+            return modules.LoadModel.itemToBurdenSignal(item, wornLocation, modules.Options.get())
+        end,
+        projectRuntime = function(player, state)
+            local options = modules.Options.get()
+            return modules.Physiology.project(player, state, options, modules.LoadModel.computeWornProfile(player, options))
+        end,
         getUiRuntimeSnapshot = modules.Physiology.getUiRuntimeSnapshot,
+        getOriginalDiscomfort = function(fullType)
+            local cache = ArmorMakesSense._originalDiscomfort
+            return type(cache) == "table" and tonumber(cache[tostring(fullType or "")]) or nil
+        end,
         getRuntimeState = modules.ClientRuntime and modules.ClientRuntime.ensureState or modules.State.ensureState,
-        getVanillaMuscleStrainFactor = modules.Strain.getVanillaMuscleStrainFactor,
         getEndurance = Stats.getEndurance,
         getFatigue = Stats.getFatigue,
         getThirst = Stats.getThirst,
@@ -212,12 +215,11 @@ local function buildContext(modules)
         snapshotWornItems = function(player)
             return Gear.snapshotWornItems(player, gearDeps)
         end,
-        getBaselineWearEntries = Gear.getBaselineWearEntries,
         getBuiltInGearProfile = function(profileName)
             return Gear.getBuiltInGearProfile(profileName, gearDeps)
         end,
-        wearProfile = function(player, profileEntries, mode)
-            return Gear.wearProfile(player, profileEntries, mode, gearDeps)
+        wearProfile = function(player, profileEntries)
+            return Gear.wearProfile(player, profileEntries, gearDeps)
         end,
         isWearableItem = function(item, wornLocation)
             return Gear.isWearableItem(item, wornLocation, gearDeps)
@@ -239,6 +241,8 @@ local function buildContext(modules)
         end,
         listBuiltInGearProfiles = modules.Gear.listBuiltInProfileNames,
         listBenchPresetIds = modules.BenchCatalog.listPresetIds,
+        showBenchCurtain = modules.BenchCurtain.show,
+        hideBenchCurtain = modules.BenchCurtain.hide,
         writeSupportReport = function(player)
             if modules.SupportReport and type(modules.SupportReport.writeCurrentPlayerReport) == "function" then
                 return modules.SupportReport.writeCurrentPlayerReport(player)
@@ -335,20 +339,18 @@ function DevBootstrap.initialize()
         Stats = ArmorMakesSense.Core.Stats,
         TestStats = ArmorMakesSense.Testing.TestStats,
         LoadModel = ArmorMakesSense.Core.LoadModel,
-        Strain = ArmorMakesSense.Core.Strain,
         Physiology = ArmorMakesSense.Models.Physiology,
-        Classifier = ArmorMakesSense.Classifier,
         MP = ArmorMakesSense.MP,
         Gear = ArmorMakesSense.Testing.Gear,
         Reset = ArmorMakesSense.Testing.Reset,
         Commands = ArmorMakesSense.Testing.Commands,
-        API = ArmorMakesSense.Testing.API,
         DevPanel = ArmorMakesSense.Testing.DevPanel,
         Benches = ArmorMakesSense.Testing.Benches,
         Weapons = ArmorMakesSense.Testing.Weapons,
         BenchCatalog = ArmorMakesSense.Testing.BenchCatalog,
         BenchScenarios = ArmorMakesSense.Testing.BenchScenarios,
         BenchRunner = ArmorMakesSense.Testing.BenchRunner,
+        BenchCurtain = ArmorMakesSense.Testing.BenchCurtain,
     }
     local context = buildContext(modules)
 
@@ -358,14 +360,6 @@ function DevBootstrap.initialize()
     modules.BenchScenarios.setContext(context)
     modules.Commands.setContext(context)
     modules.DevPanel.setContext(context)
-    modules.API.setContext({
-        logError = logError,
-        getOptions = modules.Options.get,
-        Commands = modules.Commands,
-        Benches = modules.Benches,
-        BenchRunner = modules.BenchRunner,
-    })
-    modules.API.bindGlobals()
     modules.DevPanel.initialize()
     registerEvents(modules)
 

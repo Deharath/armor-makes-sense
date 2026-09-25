@@ -4,100 +4,73 @@ ArmorMakesSense = {}
 local Codec = dofile(Support.SHARED_LUA .. "/ArmorMakesSense_MPSnapshotCodec.lua")
 
 local snapshot = {
-    loadNorm = 1.25,
-    physicalLoad = 34.5,
-    thermalResistance = 0.82,
-    airflowResistance = 3.75,
-    sealedRestriction = 1,
-    rigidityLoad = 44,
+    burdenKg = 34.5,
+    armKg = 6.2,
+    rigidKg = 18,
     driverCount = 4,
-    effectiveLoad = 40.5,
-    thermalContribution = 6,
-    breathingContribution = 2.5,
-    bodyHeatDelta = 0.32,
-    hotDrive = 0.46,
-    metabolicRate = 4.2,
-    metabolicDemand = 6.9,
-    metabolicNorm = 0.675,
-    breathingEffortRamp = 0.63897705078125,
-    breathingDynamicLoad = 4.792327880859375,
-    breathingSealedLoad = 23.961639404296875,
-    activityLabel = "sprint",
+    bodyKg = 72,
+    strength = 7,
+    loadFraction = 0.35,
+    heat = 0.4,
+    thermalResistance = 0.82,
     hotPressure = 0.8,
     coldSuitability = 0.1,
-    thermalStrainScale = 0.75,
-    enduranceBeforeAms = 0.8,
-    enduranceAfterAms = 0.77,
-    enduranceNaturalDelta = -0.01,
-    enduranceAppliedDelta = -0.03,
-    amsEnduranceRegenScale = 0.82,
-    amsEnduranceDrainApplied = 0.004,
-    sleepPenaltyFraction = 0.12,
-    sleepWakeAdjustment = -0.04,
-    lastAppliedDtMinutes = 1.5,
-    catchupPendingMinutes = 0.25,
-    updatedMinute = 1234.5,
+    airflowResistance = 3.75,
+    sealedRestriction = 1,
+    breathingSeverity = 1,
+    breathingEnabled = true,
+    restRegenScale = 0.8,
+    standRegenScale = 0.7,
+    walkRegenScale = -0.2,
+    runDrainScale = 1.6,
+    sprintDrainScale = 2.1,
+    sleepPenaltyFraction = 0.45,
+    naturalDelta = -0.01,
+    amsDelta = -0.006,
+    regenScale = 0.5,
+    drainScale = 1.6,
+    nmsRegenScale = 0.9,
+    nmsDrain = 0.001,
+    dtMinutes = 1,
+    updatedMinute = 1234,
+    activityLabel = "sprint",
+    postureLabel = "stand",
     drivers = {
-        { label = "Plate carrier", fullType = "Example.PlateCarrier", physical = 28 },
-        { label = "Helmet", fullType = "Base.Hat_Army", physical = 4.2 },
+        { label = "Plate carrier", fullType = "Example.PlateCarrier", burdenKg = 12 },
+        { label = "Helmet", fullType = "Base.Hat_Army", burdenKg = 2.4 },
     },
 }
 
-local encoded = Codec.encode(snapshot, true)
-
+local encoded = Codec.encode(snapshot)
 Support.assertEqual(encoded.snapshot_schema_version, Codec.SCHEMA_VERSION, "encoded schema version")
 Support.assertEqual(encoded.activity_label, "sprint", "encoded activity")
 Support.assertEqual(encoded.drivers[1].full_type, "Example.PlateCarrier", "encoded driver type")
+Support.assertClose(encoded.burden_kg, 34.5, 1e-9, "encoded wire key")
 
 local decoded, decodeError = Codec.decode(encoded)
 Support.assertEqual(decodeError, nil, "round-trip decode error")
 Support.assertEqual(decoded.schemaVersion, Codec.SCHEMA_VERSION, "decoded schema version")
-Support.assertEqual(decoded.activityLabel, snapshot.activityLabel, "round-trip activity")
-local numericFields = {
-    "loadNorm",
-    "physicalLoad",
-    "thermalResistance",
-    "airflowResistance",
-    "sealedRestriction",
-    "rigidityLoad",
-    "driverCount",
-    "effectiveLoad",
-    "thermalContribution",
-    "breathingContribution",
-    "bodyHeatDelta",
-    "hotDrive",
-    "metabolicRate",
-    "metabolicDemand",
-    "metabolicNorm",
-    "breathingEffortRamp",
-    "breathingDynamicLoad",
-    "breathingSealedLoad",
-    "hotPressure",
-    "coldSuitability",
-    "thermalStrainScale",
-    "enduranceBeforeAms",
-    "enduranceAfterAms",
-    "enduranceNaturalDelta",
-    "enduranceAppliedDelta",
-    "amsEnduranceRegenScale",
-    "amsEnduranceDrainApplied",
-    "sleepPenaltyFraction",
-    "sleepWakeAdjustment",
-    "lastAppliedDtMinutes",
-    "catchupPendingMinutes",
-    "updatedMinute",
-}
-for i = 1, #numericFields do
-    local field = numericFields[i]
-    Support.assertClose(decoded[field], snapshot[field], 1e-9, "round-trip " .. field)
+Support.assertEqual(decoded.source, "server_snapshot", "decoded source tag")
+Support.assertTrue(decoded.breathingEnabled, "round-trip breathing toggle")
+Support.assertEqual(decoded.activityLabel, "sprint", "round-trip activity")
+Support.assertEqual(decoded.postureLabel, "stand", "round-trip posture")
+for key, value in pairs(snapshot) do
+    if type(value) == "number" then
+        Support.assertClose(decoded[key], value, 1e-9, "round-trip " .. key)
+    end
 end
+Support.assertEqual(#decoded.drivers, 2, "round-trip driver count")
 Support.assertEqual(decoded.drivers[2].fullType, "Base.Hat_Army", "round-trip driver type")
-Support.assertClose(decoded.drivers[2].physical, 4.2, 1e-9, "round-trip driver load")
+Support.assertClose(decoded.drivers[2].burdenKg, 2.4, 1e-9, "round-trip driver burden")
 
-local lightweight = Codec.encode(snapshot, false)
-Support.assertEqual(#lightweight.drivers, 0, "lightweight driver omission")
+local empty = Codec.decode(Codec.encode({}))
+Support.assertClose(empty.bodyKg, 80, 1e-9, "default body mass")
+Support.assertClose(empty.walkRegenScale, 1, 1e-9, "default scales are vanilla")
+Support.assertEqual(empty.activityLabel, "idle", "default activity")
+Support.assertFalse(empty.breathingEnabled, "default breathing flag")
+Support.assertFalse(pcall(Codec.encode, nil), "encode rejects non-table")
 
-local rejected, schemaError = Codec.decode({ snapshot_schema_version = 2 })
+local rejected, schemaError = Codec.decode({ snapshot_schema_version = 6 })
 Support.assertEqual(rejected, nil, "old schema rejection")
 Support.assertTrue(string.find(schemaError, "unsupported snapshot schema", 1, true) ~= nil, "schema rejection message")
 

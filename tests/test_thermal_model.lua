@@ -31,7 +31,7 @@ local sustainedState = {}
 local sustained = ThermalModel.advance(hotSample, sustainedState, 6, defaults)
 Support.assertTrue(sustained.hotPressure > 0.95, "sustained heat charges pressure")
 Support.assertTrue(sustained.strainScale > 0.99, "sustained heat reaches full scale")
-Support.assertClose(sustained.contribution, defaults.ThermalContributionMax, 0.2, "full resistance reaches configured contribution")
+Support.assertClose(sustained.heat, 1.0, 0.02, "full resistance under sustained heat is full heat stress")
 
 local coolingSample = Support.copyTable(hotSample)
 coolingSample.bodyHeatDelta = 0
@@ -67,7 +67,7 @@ local cold = ThermalModel.advance({
 }, {}, 1, defaults)
 Support.assertTrue(cold.coldNeed > 0.16, "cold physiology creates suitability context")
 Support.assertClose(cold.coldSuitability, 1, 1e-9, "effective insulation is suitable in cold")
-Support.assertClose(cold.contribution, 0, 1e-9, "cold suitability creates no AMS contribution")
+Support.assertClose(cold.heat, 0, 1e-9, "cold suitability creates no heat stress")
 
 local shivering = ThermalModel.advance({
     coreTemp = 36.5,
@@ -132,16 +132,16 @@ local lightSummerOutfit = ThermalModel.advance({
 }, {}, 6, defaults)
 Support.assertClose(lightSummerOutfit.resistance, 0.2988, 1e-9, "normalized light outfit keeps modest resistance")
 Support.assertTrue(lightSummerOutfit.hotDrive < 0.30, "ordinary summer heat stays contextually bounded")
-Support.assertTrue(lightSummerOutfit.contribution < 0.25, "ordinary summer clothing stays below visible thermal load")
+Support.assertTrue(lightSummerOutfit.heat < 0.02, "ordinary summer clothing stays below visible heat stress")
 
 local disabled = Support.copyTable(defaults)
 disabled.EnableThermalModel = false
 local disabledResult = ThermalModel.advance(hotSample, {}, 6, disabled)
-Support.assertClose(disabledResult.contribution, 0, 1e-9, "disabled thermal model is neutral")
+Support.assertClose(disabledResult.heat, 0, 1e-9, "disabled thermal model is neutral")
 Support.assertClose(disabledResult.strainScale, 0, 1e-9, "disabled thermal scale is neutral")
 
 local unavailable = ThermalModel.advance(nil, {}, 6, defaults)
 Support.assertFalse(unavailable.available, "missing thermoregulator is reported")
-Support.assertClose(unavailable.contribution, 0, 1e-9, "missing thermoregulator fails open")
+Support.assertClose(unavailable.heat, 0, 1e-9, "missing thermoregulator fails open")
 
 print("ams thermal model characterization passed")

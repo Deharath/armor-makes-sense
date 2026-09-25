@@ -17,14 +17,22 @@ represent physical condition:
 - fatigue recovery
 - thermoregulation
 - muscle strain
-- movement and combat speed modifiers
+- combat speed modifiers
 
 AMS does not add a separate burden moodle or custom character resource.
+
+### Burden Is Mass
+
+An item's cost is its effective mass: how much it weighs, where it sits on the
+body, and how bulky vanilla already says it is. The same kit costs less for a
+heavier or stronger character. Players should be able to predict the cost by
+picking the item up.
 
 ### Scale Cost With Activity
 
 Equipment should have limited impact at rest and greater impact during sustained
-activity. Walking remains inexpensive under ordinary conditions. Running,
+activity. Sitting is free, and walking remains inexpensive under ordinary
+conditions. Running,
 sprinting, heat strain, restrictive breathing equipment, and repeated melee
 attacks expose the load more clearly.
 
@@ -40,8 +48,13 @@ AMS supplements rather than replaces the following vanilla behaviors:
 - melee stamina cost
 - non-clothing discomfort
 - thermoregulation
-- bed quality and sleep traits
+- bed quality, sleep traits, sleep planning and wake time
 - base muscle strain
+- encumbrance from carried inventory and worn bags
+
+### Show Tiers, Not Numbers
+
+Player UI shows pips and tiers. Exact values belong in the support report.
 
 ## System Responsibilities
 
@@ -51,8 +64,8 @@ AMS supplements rather than replaces the following vanilla behaviors:
 | Thermal pressure | Convert sustained heat strain into additional exertion cost and recognize useful cold insulation |
 | Breathing | Scale respiratory restriction with ventilation demand |
 | Muscle strain | Add load from equipment worn on the melee swing chain |
-| Sleep | Reduce fatigue recovery according to rigidity and vanilla sleep recovery rate |
-| Speed | Apply curated regional run-speed and combat-speed modifiers |
+| Sleep | Reduce fatigue recovery in proportion to rigid armor worn to bed |
+| Swing speed | Slow melee swings by swing-chain mass, 1% per kg up to 5% |
 | Equipment slots | Remove selected layering conflicts without allowing incompatible combinations |
 
 ## Discomfort Policy

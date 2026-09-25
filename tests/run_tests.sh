@@ -13,6 +13,7 @@ tests=(
   test_presentation_policy.lua
   test_mp_snapshot_codec.lua
   test_mp_request_policy.lua
+  test_mp_roundtrip.lua
   test_runtime_state.lua
   test_options.lua
   test_logger.lua

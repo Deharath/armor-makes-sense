@@ -64,6 +64,21 @@ function ISPanel:getMouseX() return mouse.x end
 function ISPanel:drawRect(x, y, w, h, a) self.rects[#self.rects + 1] = { x = x, y = y, w = w, h = h, a = a } end
 function ISPanel:drawTextureScaledAspect(tex, x, y, w, h) self.icons = (self.icons or 0) + 1 end
 function ISPanel:drawText(text, x, y, r, g, b) self.drawn[#self.drawn + 1] = { text = text, x = x, y = y, r = r, g = g, b = b } end
+function ISPanel:drawRectBorder(x, y, w, h) self.borders = self.borders or {}; self.borders[#self.borders + 1] = { x = x, y = y, w = w, h = h } end
+
+local tips = {}
+ISToolTip = {}
+ISToolTip.__index = ISToolTip
+function ISToolTip:new() local t = setmetatable({ visible = false }, ISToolTip); tips[#tips + 1] = t; return t end
+function ISToolTip:setOwner(o) self.owner = o end
+function ISToolTip:setVisible(v) self.visible = v end
+function ISToolTip:getIsVisible() return self.visible end
+function ISToolTip:setAlwaysOnTop() end
+function ISToolTip:addToUIManager() self.managed = true end
+function ISToolTip:removeFromUIManager() self.managed = false end
+function ISToolTip:setDesiredPosition(x, y) self.px, self.py = x, y end
+getMouseX = function() return 0 end
+getMouseY = function() return 0 end
 
 ISButton = {}
 ISButton.__index = ISButton
@@ -72,9 +87,14 @@ function ISButton:new(x, y, width, height, title)
 end
 function ISButton:initialise() end
 function ISButton:instantiate() end
-function ISButton:setTooltip() end
+function ISButton:setTooltip(t) self.tooltip = t end
 function ISButton:setX(x) self.x = x end
 function ISButton:setY(y) self.y = y end
+function ISButton:setWidth(w) self.width = w end
+function ISButton:setTitle(t) self.title = t end
+function ISButton:setVisible(v) self.visible = v end
+function ISButton:isVisible() return self.visible ~= false end
+function ISButton:setEnable(v) self.enable = v end
 
 Color = { new = function(r, g, b, a) return { r = r, g = g, b = b, a = a } end }
 BodyPartType = {
@@ -235,9 +255,89 @@ renderWith({ burdenKg = 1 }, { row("Shoes", "Shoes", 1.0) })
 Support.assertEqual(panel.width, civWidth, "panel shrinks back")
 assertInside("light again")
 
+-- Armor buttons: hidden without armor; shown left of the utility buttons,
+-- wrapping onto their own row when they do not fit.
+Support.assertFalse(panel.takeOffBtn:isVisible(), "take off hidden without armor")
+Support.assertFalse(panel.wearBtn:isVisible(), "wear hidden without a saved set")
+local function piece(label) return { label = label } end
+panel.armor = {
+    worn = { piece("Helmet"), piece("Vest") },
+    ready = { { piece = piece("Greaves") } },
+    missing = { piece("Cuirass") },
+}
+panel.drawn, panel.rects = {}, {}
+panel:render()
+Support.assertTrue(panel.takeOffBtn:isVisible() and panel.dropBtn:isVisible(), "take off and drop shown")
+Support.assertTrue(panel.wearBtn:isVisible(), "wear shown")
+Support.assertEqual(panel.wearBtn.title, "Wear Armor (1)", "wear counts ready pieces")
+Support.assertTrue(panel.wearBtn.tooltip:find("Greaves", 1, true) ~= nil, "wear tooltip lists pieces")
+Support.assertTrue(panel.wearBtn.tooltip:find("Not nearby: Cuirass", 1, true) ~= nil, "wear tooltip names missing")
+Support.assertTrue(panel.takeOffBtn.tooltip:find("Helmet, Vest", 1, true) ~= nil, "take off tooltip lists worn")
+local lastArmor = panel.dropBtn
+Support.assertTrue(panel.wearBtn.x < panel.takeOffBtn.x and panel.takeOffBtn.x < panel.dropBtn.x, "armor buttons in order")
+if lastArmor.y == panel.exportBtn.y then
+    Support.assertTrue(lastArmor.x + lastArmor.width < panel.exportBtn.x, "armor buttons clear the utility buttons")
+else
+    Support.assertTrue(panel.exportBtn.y > lastArmor.y, "utility buttons wrap below armor")
+end
+assertInside("armor buttons")
+panel.armor = nil
+
+local BurdenPanel = require "core/ArmorMakesSense_BurdenPanel"
+
+-- "?" markers: one per row, inside the panel, clear of the state text;
+-- hovering one shows its explanation, leaving hides it.
+renderWith({ burdenKg = 14, loadFraction = 0.4, armKg = 3 }, { row("Vest", "TorsoExtraVest", 8.0), row("Gloves", "Hands", 3.0) })
+local keys = {}
+for _, rect in ipairs(panel.infoRects) do
+    keys[rect.key] = rect
+    Support.assertTrue(rect.x1 >= 0 and rect.x2 <= panel.width and rect.y2 <= panel.height, "info marker inside: " .. rect.key)
+    Support.assertTrue(View.info(rect.key) ~= nil, "info text exists: " .. rect.key)
+end
+for _, key in ipairs({ "load", "endurance", "heat", "breathing", "melee", "sleep", "gear" }) do
+    Support.assertTrue(keys[key] ~= nil, "info marker for " .. key)
+end
+for _, d in ipairs(panel.drawn) do
+    if d.text ~= "?" then
+        for _, rect in pairs(keys) do
+            local overlaps = d.y < rect.y2 and d.y + 14 > rect.y1 and d.x < rect.x2 and d.x + #d.text * 7 > rect.x1
+            Support.assertFalse(overlaps, "info marker clear of text: " .. rect.key .. " / " .. d.text)
+        end
+    end
+end
+mouse.over, mouse.x, mouse.y = true, keys.sleep.x1 + 3, keys.sleep.y1 + 3
+panel.drawn, panel.rects = {}, {}
+panel:render()
+panel.drawn, panel.rects = {}, {}
+panel:render()
+Support.assertEqual(panel.hoveredInfo, "sleep", "sleep marker hovered")
+Support.assertTrue(panel.infoTip ~= nil and panel.infoTip.visible, "info tip shown")
+local desc = panel.infoTip.description
+Support.assertEqual(desc, BurdenPanel.infoRichText(View.info("sleep")), "info tip text")
+Support.assertTrue(desc:find("2.5% slower per kilo", 1, true) ~= nil, "percent argument substituted")
+Support.assertTrue(desc:find(" <BR> ", 1, true) ~= nil and desc:find(" <LINE> ", 1, true) ~= nil, "info tip broken into lines")
+Support.assertTrue(desc:find("<SETX:16>", 1, true) ~= nil, "points get a hanging indent")
+for _, key in ipairs({ "load", "endurance", "heat", "breathing", "melee", "sleep", "gear" }) do
+    local rich = BurdenPanel.infoRichText(View.info(key))
+    Support.assertTrue(rich:match(">%s*$") == nil, "info text ends with text, not a tag: " .. key)
+end
+local endurance = View.info("endurance")
+local kinds = {}
+for _, line in ipairs(endurance) do kinds[#kinds + 1] = line.kind end
+Support.assertEqual(table.concat(kinds, ","), "summary,heading,point,point,point,heading,point,note", "endurance info structure")
+getText = function(key) return key == "UI_AMS_Info_Gear" and "Top line\\n- one\\nlast" or key end
+local literal = View.info("gear")
+Support.assertEqual(#literal, 3, "literal backslash-n splits")
+Support.assertEqual(literal[2].kind, "point", "literal point kind")
+getText = function(key) return key end
+mouse.over = false
+panel.drawn, panel.rects = {}, {}
+panel:render()
+Support.assertFalse(panel.infoTip.visible, "info tip hidden on leave")
+Support.assertEqual(#tips, 1, "info tip reused")
+
 -- Help button routes to the UI help window.
 local helped = false
-local BurdenPanel = require "core/ArmorMakesSense_BurdenPanel"
 local originalHelp = BurdenPanel.onHelp
 BurdenPanel.onHelp = function() helped = true end
 panel:onHelpClick()

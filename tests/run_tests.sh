@@ -22,6 +22,7 @@ tests=(
   test_ui_tooltip.lua
   test_burden_view.lua
   test_burden_panel.lua
+  test_armor_set.lua
   test_slot_compat.lua
   test_speed_rebalance_lifecycle.lua
   test_tick_coordinator.lua

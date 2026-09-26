@@ -6,6 +6,7 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 local BurdenPanel = ArmorMakesSense.Core.BurdenPanel or {}
 ArmorMakesSense.Core.BurdenPanel = BurdenPanel
 
+local ArmorSet = require "core/ArmorMakesSense_ArmorSet"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local LoadModel = require "ArmorMakesSense_LoadModelShared"
 local MP = require "ArmorMakesSense_MPCompat"
@@ -133,6 +134,33 @@ local function defineClass()
             "UI_AMS_Help_ExportTooltip",
             "Save a support report with your loadout, burden calculations, mod list and game state."
         ))
+        self.takeOffBtn = makeButton(self, tr("UI_AMS_Armor_TakeOff", "Take Off Armor"), Panel.onTakeOffClick)
+        self.dropBtn = makeButton(self, tr("UI_AMS_Armor_Drop", "Drop Armor"), Panel.onDropClick)
+        self.wearBtn = makeButton(self, tr("UI_AMS_Armor_Wear", "Wear Armor (%1)", "0"), Panel.onWearClick)
+    end
+
+    function Panel:armorAction(fn, ...)
+        local player = self:resolvePlayer()
+        if not player then
+            return
+        end
+        local ok, err = pcall(fn, player, ...)
+        if not ok then
+            ClientRuntime.logError("armor set action failed: " .. tostring(err))
+        end
+        self:markDirty()
+    end
+
+    function Panel:onTakeOffClick()
+        self:armorAction(ArmorSet.takeOff, self.playerNum, false, currentOptions())
+    end
+
+    function Panel:onDropClick()
+        self:armorAction(ArmorSet.takeOff, self.playerNum, true, currentOptions())
+    end
+
+    function Panel:onWearClick()
+        self:armorAction(ArmorSet.putOn, currentOptions())
     end
 
     function Panel:onHelpClick()
@@ -230,6 +258,8 @@ local function defineClass()
             covered = coveredParts,
         })
         self:ensureBodyMap(player)
+        local okArmor, armor = pcall(ArmorSet.status, player, options)
+        self.armor = okArmor and armor or nil
     end
 
     function Panel:onBodyPartSelected(bp)
@@ -308,8 +338,9 @@ local function defineClass()
 
     function Panel:measure(v, fh)
         local need = math.max(260, fh * 18)
+        local infoW = tw("?") + 11
         local function row(label, state, value)
-            need = math.max(need, tw(label) + 16 + tw(state) + (value and (tw(value) + 10) or 0))
+            need = math.max(need, tw(label) + infoW + 16 + tw(state) + (value and (tw(value) + 10) or 0))
         end
         row(v.load.label, v.load.state, v.load.value)
         row(v.endurance.label, v.endurance.state)
@@ -358,8 +389,8 @@ local function defineClass()
 
         if not v then
             local width = math.max(colX + 260 + pad, self:tabStripWidth())
-            self:placeButtons(pad, width)
-            self:fitTo(width, pad * 2 + BUTTON_H)
+            local bottom = self:placeButtons(pad, width)
+            self:fitTo(width, bottom + pad)
             return
         end
 
@@ -371,6 +402,8 @@ local function defineClass()
         -- Hover resolves against last frame's rects; the view is rebuilt
         -- periodically, so match by key.
         local itemRect, channelRect = self:resolveHover()
+        self.hoveredInfo = self:resolveInfoHover()
+        self.infoRects = {}
         local hoveredItem = itemRect and v.items[itemRect.key] or nil
         local hoveredChannel = nil
         if channelRect then
@@ -407,6 +440,7 @@ local function defineClass()
         self.channelRects = {}
         local function header(rowData)
             text(rowData.label, colX, y, (hoveredChannel == rowData) and C.text or C.label)
+            self:infoMarker(rowData.key, colX + tw(rowData.label) + 5, y, fh)
             textRight(rowData.state, colRight, y, color(rowData.tone))
             if rowData.value then
                 textRight(rowData.value, colRight - tw(rowData.state) - 10, y, C.dim)
@@ -499,7 +533,9 @@ local function defineClass()
         separator(math.floor(pad * 0.6))
 
         -- Worn gear.
-        text(tr("UI_AMS_Row_Gear", "Heaviest gear"), pad, y, C.label)
+        local gearLabel = tr("UI_AMS_Row_Gear", "Heaviest gear")
+        text(gearLabel, pad, y, C.label)
+        self:infoMarker("gear", pad + tw(gearLabel) + 5, y, fh)
         y = y + fh + 4
         local iconSize = fh + 2
         local rowH = iconSize + 4
@@ -541,8 +577,88 @@ local function defineClass()
         end
 
         separator(math.floor(pad * 0.6))
-        self:placeButtons(y, width)
-        self:fitTo(width, y + BUTTON_H + pad)
+        local bottom = self:placeButtons(y, width)
+        self:fitTo(width, bottom + pad)
+        self:updateInfoTip()
+    end
+
+    -- A dim "?" after a row label; hovering it explains the row.
+    function Panel:infoMarker(key, x, y, fh)
+        if not key or not View.info(key) then
+            return
+        end
+        local w = tw("?") + 6
+        local c = self.hoveredInfo == key and C.text or C.dim
+        self:drawRectBorder(x, y + 1, w, fh - 1, 0.5, c.r, c.g, c.b)
+        self:drawText("?", x + 3, y, c.r, c.g, c.b, 1.0, font())
+        self.infoRects[#self.infoRects + 1] = { key = key, x1 = x - 2, x2 = x + w + 2, y1 = y - 1, y2 = y + fh + 1 }
+    end
+
+    function Panel:resolveInfoHover()
+        if not self:isMouseOver() then
+            return nil
+        end
+        local rect = hit(self.infoRects, self:getMouseX(), self:getMouseY())
+        return rect and rect.key or nil
+    end
+
+    local INFO_COLORS = {
+        summary = C.text,
+        heading = { r = 1.0, g = 0.86, b = 0.55 },
+        point = C.label,
+        note = C.dim,
+    }
+
+    local function rgbTag(c)
+        return string.format(" <RGB:%.2f,%.2f,%.2f> ", c.r, c.g, c.b)
+    end
+
+    -- Rich text for ISToolTip: the summary, a gap, then points with a
+    -- hanging indent; headings and the closing note start a new block.
+    function BurdenPanel.infoRichText(lines)
+        local out = {}
+        for i, line in ipairs(lines or {}) do
+            if i > 1 then
+                local block = line.kind ~= "point" or lines[i - 1].kind == "summary"
+                out[#out + 1] = block and " <BR> " or " <LINE> "
+            end
+            -- Text must come last: ISRichTextPanel drops the final line from
+            -- its height when a tag trails it.
+            if line.kind == "point" then
+                out[#out + 1] = " <INDENT:4> " .. rgbTag(INFO_COLORS.point) .. tr("UI_AMS_Info_Bullet", "-")
+                    .. " <SETX:16> <INDENT:16> " .. line.text
+            else
+                out[#out + 1] = " <INDENT:0> " .. rgbTag(INFO_COLORS[line.kind] or C.label) .. line.text
+            end
+        end
+        return table.concat(out)
+    end
+
+    function Panel:updateInfoTip()
+        local lines = self.hoveredInfo and View.info(self.hoveredInfo) or nil
+        local text = lines and BurdenPanel.infoRichText(lines) or nil
+        local tip = self.infoTip
+        if not text then
+            if tip and tip:getIsVisible() then
+                tip:setVisible(false)
+                tip:removeFromUIManager()
+            end
+            return
+        end
+        if not tip then
+            tip = ISToolTip:new()
+            tip:setOwner(self)
+            tip:setVisible(false)
+            tip:setAlwaysOnTop(true)
+            tip.maxLineWidth = 340
+            self.infoTip = tip
+        end
+        tip.description = text
+        if not tip:getIsVisible() then
+            tip:addToUIManager()
+            tip:setVisible(true)
+        end
+        tip:setDesiredPosition(getMouseX() + 16, getMouseY() + 16)
     end
 
     -- Scale for the body map colors: 0 to MAP_MAX_KG per part.
@@ -559,12 +675,83 @@ local function defineClass()
         return y + fh
     end
 
+    local function names(pieces, pick)
+        local out = {}
+        for i, entry in ipairs(pieces) do
+            out[i] = pick(entry)
+        end
+        return table.concat(out, ", ")
+    end
+
+    local function setLabel(btn, label)
+        if btn.title ~= label then
+            btn:setTitle(label)
+            btn:setWidth(tw(label) + BUTTON_PAD)
+        end
+    end
+
+    -- Armor buttons show only when they would do something.
+    function Panel:updateArmorButtons()
+        local armor = self.armor
+        local worn = armor and #armor.worn or 0
+        local ready = armor and #armor.ready or 0
+        local player = self:resolvePlayer()
+        local idle = player ~= nil and not ArmorSet.isBusy(player)
+        self.takeOffBtn:setVisible(worn > 0)
+        self.dropBtn:setVisible(worn > 0)
+        self.wearBtn:setVisible(ready > 0)
+        if worn > 0 then
+            local list = names(armor.worn, function(p) return p.label end)
+            self.takeOffBtn:setTooltip(tr("UI_AMS_Armor_TakeOffTooltip",
+                "Take off your armor into your inventory: %1. Wear Armor puts the same pieces back on.", list))
+            self.dropBtn:setTooltip(tr("UI_AMS_Armor_DropTooltip",
+                "Drop your armor on the floor: %1. Wear Armor picks the same pieces up and puts them back on.", list))
+        end
+        if ready > 0 then
+            setLabel(self.wearBtn, tr("UI_AMS_Armor_Wear", "Wear Armor (%1)", tostring(ready)))
+            local tip = tr("UI_AMS_Armor_WearTooltip",
+                "Put back on the armor you took off: %1. Picks it up from your bags or the floor next to you.",
+                names(armor.ready, function(e) return e.piece.label end))
+            if #armor.missing > 0 then
+                tip = tip .. " <LINE> " .. tr("UI_AMS_Armor_Missing", "Not nearby: %1",
+                    names(armor.missing, function(p) return p.label end))
+            end
+            self.wearBtn:setTooltip(tip)
+        end
+        self.takeOffBtn:setEnable(idle)
+        self.dropBtn:setEnable(idle)
+        self.wearBtn:setEnable(idle)
+    end
+
+    -- Armor buttons on the left, report and help on the right; armor moves
+    -- to its own row when both do not fit. Returns the bottom edge.
     function Panel:placeButtons(y, width)
-        local right = width - math.max(10, math.floor(Draw.fontHeight(font()) * 0.7))
+        local pad = math.max(10, math.floor(Draw.fontHeight(font()) * 0.7))
+        local right = width - pad
+        self:updateArmorButtons()
+        local armorW = 0
+        for _, btn in ipairs({ self.wearBtn, self.takeOffBtn, self.dropBtn }) do
+            if btn:isVisible() then
+                armorW = armorW + (armorW > 0 and BUTTON_GAP or 0) + btn.width
+            end
+        end
+        local utilityY = y
+        if armorW > 0 and pad + armorW + BUTTON_GAP * 2 > right - self:buttonsWidth() then
+            utilityY = y + BUTTON_H + BUTTON_GAP
+        end
+        local x = pad
+        for _, btn in ipairs({ self.wearBtn, self.takeOffBtn, self.dropBtn }) do
+            if btn:isVisible() then
+                btn:setX(x)
+                btn:setY(y)
+                x = x + btn.width + BUTTON_GAP
+            end
+        end
         self.helpBtn:setX(right - self.helpBtn.width)
-        self.helpBtn:setY(y)
+        self.helpBtn:setY(utilityY)
         self.exportBtn:setX(self.helpBtn.x - BUTTON_GAP - self.exportBtn.width)
-        self.exportBtn:setY(y)
+        self.exportBtn:setY(utilityY)
+        return utilityY + BUTTON_H
     end
 end
 

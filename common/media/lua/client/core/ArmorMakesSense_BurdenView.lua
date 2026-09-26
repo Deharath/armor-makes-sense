@@ -538,12 +538,61 @@ function View.build(input)
 
     v.items, v.parts, v.gearSummary, v.channelParts = buildGear(rows, input.covered)
     v.load.key = "load"
+    v.endurance.key = "endurance"
     for key, channel in pairs(v.channels) do
         channel.key = key
     end
     v.tip = buildTip(r, options, v.items, v.load.pips)
     v.verdict, v.verdictTone = buildVerdict(v, r)
     return v
+end
+
+-- Plain-language explanations behind each row's "?" marker. One line per
+-- "\n": the first is the summary, "# " starts a heading, "- " a point, and
+-- any other line is a closing note. Percent figures are arguments: a
+-- literal percent in a Java format string needs escaping.
+local INFO = {
+    load = { "UI_AMS_Info_Load", "How heavy your worn gear is for your body.\n- Each item counts its weight.\n- Legs, feet and arms count up to twice as much: you lift them with every step and swing.\n- Stiff or bulky gear adds extra.\n- The first 3.5 kg, about a set of everyday clothes, is free.\n- A heavier or stronger character carries the same kit more easily.\nEvery other row grows with Load." },
+    endurance = { "UI_AMS_Info_Endurance", "What your gear does to endurance, compared with wearing nothing.\n# Recovery\n- Sitting: always normal.\n- Standing: a little slower.\n- Walking: much slower. Very heavy loads drain even at a walk.\n# Exertion\n- Running and sprinting drain faster the heavier you are.\nValues preview each pace with your current gear, heat and breathing." },
+    heat = { "UI_AMS_Info_Heat", "Insulating gear traps body heat.\n- It only counts once you are actually running hot.\n- Then recovery slows by up to half, even sitting down.\n- Exertion costs more too.\n- Cool off or shed a layer and it fades within minutes.\nIn the cold the same gear just keeps you warm, with no penalty." },
+    breathing = { "UI_AMS_Info_Breathing", "Masks, respirators and sealed suits restrict airflow.\n- Resting and walking are free.\n- The harder you work, the more extra endurance it costs.\n- The full rating applies at a sprint.\nA filtered gas mask is the worst. Take it off when the air is clean." },
+    melee = { "UI_AMS_Info_Melee", "Gear on your shoulders, arms and hands moves with every attack.\n- Swings are %1 slower per kilo, up to %2.\n- Heavy arm gear makes your arms stiffen faster in a long fight.\n- Chest and leg armor do not touch your swing.", "1%", "5%" },
+    sleep = { "UI_AMS_Info_Sleep", "Stiff gear makes sleep clear fatigue more slowly.\n- About %1 slower per kilo, up to half.\n- Torso armor counts fully, limb armor partly, headgear not at all.\n- Soft clothes are fine.\nTake Off Armor before bed, Wear Armor when you wake up.", "2.5%" },
+    gear = { "UI_AMS_Info_Gear", "The worn items that add the most load, heaviest first.\n- Cells rate a single piece.\n- Hover a row to see where it sits on your body.\n- When one piece makes the difference, the line below says what taking it off would change." },
+}
+
+-- Lines of { kind = "summary" | "heading" | "point" | "note", text }.
+-- Translations may carry real newlines or a literal backslash-n.
+function View.info(key)
+    local entry = INFO[key]
+    if not entry then
+        return nil
+    end
+    local text
+    if entry[4] then
+        text = tr(entry[1], entry[2], entry[3], entry[4])
+    elseif entry[3] then
+        text = tr(entry[1], entry[2], entry[3])
+    else
+        text = tr(entry[1], entry[2])
+    end
+    text = string.gsub(text, "\\n", "\n")
+    local lines = {}
+    for raw in string.gmatch(text .. "\n", "([^\n]*)\n") do
+        local line = string.match(raw, "^%s*(.-)%s*$")
+        if line ~= "" then
+            local kind, rest = "note", line
+            if #lines == 0 then
+                kind = "summary"
+            elseif string.sub(line, 1, 2) == "# " then
+                kind, rest = "heading", string.sub(line, 3)
+            elseif string.sub(line, 1, 2) == "- " then
+                kind, rest = "point", string.sub(line, 3)
+            end
+            lines[#lines + 1] = { kind = kind, text = rest }
+        end
+    end
+    return lines
 end
 
 return View

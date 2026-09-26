@@ -75,9 +75,27 @@ built by the pure view model `BurdenView.build` and drawn by `BurdenPanel`.
 | Sleep | What stiff gear (vanilla discomfort above 0) would cost if the character slept now. Omitted when the sleep penalty is disabled. |
 | Heaviest gear | Up to six rows of worn items at or above 1.5 effective kg: item icon, name, cells and kg. Pieces with the same display name and burden (left and right shin guards are separate item types) share one row with a count and combined kg; cells rate one piece. Lighter items are summed on one line. |
 | Tip | At Moderate load or above, the one piece whose removal drops the load tier most: "Without the X: Y load." |
+| Armor buttons | Bottom left, shown only when they would act. **Take Off Armor** and **Drop Armor** remove every worn rigid item (the Sleep row's stiff gear), outer layers first, into the inventory or onto the floor, and remember the set. **Wear Armor (N)** puts back on the remembered pieces that are nearby, inner layers first, picking them up from bags or the 3×3 floor around the player (not through walls). The tooltip lists the pieces and names any that are not nearby. Buttons are disabled while the player is asleep or busy. They move onto their own row when they do not fit beside Save Report and Help. |
 
 Rows whose cells would be empty (no heat, clear breathing) collapse to their
 header line so active channels stand out.
+
+Each row label (Load, Endurance, Heat, Breathing, Melee, Sleep, Heaviest gear)
+is followed by a small boxed "?". Hovering it shows a plain-language
+explanation of that row in a vanilla `ISToolTip` that follows the mouse
+(`BurdenView.info(key)`, keys `UI_AMS_Info_*`). The panel owns one tooltip and
+hides it when the mouse leaves the marker or the panel is hidden.
+
+Each `UI_AMS_Info_*` string is one line per `\n`: the first line is a bright
+summary, `# ` starts a gold heading, `- ` a bulleted point with a hanging
+indent (bullet from `UI_AMS_Info_Bullet`), and any other line a dim closing
+note. Percent figures are `%1`/`%2` arguments, since a bare `%` breaks Java
+format strings.
+
+The **Help** button opens a separate window with the overview the rows do not
+cover: what AMS changes and leaves vanilla, how to read the tab, the armor
+buttons, tips, sandbox options, modded gear and support reports
+(`UI_AMS_Help_*`).
 
 Endurance percentages are previews for each pace with the current loadout and
 heat, not the activity of the moment.
@@ -140,9 +158,28 @@ a cached server snapshot requests one and asks the player to retry.
 - `client/core/ArmorMakesSense_Draw.lua`: colors, text metrics, pip strips
 - `client/core/ArmorMakesSense_UITooltip.lua`: wearable tooltip rows
 - `client/core/ArmorMakesSense_BurdenView.lua`: Burden tab view model (verdict, rows, gear, body parts, tip)
-- `client/core/ArmorMakesSense_BurdenPanel.lua`: Burden tab drawing, body map, sizing, export button
+- `client/core/ArmorMakesSense_BurdenPanel.lua`: Burden tab drawing, body map, sizing, armor and export buttons
+- `client/core/ArmorMakesSense_ArmorSet.lua`: remembered armor set; take off, drop and wear through vanilla timed actions
 - `client/core/ArmorMakesSense_UI.lua`: character-tab hook, fallback window, help window
 - `client/core/ArmorMakesSense_SupportReport.lua`: report data and formatting
 - `client/ArmorMakesSense_MPClientRuntime.lua`: MP snapshot cache and UI invalidation
 - `shared/ArmorMakesSense_PresentationPolicy.lua`: pip bands and tiers
 - `shared/ArmorMakesSense_PhysiologyShared.lua`: runtime and preview snapshots
+
+## Armor Set
+
+`ArmorSet` stores the remembered set in player modData under `AMSArmorSet` as
+`{ id, fullType, label }` entries in worn order. It is the only persistent AMS
+data. Pieces are matched by item id first, then by full type, so a set still
+resolves if ids change across a reload. Each candidate is claimed once.
+
+- Take off and drop: the new set is the worn armor plus remembered pieces that
+  are still nearby, so taking armor off again after a partial re-wear forgets
+  nothing. Unequip uses `ISUnequipAction`; drop uses vanilla
+  `ISInventoryPaneContextMenu.dropItem`, which also handles vehicles.
+- Wear: items in bags get an inventory transfer. Floor items use
+  `ISGrabItemAction` in SP and an inventory transfer in MP, matching vanilla
+  `onGrabWItem`. Each is followed by `ISWearClothing`, which replaces whatever
+  now occupies the slot.
+- All changes are vanilla timed actions, so MP servers validate them as usual.
+

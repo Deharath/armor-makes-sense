@@ -145,16 +145,13 @@ local function ensurePanelClasses()
     end
 
     local helpSections = {
-        { key = "UI_AMS_Help_Overview", fallback = "Overview: The Burden tab shows what your worn gear costs you right now, compared to wearing nothing. The line at the top is the one thing worth knowing." },
-        { key = "UI_AMS_Help_Burden", fallback = "Load: How heavy your gear is for your body. Mass on the legs, feet and arms counts more than mass on the torso, and stiff or bulky gear adds to it. Heavier and stronger characters carry the same gear more easily. The kg figure is the effective load after that weighting." },
-        { key = "UI_AMS_Help_Endurance", fallback = "Endurance: Load makes every exertion cost more and slows recovery: a little while standing, more while walking. Very heavy loads drain endurance even at a walk. Sitting recovers normally unless heat is building up." },
-        { key = "UI_AMS_Help_Thermal", fallback = "Heat: Insulating gear traps body heat. When you are running hot, recovery slows everywhere, including at rest, and exertion costs more. Heat clears once you cool down or take the gear off. In the cold, the same gear keeps you warm." },
-        { key = "UI_AMS_Help_Breathing", fallback = "Breathing: Gas masks, respirators and sealed suits make hard exertion cost more endurance. Walking and resting are unaffected." },
-        { key = "UI_AMS_Help_Melee", fallback = "Melee: Heavy arm and hand armor slows your swings, and armored arms tire faster in a fight." },
-        { key = "UI_AMS_Help_Sleep", fallback = "Sleep: Sleeping in stiff gear such as armor and pads slows how fast sleep clears fatigue. Take it off before bed." },
-        { key = "UI_AMS_Help_Map", fallback = "Body Map: Shows where the weight sits. Hover a gear row to see only that item, hover Load, Melee, Breathing or Sleep to see the gear behind it, or hover a body part to highlight the gear on it." },
-        { key = "UI_AMS_Help_Gear", fallback = "Heaviest Gear: The worn items that add the most effective load, heaviest first. Matching left and right pieces share a row. When one item matters most, the tab tells you what taking it off would change." },
-        { key = "UI_AMS_Help_ExportTitleDesc", fallback = "Support Reports: If something feels wrong, save a snapshot of your loadout, burden calculations, mod list and game state to a text file, and attach it when reporting a problem." },
+        { key = "UI_AMS_Help_Overview", fallback = "What it does: Worn gear has a physical cost. Its weight, bulk, trapped heat and restricted breathing change how fast endurance drains and recovers, how fast sleep clears fatigue and how quickly you swing, all compared with wearing nothing. Protection and carry weight stay vanilla, and armor no longer builds discomfort: its bulk counts toward Load instead." },
+        { key = "UI_AMS_Help_Reading", fallback = "Reading the tab: The top line is the one thing worth knowing right now. Each row names a cost and its pips show how strong it is. Hover a ? for how that row works, hover a row to see the gear behind it on the body map, and hover a body part to see what sits there." },
+        { key = "UI_AMS_Help_Armor", fallback = "Armor buttons: Take Off Armor moves your stiff gear into your inventory and remembers the set. Drop Armor puts it on the floor instead. Wear Armor puts exactly those pieces back on, from your bags or the floor next to you." },
+        { key = "UI_AMS_Help_Tips", fallback = "Tips: Sit down to recover, since weight never slows recovery while seated. Shed a layer when you run hot, take masks off when the air is clean, and take armor off before sleeping. Leg and foot armor costs the most for its weight." },
+        { key = "UI_AMS_Help_Sandbox", fallback = "Sandbox options: One scale sets how heavy gear feels overall, and the heat, breathing, arm strain and sleep effects can each be turned off." },
+        { key = "UI_AMS_Help_Modded", fallback = "Modded gear: Clothing and armor from other mods are rated automatically from their weight, slot and vanilla stats." },
+        { key = "UI_AMS_Help_ExportTitleDesc", fallback = "Support reports: If something feels wrong, save a snapshot of your loadout, burden calculations, mod list and game state to a text file, and attach it when reporting a problem." },
     }
 
     local HELP_SECTION_GAP = 10

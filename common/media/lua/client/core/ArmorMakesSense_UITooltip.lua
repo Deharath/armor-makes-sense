@@ -214,7 +214,9 @@ local function installRenderPatch()
     if not ISToolTipInv or type(ISToolTipInv.render) ~= "function" then
         return false
     end
-    if ISToolTipInv.render == ISToolTipInv._amsTooltipRenderWrapper then
+    -- Install once per class. Re-wrapping whenever another mod sits on top grows the render chain
+    -- every UI update (a tooltip stack overflow after ~30 minutes in 2.0.0).
+    if ISToolTipInv._amsTooltipRenderWrapper then
         return true
     end
     local originalRender = ISToolTipInv.render

@@ -20,6 +20,13 @@ Support.assertTrue(installed ~= originalRender, "render is wrapped")
 UITooltip.install()
 Support.assertEqual(ISToolTipInv.render, installed, "install is idempotent")
 
+-- Another mod wrapping on top must not make AMS wrap again on every UI update.
+local otherModRender = function(self) return installed(self) end
+ISToolTipInv.render = otherModRender
+for _ = 1, 50 do UITooltip.install() end
+Support.assertEqual(ISToolTipInv.render, otherModRender, "install does not re-wrap over another mod's wrapper")
+ISToolTipInv.render = installed
+
 getTextManager = function()
     return { MeasureStringX = function(_, _, text) return #text * 7 end }
 end

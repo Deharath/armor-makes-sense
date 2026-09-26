@@ -49,7 +49,10 @@ without drawing.
 
 The label column clears the widest vanilla clothing label, so AMS pips line up
 with vanilla values. If the vanilla tooltip class is not ready at the first UI
-update, installation is deferred and retried.
+update, installation is deferred and retried. The render wrapper is installed
+once per `ISToolTipInv` class, even if another mod later wraps on top. Re-wrapping
+whenever AMS was not outermost grew the render chain on every UI update until it
+overflowed the stack.
 
 When `EuryTooltipController` is installed, AMS registers as a row provider.
 It leaves the owner render alone and exposes the same rows as `n/4` text.

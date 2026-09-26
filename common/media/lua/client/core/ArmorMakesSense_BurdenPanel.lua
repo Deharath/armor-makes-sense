@@ -13,7 +13,6 @@ local MP = require "ArmorMakesSense_MPCompat"
 local Options = require "ArmorMakesSense_Options"
 local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local PresentationPolicy = require "ArmorMakesSense_PresentationPolicy"
-local SupportReport = require "core/ArmorMakesSense_SupportReport"
 local View = require "core/ArmorMakesSense_BurdenView"
 local Draw = require "core/ArmorMakesSense_Draw"
 local Utils = require "ArmorMakesSense_UtilsShared"
@@ -29,7 +28,7 @@ local BUTTON_PAD = 16
 local COLUMN_MAX = 380
 local ITEM_CELLS_W = 52
 
--- Set by UI: opens the help window.
+-- Set by UI: opens the help window for a player number.
 BurdenPanel.onHelp = BurdenPanel.onHelp or nil
 
 local function color(key)
@@ -87,16 +86,6 @@ local function currentOptions()
     return (UI and UI._lastOptions) or Options.get()
 end
 
-local function showExportResultModal(playerNum, ok, detail)
-    if not ISModalDialog then
-        return
-    end
-    local label = ok and tr("UI_AMS_Help_ExportSaved", "Saved") or tr("UI_AMS_Help_ExportFailed", "Export failed")
-    local modal = ISModalDialog:new(0, 0, 360, 120, label .. ":\n" .. tostring(detail or ""), false, nil, nil, playerNum)
-    modal:initialise()
-    modal:addToUIManager()
-end
-
 local Panel = nil
 
 local function defineClass()
@@ -129,11 +118,6 @@ local function defineClass()
     function Panel:createChildren()
         ISPanel.createChildren(self)
         self.helpBtn = makeButton(self, tr("UI_AMS_Help_Button", "? Help"), Panel.onHelpClick)
-        self.exportBtn = makeButton(self, tr("UI_AMS_Help_ExportShort", "Save Report"), Panel.onExportClick)
-        self.exportBtn:setTooltip(tr(
-            "UI_AMS_Help_ExportTooltip",
-            "Save a support report with your loadout, burden calculations, mod list and game state."
-        ))
         self.takeOffBtn = makeButton(self, tr("UI_AMS_Armor_TakeOff", "Take Off Armor"), Panel.onTakeOffClick)
         self.dropBtn = makeButton(self, tr("UI_AMS_Armor_Drop", "Drop Armor"), Panel.onDropClick)
         self.wearBtn = makeButton(self, tr("UI_AMS_Armor_Wear", "Wear Armor (%1)", "0"), Panel.onWearClick)
@@ -165,20 +149,7 @@ local function defineClass()
 
     function Panel:onHelpClick()
         if type(BurdenPanel.onHelp) == "function" then
-            BurdenPanel.onHelp()
-        end
-    end
-
-    function Panel:onExportClick()
-        local exportFn = SupportReport.writeCurrentPlayerReport
-        if type(exportFn) ~= "function" then
-            return
-        end
-        local ok, pathOrNil, err = exportFn(self:resolvePlayer())
-        if ok then
-            showExportResultModal(self.playerNum, true, tostring(pathOrNil or "Lua/ams_reports/"))
-        else
-            showExportResultModal(self.playerNum, false, tostring(err or "unknown"))
+            BurdenPanel.onHelp(self.playerNum)
         end
     end
 
@@ -295,7 +266,7 @@ local function defineClass()
     end
 
     function Panel:buttonsWidth()
-        return self.exportBtn.width + BUTTON_GAP + self.helpBtn.width
+        return self.helpBtn.width
     end
 
     -- Vanilla character-info views set their exact size every frame, even
@@ -323,17 +294,14 @@ local function defineClass()
         breathing = { "UI_AMS_Map_Breathing", "Masks and sealed gear" },
     }
 
-    -- Endurance: a row label, then two paces of name and value.
+    -- Endurance: one line of paces, each a name and a value.
     local function paceMetrics(v)
-        local labelW, nameW, valueW = 0, 0, 0
-        for _, group in ipairs(v.endurance.groups) do
-            labelW = math.max(labelW, tw(group.label))
-            for _, pace in ipairs(group.paces) do
-                nameW = math.max(nameW, tw(pace.label))
-                valueW = math.max(valueW, tw(pace.value))
-            end
+        local nameW, valueW = 0, 0
+        for _, pace in ipairs(v.endurance.paces) do
+            nameW = math.max(nameW, tw(pace.label))
+            valueW = math.max(valueW, tw(pace.value))
         end
-        return labelW + 12, nameW + 6, valueW + 14
+        return nameW + 6, valueW + 14
     end
 
     function Panel:measure(v, fh)
@@ -344,8 +312,8 @@ local function defineClass()
         end
         row(v.load.label, v.load.state, v.load.value)
         row(v.endurance.label, v.endurance.state)
-        local labelW, nameW, valueW = paceMetrics(v)
-        need = math.max(need, labelW + (nameW + valueW) * 2)
+        local nameW, valueW = paceMetrics(v)
+        need = math.max(need, (nameW + valueW) * #v.endurance.paces)
         for _, channel in ipairs(v.channelOrder) do
             row(channel.label, channel.state)
         end
@@ -479,17 +447,14 @@ local function defineClass()
         y = y + rowGap
 
         header(v.endurance)
-        local labelW, nameW, valueW = paceMetrics(v)
-        for _, group in ipairs(v.endurance.groups) do
-            text(group.label, colX, y, C.dim)
-            local px = colX + labelW
-            for _, pace in ipairs(group.paces) do
-                text(pace.label, px, y, C.label)
-                text(pace.value, px + nameW, y, color(pace.tone))
-                px = px + nameW + valueW
-            end
-            y = y + fh + 2
+        local nameW, valueW = paceMetrics(v)
+        local px = colX
+        for _, pace in ipairs(v.endurance.paces) do
+            text(pace.label, px, y, C.label)
+            text(pace.value, px + nameW, y, color(pace.tone))
+            px = px + nameW + valueW
         end
+        y = y + fh + 2
 
         for _, channel in ipairs(v.channelOrder) do
             y = y + rowGap
@@ -524,9 +489,6 @@ local function defineClass()
             line = truncate(line, MAP_W)
             text(line, pad + math.floor((MAP_W - tw(line)) / 2), captionY, captionColor)
             captionY = captionY + fh
-        end
-        if self.bodyMap then
-            captionY = self:drawMapLegend(pad, captionY + 6, cellH, f, fh)
         end
 
         y = math.max(columnBottom, captionY)
@@ -661,20 +623,6 @@ local function defineClass()
         tip:setDesiredPosition(getMouseX() + 16, getMouseY() + 16)
     end
 
-    -- Scale for the body map colors: 0 to MAP_MAX_KG per part.
-    function Panel:drawMapLegend(x, y, h, f, fh)
-        local left, w = x + 4, MAP_W - 8
-        for px = 0, w - 1, 2 do
-            local r, g, b = self.bodyMap:getRgbForValue((px + 1) / w * MAP_MAX_KG)
-            self:drawRect(left + px, y, 2, h, 1, r, g, b)
-        end
-        y = y + h + 2
-        self:drawText("0", left, y, C.dim.r, C.dim.g, C.dim.b, 1, f)
-        local maxLabel = tr("UI_AMS_Map_Max", "%1+ kg", string.format("%.0f", MAP_MAX_KG))
-        self:drawText(maxLabel, left + w - tw(maxLabel), y, C.dim.r, C.dim.g, C.dim.b, 1, f)
-        return y + fh
-    end
-
     local function names(pieces, pick)
         local out = {}
         for i, entry in ipairs(pieces) do
@@ -723,8 +671,8 @@ local function defineClass()
         self.wearBtn:setEnable(idle)
     end
 
-    -- Armor buttons on the left, report and help on the right; armor moves
-    -- to its own row when both do not fit. Returns the bottom edge.
+    -- Armor buttons on the left, help on the right; armor moves to its own
+    -- row when both do not fit. Returns the bottom edge.
     function Panel:placeButtons(y, width)
         local pad = math.max(10, math.floor(Draw.fontHeight(font()) * 0.7))
         local right = width - pad
@@ -749,8 +697,6 @@ local function defineClass()
         end
         self.helpBtn:setX(right - self.helpBtn.width)
         self.helpBtn:setY(utilityY)
-        self.exportBtn:setX(self.helpBtn.x - BUTTON_GAP - self.exportBtn.width)
-        self.exportBtn:setY(utilityY)
         return utilityY + BUTTON_H
     end
 end

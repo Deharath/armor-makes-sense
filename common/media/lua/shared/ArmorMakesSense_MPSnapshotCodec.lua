@@ -3,7 +3,7 @@ ArmorMakesSense.MPSnapshotCodec = ArmorMakesSense.MPSnapshotCodec or {}
 
 local Codec = ArmorMakesSense.MPSnapshotCodec
 
-Codec.SCHEMA_VERSION = 7
+Codec.SCHEMA_VERSION = 8
 
 local NUMBER_FIELDS = {
     { runtime = "burdenKg", wire = "burden_kg", default = 0 },
@@ -25,6 +25,7 @@ local NUMBER_FIELDS = {
     { runtime = "walkRegenScale", wire = "walk_regen_scale", default = 1 },
     { runtime = "runDrainScale", wire = "run_drain_scale", default = 1 },
     { runtime = "sprintDrainScale", wire = "sprint_drain_scale", default = 1 },
+    { runtime = "fightDrainScale", wire = "fight_drain_scale", default = 1 },
     { runtime = "sleepPenaltyFraction", wire = "sleep_penalty_fraction", default = 0 },
     { runtime = "naturalDelta", wire = "natural_delta", default = 0 },
     { runtime = "amsDelta", wire = "ams_delta", default = 0 },

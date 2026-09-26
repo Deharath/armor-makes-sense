@@ -58,12 +58,12 @@ local function recordNmsResult(player, controlled, regenScale, extraDrain)
     end
 end
 
-local function scalesFor(options, loadFraction, heat, breathingInput, activityLabel, resting)
+local function scalesFor(options, loadFraction, heat, breathingInput, activityLabel, resting, fighting, effortLabel)
     local breathing = BreathingModel.calculate(options, {
         airflowResistance = breathingInput.airflowResistance,
         sealedRestriction = breathingInput.sealedRestriction,
         metabolicRate = breathingInput.metabolicRate,
-        activityLabel = activityLabel,
+        activityLabel = effortLabel or activityLabel,
     })
     return EnduranceModel.scales(options, {
         loadFraction = loadFraction,
@@ -71,6 +71,7 @@ local function scalesFor(options, loadFraction, heat, breathingInput, activityLa
         breathing = breathing.pressure,
         activityLabel = activityLabel,
         resting = resting,
+        fighting = fighting,
     }), breathing
 end
 
@@ -88,6 +89,8 @@ local function buildSnapshot(player, state, options, profile, thermal, activityL
     local sprint, sprintBreathing = scalesFor(options, loadFraction, heat, breathingInput, "sprint", false)
     local stand = scalesFor(options, loadFraction, heat, breathingInput, "idle", false)
     local rest = scalesFor(options, loadFraction, heat, breathingInput, "idle", true)
+    -- Standing melee: combat load share, breathing at running effort.
+    local fight = scalesFor(options, loadFraction, heat, breathingInput, "idle", false, true, "run")
     return {
         activityLabel = activityLabel,
         postureLabel = postureLabel,
@@ -111,6 +114,7 @@ local function buildSnapshot(player, state, options, profile, thermal, activityL
         walkRegenScale = walk.physicalRegen * walk.thermalRegen,
         runDrainScale = run.drainScale,
         sprintDrainScale = sprint.drainScale,
+        fightDrainScale = fight.drainScale,
         sleepPenaltyFraction = SleepModel.penaltyFraction(options, profile.rigidKg),
         updatedMinute = tonumber(Utils.getWorldAgeMinutes()) or 0,
     }
@@ -130,6 +134,8 @@ function Physiology.tick(player, state, options, profile, nowMinutes)
     local last = tonumber(state.lastTickMinute)
     state.lastTickMinute = now
     local elapsed = last and (now - last) or 0
+    local fighting = (tonumber(state.attacksSinceTick) or 0) > 0
+    state.attacksSinceTick = 0
 
     local sleep = SleepModel.step(player, state, options, profile)
     local postureLabel = Environment.getPostureLabel(player)
@@ -167,6 +173,7 @@ function Physiology.tick(player, state, options, profile, nowMinutes)
         breathing = breathing.pressure,
         activityLabel = activityLabel,
         resting = Environment.isResting(postureLabel),
+        fighting = fighting,
         nmsRegenScale = nmsRegenScale,
         nmsDrain = nmsDrain,
     })
@@ -183,6 +190,7 @@ function Physiology.tick(player, state, options, profile, nowMinutes)
     snapshot.amsDelta = result.amsDelta
     snapshot.regenScale = result.regenScale
     snapshot.drainScale = result.drainScale
+    snapshot.fighting = result.scales.fighting
     snapshot.nmsRegenScale = result.nmsRegenScale
     snapshot.nmsDrain = result.nmsDrainApplied
     snapshot.dtMinutes = elapsed
@@ -191,6 +199,28 @@ function Physiology.tick(player, state, options, profile, nowMinutes)
     snapshot.breathingPressure = breathing.pressure
     state.uiRuntimeSnapshot = snapshot
     return snapshot
+end
+
+-- Melee attacks mark the current tick window as fighting (SP
+-- OnPlayerAttackFinished, MP server OnWeaponSwing).
+function Physiology.recordAttack(state, weapon)
+    if type(state) ~= "table" or not Physiology.isEnduranceMeleeAttack(weapon) then
+        return false
+    end
+    state.attacksSinceTick = (tonumber(state.attacksSinceTick) or 0) + 1
+    return true
+end
+
+-- Melee swings and shoves that cost vanilla endurance; firearms do not.
+function Physiology.isEnduranceMeleeAttack(weapon)
+    if not weapon then
+        return false
+    end
+    if not Utils.toBoolean(Utils.safeMethod(weapon, "isUseEndurance")) then
+        return false
+    end
+    return not Utils.toBoolean(Utils.safeMethod(weapon, "isRanged"))
+        and not Utils.toBoolean(Utils.safeMethod(weapon, "isAimedFirearm"))
 end
 
 -- Read-only projection for UI refreshes between ticks.

@@ -6,6 +6,7 @@ Core.UI = Core.UI or {}
 
 local BurdenPanel = require "core/ArmorMakesSense_BurdenPanel"
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
+local SupportReport = require "core/ArmorMakesSense_SupportReport"
 local UITooltip = require "core/ArmorMakesSense_UITooltip"
 local Draw = require "core/ArmorMakesSense_Draw"
 local Utils = require "ArmorMakesSense_UtilsShared"
@@ -100,8 +101,12 @@ local AMSHelpPanel = nil
 local AMSHelpWindow = nil
 local AMSBurdenWindow = nil
 
-toggleHelpWindow = function()
+local HELP_BUTTON_H = 20
+local HELP_FOOTER_H = HELP_BUTTON_H + 16
+
+toggleHelpWindow = function(playerNum)
     if helpWindow then
+        helpWindow.playerNum = tonumber(playerNum) or helpWindow.playerNum
         helpWindow:setVisible(not helpWindow:isVisible())
         return
     end
@@ -117,11 +122,11 @@ toggleHelpWindow = function()
     w = math.max(w, 360)
     local titleBarH = 24
     local contentH = measureHelpText(w - 28, font, tm)
-    local h = contentH + titleBarH + 8
+    local h = contentH + titleBarH + 8 + HELP_FOOTER_H
     h = math.min(h, math.floor(sh * 0.75))
     local wx = math.floor((sw - w) / 2)
     local wy = math.floor((sh - h) / 2)
-    helpWindow = AMSHelpWindow:new(wx, wy, w, h)
+    helpWindow = AMSHelpWindow:new(wx, wy, w, h, playerNum)
     helpWindow:initialise()
     helpWindow:instantiate()
     helpWindow:addToUIManager()
@@ -146,12 +151,12 @@ local function ensurePanelClasses()
 
     local helpSections = {
         { key = "UI_AMS_Help_Overview", fallback = "What it does: Worn gear has a physical cost. Its weight, bulk, trapped heat and restricted breathing change how fast endurance drains and recovers, how fast sleep clears fatigue and how quickly you swing, all compared with wearing nothing. Protection and carry weight stay vanilla, and armor no longer builds discomfort: its bulk counts toward Load instead." },
-        { key = "UI_AMS_Help_Reading", fallback = "Reading the tab: The top line is the one thing worth knowing right now. Each row names a cost and its pips show how strong it is. Hover a ? for how that row works, hover a row to see the gear behind it on the body map, and hover a body part to see what sits there." },
+        { key = "UI_AMS_Help_Reading", fallback = "Reading the tab: The top line is the one thing worth knowing right now. Each row names a cost and its pips show how strong it is. Heat, Breathing and Sleep only appear when they cost you something. Hover a ? for how that row works, hover a row to see the gear behind it on the body map, and hover a body part to see what sits there." },
         { key = "UI_AMS_Help_Armor", fallback = "Armor buttons: Take Off Armor moves your stiff gear into your inventory and remembers the set. Drop Armor puts it on the floor instead. Wear Armor puts exactly those pieces back on, from your bags or the floor next to you." },
         { key = "UI_AMS_Help_Tips", fallback = "Tips: Sit down to recover, since weight never slows recovery while seated. Shed a layer when you run hot, take masks off when the air is clean, and take armor off before sleeping. Leg and foot armor costs the most for its weight." },
         { key = "UI_AMS_Help_Sandbox", fallback = "Sandbox options: One scale sets how heavy gear feels overall, and the heat, breathing, arm strain and sleep effects can each be turned off." },
         { key = "UI_AMS_Help_Modded", fallback = "Modded gear: Clothing and armor from other mods are rated automatically from their weight, slot and vanilla stats." },
-        { key = "UI_AMS_Help_ExportTitleDesc", fallback = "Support reports: If something feels wrong, save a snapshot of your loadout, burden calculations, mod list and game state to a text file, and attach it when reporting a problem." },
+        { key = "UI_AMS_Help_ExportTitleDesc", fallback = "Support reports: If something feels wrong, press Save Report below. It saves your loadout, burden calculations, mod list and game state to a text file to attach when reporting a problem." },
     }
 
     local HELP_SECTION_GAP = 10
@@ -248,11 +253,12 @@ local function ensurePanelClasses()
     if ISCollapsableWindow then
         AMSHelpWindow = ISCollapsableWindow:derive("AMSHelpWindow")
 
-        function AMSHelpWindow:new(x, y, width, height)
+        function AMSHelpWindow:new(x, y, width, height, playerNum)
             local window = ISCollapsableWindow:new(x, y, width, height)
             setmetatable(window, self)
             self.__index = self
             window.resizable = false
+            window.playerNum = tonumber(playerNum) or 0
             local version = ClientRuntime.getLoadedModVersion()
             local versionTag = version and (" v" .. tostring(version)) or ""
             window.title = tr("UI_AMS_Help_Title", "Armor Makes Sense") .. versionTag
@@ -263,12 +269,42 @@ local function ensurePanelClasses()
             ISCollapsableWindow.createChildren(self)
             local titleBarH = 24
             pcall(function() titleBarH = self:titleBarHeight() end)
-            self.helpPanel = AMSHelpPanel:new(0, titleBarH + 1, self.width, self.height - titleBarH - 1)
+            self.helpPanel = AMSHelpPanel:new(0, titleBarH + 1, self.width, self.height - titleBarH - 1 - HELP_FOOTER_H)
             self.helpPanel:initialise()
             self.helpPanel:instantiate()
             self.helpPanel:setAnchorRight(true)
             self.helpPanel:setAnchorBottom(true)
             self:addChild(self.helpPanel)
+
+            local font = UIFont and UIFont.Small or nil
+            local label = tr("UI_AMS_Help_ExportShort", "Save Report")
+            local btnW = Draw.textWidth(font, label) + 16
+            local btn = ISButton:new(self.width - btnW - 14, self.height - HELP_FOOTER_H + 8, btnW, HELP_BUTTON_H,
+                label, self, AMSHelpWindow.onExportClick)
+            btn:initialise()
+            btn:instantiate()
+            btn.borderColor = { r = 0.4, g = 0.4, b = 0.4, a = 0.7 }
+            btn.backgroundColor = { r = 0.15, g = 0.15, b = 0.15, a = 0.8 }
+            btn:setTooltip(tr("UI_AMS_Help_ExportTooltip",
+                "Save a support report with your loadout, burden calculations, mod list and game state."))
+            self:addChild(btn)
+            self.exportBtn = btn
+        end
+
+        function AMSHelpWindow:onExportClick()
+            local player = type(getSpecificPlayer) == "function" and getSpecificPlayer(self.playerNum) or nil
+            if not player and type(getPlayer) == "function" then
+                player = getPlayer()
+            end
+            local ok, pathOrErr, err = SupportReport.writeCurrentPlayerReport(player)
+            if not ISModalDialog then
+                return
+            end
+            local label = ok and tr("UI_AMS_Help_ExportSaved", "Saved") or tr("UI_AMS_Help_ExportFailed", "Export failed")
+            local detail = ok and tostring(pathOrErr or "Lua/ams_reports/") or tostring(err or "unknown")
+            local modal = ISModalDialog:new(0, 0, 360, 120, label .. ":\n" .. detail, false, nil, nil, self.playerNum)
+            modal:initialise()
+            modal:addToUIManager()
         end
 
         function AMSHelpWindow:close()
@@ -302,9 +338,9 @@ local function ensurePanelClasses()
     end
 end
 
-BurdenPanel.onHelp = function()
+BurdenPanel.onHelp = function(playerNum)
     ensurePanelClasses()
-    toggleHelpWindow()
+    toggleHelpWindow(playerNum)
 end
 
 -- -----------------------------------------------------------------------------

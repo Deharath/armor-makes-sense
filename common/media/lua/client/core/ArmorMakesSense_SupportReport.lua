@@ -274,7 +274,7 @@ local SNAPSHOT_FIELDS = {
     { "bodyKg", 1 }, { "strength", 0 }, { "loadFraction", 4 },
     { "heat", 4 }, { "thermalResistance", 4 }, { "hotPressure", 4 }, { "coldSuitability", 4 },
     { "airflowResistance", 3 }, { "sealedRestriction", 3 }, { "breathingSeverity", 3 }, { "breathingEnabled" },
-    { "restRegenScale", 4 }, { "standRegenScale", 4 }, { "walkRegenScale", 4 }, { "runDrainScale", 4 }, { "sprintDrainScale", 4 },
+    { "restRegenScale", 4 }, { "standRegenScale", 4 }, { "walkRegenScale", 4 }, { "runDrainScale", 4 }, { "sprintDrainScale", 4 }, { "fightDrainScale", 4 },
     { "sleepPenaltyFraction", 4 },
     { "naturalDelta", 6 }, { "amsDelta", 6 }, { "regenScale", 4 }, { "drainScale", 4 },
     { "nmsRegenScale", 4 }, { "nmsDrain", 6 }, { "dtMinutes", 3 }, { "updatedMinute", 3 },

@@ -165,18 +165,10 @@ end
 -- Rows
 -- -----------------------------------------------------------------------------
 
-local function buildLoad(r, options)
+local function buildLoad(r)
     local lf = tonumber(r.loadFraction) or 0
     local pips = Policy.loadPips(lf)
     local burden = tonumber(r.burdenKg) or 0
-    local allowance = tonumber(options.BurdenClothingAllowanceKg) or 3.5
-    local detail
-    if burden <= allowance then
-        detail = tr("UI_AMS_Load_UnderAllowance", "Within the %1 kg that everyday clothing gets for free.", kg(allowance))
-    else
-        detail = tr("UI_AMS_Load_Carrier", "Your build: %1 kg, Strength %2.",
-            string.format("%.0f", tonumber(r.bodyKg) or 80), tostring(r.strength or 5))
-    end
     return {
         label = tr("UI_AMS_Row_Load", "Load"),
         pips = pips,
@@ -185,15 +177,17 @@ local function buildLoad(r, options)
         value = kg(burden) .. " kg",
         tone = tone(pips, "burden"),
         color = "burden",
-        detail = detail,
     }
 end
 
+-- One line: walking recovery, running and fighting cost. Standing and
+-- sprinting are in the "?" text; sprint only differs from run under a mask.
 local function buildEndurance(r)
     local stand = tonumber(r.standRegenScale) or 1
     local walk = tonumber(r.walkRegenScale) or 1
     local run = tonumber(r.runDrainScale) or 1
     local sprint = tonumber(r.sprintDrainScale) or 1
+    local fight = tonumber(r.fightDrainScale) or 1
     local normal = tr("UI_AMS_Pace_Normal", "normal")
 
     local function recovery(scale)
@@ -214,24 +208,13 @@ local function buildEndurance(r)
     local function pace(key, fallback, value, valueTone)
         return { label = tr(key, fallback), value = value, tone = valueTone }
     end
-    local groups = {
-        {
-            label = tr("UI_AMS_Endurance_Recovery", "Recovery"),
-            paces = {
-                pace("UI_AMS_Pace_Stand", "Standing", recovery(stand)),
-                pace("UI_AMS_Pace_Walk", "Walking", recovery(walk)),
-            },
-        },
-        {
-            label = tr("UI_AMS_Endurance_Exertion", "Exertion"),
-            paces = {
-                pace("UI_AMS_Pace_Run", "Running", use(run)),
-                pace("UI_AMS_Pace_Sprint", "Sprinting", use(sprint)),
-            },
-        },
+    local paces = {
+        pace("UI_AMS_Pace_Walk", "Walking", recovery(walk)),
+        pace("UI_AMS_Pace_Run", "Running", use(run)),
+        pace("UI_AMS_Pace_Fight", "Fighting", use(fight)),
     }
 
-    local affected = stand < 0.995 or walk < 0.995 or run > 1.005 or sprint > 1.005
+    local affected = stand < 0.995 or walk < 0.995 or run > 1.005 or sprint > 1.005 or fight > 1.005
     local state, stateTone
     if walk < 0 then
         state, stateTone = tr("UI_AMS_Endurance_DrainsWalking", "Drains even walking"), "bad"
@@ -244,7 +227,7 @@ local function buildEndurance(r)
         label = tr("UI_AMS_Row_Endurance", "Endurance"),
         state = state,
         tone = stateTone,
-        groups = groups,
+        paces = paces,
     }
 end
 
@@ -277,12 +260,9 @@ local function buildHeat(r, heatPending)
         end
     elseif (tonumber(r.coldSuitability) or 0) >= 0.25 then
         row.state, row.tone = tr("UI_AMS_Heat_KeepingWarm", "Keeping you warm"), "good"
-        row.detail = tr("UI_AMS_Heat_Insulating", "Your layers are holding in heat against the cold.")
     else
         row.state, row.tone = stateText(HEAT_STATES, 0), "dim"
-        if (tonumber(r.thermalResistance) or 0) >= 0.5 then
-            row.detail = tr("UI_AMS_Heat_WellInsulated", "Well insulated: traps heat in warm weather.")
-        end
+        row.idle = true
     end
     return row
 end
@@ -305,7 +285,7 @@ local function buildBreathing(r)
         state = stateText(BREATHING_STATES, pips),
         tone = tone(pips, "breathing"),
         color = "breathing",
-        detail = pips > 0 and tr("UI_AMS_Breathing_Detail", "Hard work costs extra endurance. Walking and resting are free.") or nil,
+        idle = pips <= 0,
     }
 end
 
@@ -371,6 +351,7 @@ local function buildSleep(r)
         color = "sleep",
         detail = pips > 0 and tr("UI_AMS_Sleep_Detail", "Recovery %1. Take stiff gear off for bed.",
             pct(1 - fraction)) or nil,
+        idle = pips <= 0,
     }
 end
 
@@ -516,23 +497,26 @@ function View.build(input)
     local rows = input.analysis and input.analysis.rows or {}
 
     local v = { channels = {} }
-    v.load = buildLoad(r, options)
+    v.load = buildLoad(r)
     v.endurance = buildEndurance(r)
 
-    local order = {}
     if options.EnableThermalModel ~= false then
         v.channels.heat = buildHeat(r, input.heatPending)
-        order[#order + 1] = v.channels.heat
     end
     if options.EnableBreathingModel ~= false then
         v.channels.breathing = buildBreathing(r)
-        order[#order + 1] = v.channels.breathing
     end
     v.channels.melee = buildMelee(r, rows, options)
-    order[#order + 1] = v.channels.melee
     if options.EnableSleepPenaltyModel ~= false then
         v.channels.sleep = buildSleep(r)
-        order[#order + 1] = v.channels.sleep
+    end
+    -- Rows that cost nothing are hidden; Melee always shows.
+    local order = {}
+    for _, key in ipairs({ "heat", "breathing", "melee", "sleep" }) do
+        local channel = v.channels[key]
+        if channel and not channel.idle then
+            order[#order + 1] = channel
+        end
     end
     v.channelOrder = order
 
@@ -553,10 +537,10 @@ end
 -- literal percent in a Java format string needs escaping.
 local INFO = {
     load = { "UI_AMS_Info_Load", "How heavy your worn gear is for your body.\n- Each item counts its weight.\n- Legs, feet and arms count up to twice as much: you lift them with every step and swing.\n- Stiff or bulky gear adds extra.\n- The first 3.5 kg, about a set of everyday clothes, is free.\n- A heavier or stronger character carries the same kit more easily.\nEvery other row grows with Load." },
-    endurance = { "UI_AMS_Info_Endurance", "What your gear does to endurance, compared with wearing nothing.\n# Recovery\n- Sitting: always normal.\n- Standing: a little slower.\n- Walking: much slower. Very heavy loads drain even at a walk.\n# Exertion\n- Running, sprinting and fighting drain faster the heavier you are.\nValues preview each pace with your current gear, heat and breathing." },
+    endurance = { "UI_AMS_Info_Endurance", "What your gear does to endurance, compared with wearing nothing.\n# Recovery\n- Sitting: always normal.\n- Standing: a little slower.\n- Walking: much slower. Very heavy loads drain even at a walk.\n# Exertion\n- Running and sprinting drain faster the heavier you are, and a full kit costs more than its pieces suggest.\n# Combat\n- Fighting pays about half the extra that running does.\nValues preview each pace with your current gear, heat and breathing." },
     heat = { "UI_AMS_Info_Heat", "Insulating gear traps body heat.\n- It only counts once you are actually running hot.\n- Then recovery slows by up to half, even sitting down.\n- Exertion costs more too.\n- Cool off or shed a layer and it fades within minutes.\nIn the cold the same gear just keeps you warm, with no penalty." },
     breathing = { "UI_AMS_Info_Breathing", "Masks, respirators and sealed suits restrict airflow.\n- Resting and walking are free.\n- The harder you work, the more extra endurance it costs.\n- The full rating applies at a sprint.\nA filtered gas mask is the worst. Take it off when the air is clean." },
-    melee = { "UI_AMS_Info_Melee", "Gear on your shoulders, arms and hands moves with every attack.\n- Swings are %1 slower per kilo, up to %2.\n- Heavy arm gear makes your arms stiffen faster in a long fight.\n- Chest and leg armor do not slow your swing, but a heavy Load makes fighting cost more endurance.", "1%", "5%" },
+    melee = { "UI_AMS_Info_Melee", "Gear on your shoulders, arms and hands moves with every attack.\n- Swings are %1 slower per kilo, up to %2.\n- Heavy arm gear makes your arms stiffen faster in a long fight.\n- Chest and leg armor do not slow your swing. Load still makes fighting cost more endurance, about half as much extra as running.", "1%", "5%" },
     sleep = { "UI_AMS_Info_Sleep", "Stiff gear makes sleep clear fatigue more slowly.\n- About %1 slower per kilo, up to half.\n- Torso armor counts fully, limb armor partly, headgear not at all.\n- Soft clothes are fine.\nTake Off Armor before bed, Wear Armor when you wake up.", "2.5%" },
     gear = { "UI_AMS_Info_Gear", "The worn items that add the most load, heaviest first.\n- Cells rate a single piece.\n- Hover a row to see where it sits on your body.\n- When one piece makes the difference, the line below says what taking it off would change." },
 }

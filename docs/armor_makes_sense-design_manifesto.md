@@ -60,7 +60,7 @@ Player UI shows pips and tiers. Exact values belong in the support report.
 
 | System | AMS responsibility |
 |---|---|
-| Endurance | Increase movement drain and reduce regeneration according to load and environment |
+| Endurance | Increase drain (fighting at half the load share) and reduce regeneration according to load and environment |
 | Thermal pressure | Convert sustained heat strain into additional exertion cost and recognize useful cold insulation |
 | Breathing | Scale respiratory restriction with ventilation demand |
 | Muscle strain | Add load from equipment worn on the melee swing chain |

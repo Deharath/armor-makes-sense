@@ -13,6 +13,13 @@ local EnduranceModel = ArmorMakesSense.EnduranceModel
 -- of a carried load is close to a fixed share of the movement cost
 -- (Pandolf). This keeps drain independent of the activity sampled at the
 -- tick, which can differ from what the player did during the minute.
+--
+-- The load share grows with the square of the load too, so single pieces
+-- stay cheap and full kits cost disproportionately more (limb loads and a
+-- rigid torso compound, as in Pandolf's load term and armour studies).
+-- A minute with melee attacks and no running pays only CombatDrainShare of
+-- it: a chest plate barely changes the cost of a standing swing, and arm
+-- gear already costs through strain and swing speed.
 
 local function requiredNumber(options, key)
     local value = tonumber(options and options[key])
@@ -32,6 +39,7 @@ function EnduranceModel.scales(options, input)
     local breathing = Utils.clamp(tonumber(input.breathing) or 0, 0, 1)
     local activityLabel = tostring(input.activityLabel or "idle")
     local resting = input.resting == true
+    local fighting = input.fighting == true and activityLabel ~= "run" and activityLabel ~= "sprint"
 
     local physicalRegen = 1
     if activityLabel == "walk" and not resting then
@@ -43,7 +51,11 @@ function EnduranceModel.scales(options, input)
         physicalRegen = math.max(0, 1 - (requiredNumber(options, "StandRegenLoadWeight") * loadFraction * loadFraction))
     end
     local thermalRegen = 1 - (requiredNumber(options, "ThermalRegenPenaltyMax") * heat)
-    local physicalDrain = requiredNumber(options, "DrainLoadWeight") * loadFraction
+    local physicalDrain = (requiredNumber(options, "DrainLoadWeight") * loadFraction)
+        + (requiredNumber(options, "DrainLoadCurveWeight") * loadFraction * loadFraction)
+    if fighting then
+        physicalDrain = physicalDrain * requiredNumber(options, "CombatDrainShare")
+    end
     local thermalDrain = requiredNumber(options, "ThermalDrainWeight") * heat
     local breathingDrain = requiredNumber(options, "BreathingDrainWeight") * breathing
 
@@ -56,6 +68,7 @@ function EnduranceModel.scales(options, input)
         physicalDrain = physicalDrain,
         thermalDrain = thermalDrain,
         breathingDrain = breathingDrain,
+        fighting = fighting,
     }
 end
 

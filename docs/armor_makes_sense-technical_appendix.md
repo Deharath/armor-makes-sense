@@ -32,8 +32,9 @@ logging, version reporting, protected calls, and role-aware player-state access.
 In singleplayer, `EveryOneMinute` calls `core/ArmorMakesSense_Tick.lua` for each
 active local player. The tick samples worn gear, runs
 `Physiology.tick(player, state, options, profile, nowMinutes)`, and refreshes
-UI. `OnPlayerAttackFinished` applies the attacking local player's muscle-strain
-overlay through `ArmorMakesSense_StrainShared.lua`.
+UI. `OnPlayerAttackFinished` marks the tick window as fighting through
+`Physiology.recordAttack` and applies the attacking local player's
+muscle-strain overlay through `ArmorMakesSense_StrainShared.lua`.
 
 Sleeping is handled inside the same minute tick. The sleep model observes
 vanilla fatigue recovery, applies only the stiff-gear recovery penalty, and
@@ -57,8 +58,9 @@ registers `OnClientCommand`, `EveryOneMinute`, and `OnWeaponSwing`:
 - `OnClientCommand` accepts `request_snapshot`, checks
   `ArmorMakesSense_MPRequestPolicy.lua`, refreshes a read-only projection, and
   sends the encoded snapshot.
-- `OnWeaponSwing` uses the latest cached worn profile for up to one wall-clock
-  second, then applies the shared strain overlay.
+- `OnWeaponSwing` marks the tick window as fighting, then uses the latest
+  cached worn profile for up to one wall-clock second and applies the shared
+  strain overlay.
 
 The MP client never advances gameplay. `ArmorMakesSense_MPClientRuntime.lua`
 registers only `OnServerCommand`, `OnConnected`, and `OnCreatePlayer` when the
@@ -112,7 +114,7 @@ numeric threshold, and breathing cannot reduce unrelated burden.
 
 Server snapshots are encoded and decoded by
 `ArmorMakesSense_MPSnapshotCodec.lua`. The codec owns the wire-field mapping,
-driver-row mapping, defaults, and schema validation. Schema version 7 is the
+driver-row mapping, defaults, and schema validation. Schema version 8 is the
 hard contract; clients reject snapshots with a missing or different version.
 
 ## Source Layout

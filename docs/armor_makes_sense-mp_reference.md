@@ -20,7 +20,7 @@ the server remains the only multiplayer authority for gameplay stats.
 |---|---|
 | `OnClientCommand` | Accept throttled snapshot requests and send projected snapshots |
 | `EveryOneMinute` | Run the authoritative physiology tick for each online player |
-| `OnWeaponSwing` | Apply melee strain using the latest cached worn profile |
+| `OnWeaponSwing` | Mark the tick window as fighting, then apply melee strain using the latest cached worn profile |
 
 Each minute, the server resolves options, analyzes worn gear, calls
 `Physiology.tick(player, mpState, options, profile, worldAgeMinutes)`, attaches
@@ -83,7 +83,7 @@ wire mapping.
 | Client and server request floor | 5 wall-clock seconds per player |
 | Pending request timeout | 60 wall-clock seconds |
 | UI cache freshness window | 30 wall-clock seconds |
-| Snapshot schema | `7` |
+| Snapshot schema | `8` |
 
 ### Client Requests
 
@@ -133,6 +133,7 @@ unsupported schemas. The codec maps these numeric fields:
 | `walk_regen_scale` | `walkRegenScale` |
 | `run_drain_scale` | `runDrainScale` |
 | `sprint_drain_scale` | `sprintDrainScale` |
+| `fight_drain_scale` | `fightDrainScale` |
 | `sleep_penalty_fraction` | `sleepPenaltyFraction` |
 | `natural_delta` | `naturalDelta` |
 | `ams_delta` | `amsDelta` |

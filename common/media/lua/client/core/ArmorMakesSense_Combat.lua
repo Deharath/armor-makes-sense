@@ -3,6 +3,7 @@ ArmorMakesSense.Core = ArmorMakesSense.Core or {}
 
 local ClientRuntime = require "core/ArmorMakesSense_ClientRuntime"
 local Options = require "ArmorMakesSense_Options"
+local Physiology = require "ArmorMakesSense_PhysiologyShared"
 local Strain = require "ArmorMakesSense_StrainShared"
 
 local Core = ArmorMakesSense.Core
@@ -17,6 +18,7 @@ function Combat.onPlayerAttackFinished(attacker, weapon)
     if not ClientRuntime.isLocalPlayer(attacker) then
         return
     end
+    Physiology.recordAttack(ClientRuntime.ensureState(attacker), weapon)
 
     local options = Options.get()
     if not options.EnableMuscleStrainModel or not weapon then

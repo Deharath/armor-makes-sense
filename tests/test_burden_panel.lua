@@ -135,7 +135,8 @@ UI.update(player, {}, {})
 
 local panel = screen._amsBurdenPanel
 Support.assertTrue(panel ~= nil, "burden tab attached")
-Support.assertTrue(panel.helpBtn ~= nil and panel.exportBtn ~= nil, "buttons created")
+Support.assertTrue(panel.helpBtn ~= nil, "help button created")
+Support.assertEqual(panel.exportBtn, nil, "Save Report lives in the help window")
 panel:ensureBodyMap(player)
 Support.assertTrue(panel.bodyMap ~= nil and panel.bodyMap.parent == panel, "body map attached")
 Support.assertEqual(panel.bodyMap.maxValue, 3.0, "body map scale")
@@ -177,8 +178,6 @@ local function assertInside(label)
         Support.assertTrue(d.y >= 0 and d.y + 14 <= panel.height, label .. ": text above the bottom: " .. d.text)
     end
     Support.assertTrue(panel.helpBtn.x + panel.helpBtn.width <= panel.width, label .. ": help button inside")
-    Support.assertTrue(panel.exportBtn.x >= 0, label .. ": export button inside")
-    Support.assertTrue(panel.exportBtn.x + panel.exportBtn.width <= panel.helpBtn.x, label .. ": buttons do not overlap")
     Support.assertTrue(panel.helpBtn.y + panel.helpBtn.height <= panel.height, label .. ": buttons above the bottom")
 end
 
@@ -197,6 +196,9 @@ Support.assertEqual(host.width, panel.width, "window follows the panel width")
 assertInside("civilian")
 Support.assertTrue(drawn("Your gear costs you nothing extra.") ~= nil, "verdict drawn")
 Support.assertTrue(drawn("Weight by area") ~= nil, "map caption drawn")
+Support.assertTrue(drawn("3+ kg") == nil, "no map legend")
+Support.assertTrue(drawn("Heat") == nil and drawn("Breathing") == nil and drawn("Sleep") == nil, "idle rows hidden")
+Support.assertTrue(drawn("Melee") ~= nil, "melee always shown")
 Support.assertClose(panel.bodyMap.values[15], 0.5, 1e-9, "map shows feet load")
 Support.assertEqual(panel.bodyMap.values[6], 0, "map clears unloaded parts")
 
@@ -211,6 +213,9 @@ assertInside("heavy")
 Support.assertTrue(panel.width >= civWidth, "heavy panel is not narrower")
 Support.assertEqual(panel.icons, 3, "one icon per gear row")
 Support.assertTrue(drawn("Greaves") ~= nil, "gear row drawn")
+local walkLabel, fightLabel = drawn("Walking"), drawn("Fighting")
+Support.assertTrue(walkLabel ~= nil and fightLabel ~= nil and walkLabel.y == fightLabel.y, "endurance paces on one line")
+Support.assertTrue(drawn("Standing") == nil and drawn("Sprinting") == nil, "standing and sprinting left to the ? text")
 Support.assertTrue(drawn(longName) == nil, "long name truncated")
 Support.assertClose(panel.bodyMap.values[13], 3, 1e-9, "greaves on the left calf")
 
@@ -275,10 +280,10 @@ Support.assertTrue(panel.wearBtn.tooltip:find("Not nearby: Cuirass", 1, true) ~=
 Support.assertTrue(panel.takeOffBtn.tooltip:find("Helmet, Vest", 1, true) ~= nil, "take off tooltip lists worn")
 local lastArmor = panel.dropBtn
 Support.assertTrue(panel.wearBtn.x < panel.takeOffBtn.x and panel.takeOffBtn.x < panel.dropBtn.x, "armor buttons in order")
-if lastArmor.y == panel.exportBtn.y then
-    Support.assertTrue(lastArmor.x + lastArmor.width < panel.exportBtn.x, "armor buttons clear the utility buttons")
+if lastArmor.y == panel.helpBtn.y then
+    Support.assertTrue(lastArmor.x + lastArmor.width < panel.helpBtn.x, "armor buttons clear the help button")
 else
-    Support.assertTrue(panel.exportBtn.y > lastArmor.y, "utility buttons wrap below armor")
+    Support.assertTrue(panel.helpBtn.y > lastArmor.y, "help button wraps below armor")
 end
 assertInside("armor buttons")
 panel.armor = nil
@@ -287,7 +292,8 @@ local BurdenPanel = require "core/ArmorMakesSense_BurdenPanel"
 
 -- "?" markers: one per row, inside the panel, clear of the state text;
 -- hovering one shows its explanation, leaving hides it.
-renderWith({ burdenKg = 14, loadFraction = 0.4, armKg = 3 }, { row("Vest", "TorsoExtraVest", 8.0), row("Gloves", "Hands", 3.0) })
+renderWith({ burdenKg = 14, loadFraction = 0.4, armKg = 3, heat = 0.2, breathingSeverity = 0.5, sleepPenaltyFraction = 0.2 },
+    { row("Vest", "TorsoExtraVest", 8.0), row("Gloves", "Hands", 3.0) })
 local keys = {}
 for _, rect in ipairs(panel.infoRects) do
     keys[rect.key] = rect
@@ -324,7 +330,7 @@ end
 local endurance = View.info("endurance")
 local kinds = {}
 for _, line in ipairs(endurance) do kinds[#kinds + 1] = line.kind end
-Support.assertEqual(table.concat(kinds, ","), "summary,heading,point,point,point,heading,point,note", "endurance info structure")
+Support.assertEqual(table.concat(kinds, ","), "summary,heading,point,point,point,heading,point,heading,point,note", "endurance info structure")
 getText = function(key) return key == "UI_AMS_Info_Gear" and "Top line\\n- one\\nlast" or key end
 local literal = View.info("gear")
 Support.assertEqual(#literal, 3, "literal backslash-n splits")
@@ -339,9 +345,9 @@ Support.assertEqual(#tips, 1, "info tip reused")
 -- Help button routes to the UI help window.
 local helped = false
 local originalHelp = BurdenPanel.onHelp
-BurdenPanel.onHelp = function() helped = true end
+BurdenPanel.onHelp = function(playerNum) helped = playerNum end
 panel:onHelpClick()
-Support.assertTrue(helped, "help routed")
+Support.assertEqual(helped, 0, "help routed with the player number")
 BurdenPanel.onHelp = originalHelp
 
 print("ams burden panel checks passed")

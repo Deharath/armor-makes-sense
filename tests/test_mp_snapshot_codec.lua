@@ -24,6 +24,7 @@ local snapshot = {
     walkRegenScale = -0.2,
     runDrainScale = 1.6,
     sprintDrainScale = 2.1,
+    fightDrainScale = 1.3,
     sleepPenaltyFraction = 0.45,
     naturalDelta = -0.01,
     amsDelta = -0.006,

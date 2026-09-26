@@ -39,8 +39,10 @@ Support.assertClose(state.lastEnduranceObserved, 0.8, 1e-9, "first tick rebases 
 Support.assertEqual(snapshot.amsDelta, nil, "rebase tick applies nothing")
 Support.assertClose(snapshot.loadFraction, 0.25, 1e-9, "snapshot load fraction")
 Support.assertClose(snapshot.walkRegenScale, 0.5, 1e-9, "snapshot walk recovery")
-Support.assertClose(snapshot.runDrainScale, 1.25, 1e-9, "snapshot run drain")
-Support.assertClose(snapshot.sprintDrainScale, 1.25, 1e-9, "sprint pays the same load share as running")
+-- Physical drain is LF + LF^2 = 0.3125; fighting pays half of it.
+Support.assertClose(snapshot.runDrainScale, 1.3125, 1e-9, "snapshot run drain")
+Support.assertClose(snapshot.sprintDrainScale, 1.3125, 1e-9, "sprint pays the same load share as running")
+Support.assertClose(snapshot.fightDrainScale, 1.15625, 1e-9, "fighting pays half the load share")
 Support.assertClose(snapshot.standRegenScale, 0.9375, 1e-9, "standing recovery slows with load squared")
 Support.assertClose(snapshot.restRegenScale, 1, 1e-9, "sitting recovers at the vanilla rate")
 Support.assertClose(snapshot.sleepPenaltyFraction, 0.2, 1e-9, "snapshot sleep penalty preview")
@@ -118,6 +120,50 @@ Support.assertClose(state.lastSleepExtraFatigue, 0.02, 1e-9, "extra fatigue reco
 Support.assertEqual(snapshot.amsDelta, nil, "endurance pipeline pauses asleep")
 Support.assertClose(state.lastEnduranceObserved, 0.6, 1e-9, "asleep ticks keep endurance rebased")
 player.asleep = false
+
+-- Melee attacks mark the tick window as fighting; firearms and non-endurance items do not.
+local function weapon(useEndurance, ranged)
+    return {
+        isUseEndurance = function() return useEndurance end,
+        isRanged = function() return ranged end,
+        isAimedFirearm = function() return ranged end,
+    }
+end
+local fightState = {}
+Support.assertFalse(Physiology.recordAttack(fightState, weapon(true, true)), "firearms are not fighting")
+Support.assertFalse(Physiology.recordAttack(fightState, weapon(false, false)), "non-endurance swings are not fighting")
+Support.assertFalse(Physiology.recordAttack(fightState, nil), "missing weapon is not fighting")
+Support.assertEqual(fightState.attacksSinceTick, nil, "rejected attacks leave no mark")
+nowMinutes = nowMinutes + 10
+endurance = 0.9
+Physiology.tick(player, fightState, defaults, profile, nowMinutes)
+Support.assertTrue(Physiology.recordAttack(fightState, weapon(true, false)), "melee swing records")
+nowMinutes = nowMinutes + 1
+endurance = 0.88
+snapshot = Physiology.tick(player, fightState, defaults, profile, nowMinutes)
+Support.assertTrue(snapshot.fighting, "attack window ticks as fighting")
+Support.assertClose(endurance, 0.9 - 0.02 * 1.15625, 1e-9, "fighting drain pays half the load share")
+Support.assertEqual(fightState.attacksSinceTick, 0, "tick clears the attack window")
+nowMinutes = nowMinutes + 1
+endurance = endurance - 0.02
+local base = endurance + 0.02
+snapshot = Physiology.tick(player, fightState, defaults, profile, nowMinutes)
+Support.assertFalse(snapshot.fighting, "quiet window is not fighting")
+Support.assertClose(endurance, base - 0.02 * 1.3125, 1e-9, "non-fighting drain pays the full load share")
+player.running = true
+Physiology.recordAttack(fightState, weapon(true, false))
+nowMinutes = nowMinutes + 1
+base = endurance
+endurance = endurance - 0.02
+snapshot = Physiology.tick(player, fightState, defaults, profile, nowMinutes)
+Support.assertFalse(snapshot.fighting, "running swings pay the running share")
+Support.assertClose(endurance, base - 0.02 * 1.3125, 1e-9, "running drain ignores fighting")
+player.running = false
+Physiology.recordAttack(fightState, weapon(true, false))
+nowMinutes = nowMinutes + 20
+endurance = 0.95
+Physiology.tick(player, fightState, defaults, profile, nowMinutes)
+Support.assertEqual(fightState.attacksSinceTick, 0, "rebase tick also clears the attack window")
 
 -- Projection is read-only.
 local before = state.lastTickMinute

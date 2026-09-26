@@ -71,19 +71,22 @@ built by the pure view model `BurdenView.build` and drawn by `BurdenPanel`.
 | Area | Content |
 |---|---|
 | Verdict | One sentence at the top, colored by severity. Priority: walking drains endurance > overheating > extreme load > heavy load > heavily restricted breathing > warm > moderate load > light load > poor sleep > keeping warm > free. |
-| Body map | Vanilla `ISBodyPartPanel` silhouette colored by effective kg per body part (dark at 0, amber around 1.5 kg, red at 3 kg), with a color scale underneath. Hovering narrows it to a cause: a gear row shows that item; the Load, Melee, Breathing or Sleep row shows the gear feeding it (swing-chain gear, masks and sealed gear, stiff gear by rigid kg) and lights those gear rows; a body part shows its kg and lights the gear on it. |
-| Load | Tier, four cells, total effective kg. The detail line shows the clothing allowance while under it, otherwise the body mass and Strength the load is rated against. |
-| Endurance | Two lines: Recovery (standing, walking) and Exertion (running, sprinting). Each pace reads "normal", a signed percent against vanilla, or "drains" when walking recovery goes below zero. |
-| Heat | Heat state and cells. While running hot, the detail line gives the recovery penalty at rest. In the cold, a positive "Keeping you warm" state. Omitted when the thermal model is disabled. |
-| Breathing | Restriction state and cells. Omitted when the breathing model is disabled. |
+| Body map | Vanilla `ISBodyPartPanel` silhouette colored by effective kg per body part (dark at 0, amber around 1.5 kg, red at 3 kg), captioned "Weight by area". There is no color legend; hovering gives the kg. Hovering narrows it to a cause: a gear row shows that item; the Load, Melee, Breathing or Sleep row shows the gear feeding it (swing-chain gear, masks and sealed gear, stiff gear by rigid kg) and lights those gear rows; a body part shows its kg and lights the gear on it. |
+| Load | Tier, four cells, total effective kg. No detail line; the clothing allowance and carrier scaling live in the "?" text. |
+| Endurance | One line: Walking, Running, Fighting. Standing and sprinting are explained in the "?" text (sprint differs from run only under a mask). Each pace reads "normal", a signed percent against vanilla, or "drains" when walking recovery goes below zero. |
+| Heat | Heat state and cells. While running hot, the detail line gives the recovery penalty at rest. In the cold, a positive "Keeping you warm" state with no detail. Hidden when there is no heat build-up and it is not keeping you warm, and when the thermal model is disabled. |
+| Breathing | Restriction state and cells. Hidden while clear and when the breathing model is disabled. |
 | Melee | Arm load state from `armKg`, with the summed swing slowdown from `SpeedRebalance.combatSpeedModifier` and whether arm strain applies. |
-| Sleep | What stiff gear (vanilla discomfort above 0) would cost if the character slept now. Omitted when the sleep penalty is disabled. |
+| Sleep | What stiff gear (vanilla discomfort above 0) would cost if the character slept now. Hidden when it costs nothing and when the sleep penalty is disabled. |
 | Heaviest gear | Up to six rows of worn items at or above 1.5 effective kg: item icon, name, cells and kg. Pieces with the same display name and burden (left and right shin guards are separate item types) share one row with a count and combined kg; cells rate one piece. Lighter items are summed on one line. |
 | Tip | At Moderate load or above, the one piece whose removal drops the load tier most: "Without the X: Y load." |
-| Armor buttons | Bottom left, shown only when they would act. **Take Off Armor** and **Drop Armor** remove every worn rigid item (the Sleep row's stiff gear), outer layers first, into the inventory or onto the floor, and remember the set. **Wear Armor (N)** puts back on the remembered pieces that are nearby, inner layers first, picking them up from bags or the 3×3 floor around the player (not through walls). The tooltip lists the pieces and names any that are not nearby. Buttons are disabled while the player is asleep or busy. They move onto their own row when they do not fit beside Save Report and Help. |
+| Armor buttons | Bottom left, shown only when they would act. **Take Off Armor** and **Drop Armor** remove every worn rigid item (the Sleep row's stiff gear), outer layers first, into the inventory or onto the floor, and remember the set. **Wear Armor (N)** puts back on the remembered pieces that are nearby, inner layers first, picking them up from bags or the 3×3 floor around the player (not through walls). The tooltip lists the pieces and names any that are not nearby. Buttons are disabled while the player is asleep or busy. They move onto their own row when they do not fit beside Help. |
 
-Rows whose cells would be empty (no heat, clear breathing) collapse to their
-header line so active channels stand out.
+Heat, Breathing and Sleep rows appear only when they cost something (or, for
+Heat, when keeping you warm), so the tab stays short for light kits. Melee
+always shows. Hidden rows still feed the verdict. A detail line appears only
+when it says something actionable or quantified (heat penalty, swing
+slowdown, sleep cost).
 
 Each row label (Load, Endurance, Heat, Breathing, Melee, Sleep, Heaviest gear)
 is followed by a small boxed "?". Hovering it shows a plain-language
@@ -100,7 +103,8 @@ format strings.
 The **Help** button opens a separate window with the overview the rows do not
 cover: what AMS changes and leaves vanilla, how to read the tab, the armor
 buttons, tips, sandbox options, modded gear and support reports
-(`UI_AMS_Help_*`).
+(`UI_AMS_Help_*`). **Save Report** sits at the bottom of that window and writes
+the support report for the player who opened it.
 
 Endurance percentages are previews for each pace with the current loadout and
 heat, not the activity of the moment.

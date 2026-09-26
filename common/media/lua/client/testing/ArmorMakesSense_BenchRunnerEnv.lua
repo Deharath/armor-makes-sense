@@ -778,6 +778,7 @@ BenchRunnerEnv.RUNTIME_METRICS = {
     { key = "standRegenScale", wire = "stand_regen_scale", digits = 4 },
     { key = "runDrainScale", wire = "run_drain_scale", digits = 4 },
     { key = "sprintDrainScale", wire = "sprint_drain_scale", digits = 4 },
+    { key = "fightDrainScale", wire = "fight_drain_scale", digits = 4 },
     { key = "regenScale", wire = "regen_scale", digits = 4 },
     { key = "drainScale", wire = "drain_scale", digits = 4 },
     { key = "naturalDelta", wire = "end_natural_delta", digits = 6 },

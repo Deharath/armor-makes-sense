@@ -55,9 +55,11 @@ Support.assertEqual(#civ.items, 0, "no item stands out")
 Support.assertEqual(civ.gearSummary, "Nothing you wear is heavy enough to stand out.", "all-light summary")
 Support.assertEqual(civ.load.state, "Negligible", "negligible load")
 Support.assertEqual(civ.load.tone, "dim", "0 pips reads dim")
-Support.assertEqual(civ.load.detail, "Within the 3.5 kg that everyday clothing gets for free.", "allowance detail")
+Support.assertEqual(civ.load.detail, nil, "load has no detail line")
 Support.assertEqual(civ.endurance.state, "Unaffected", "endurance unaffected")
-Support.assertEqual(#civ.channelOrder, 4, "heat, breathing, melee, sleep rows")
+Support.assertEqual(#civ.channelOrder, 1, "idle heat, breathing and sleep rows are hidden")
+Support.assertEqual(civ.channelOrder[1], civ.channels.melee, "melee always shows")
+Support.assertTrue(civ.channels.heat ~= nil, "hidden heat still feeds the verdict")
 Support.assertEqual(civ.tip, nil, "no tip when light")
 Support.assertClose(civ.parts[P.Foot_L], 0.5, 1e-9, "shoes spread over both feet")
 Support.assertClose(civ.parts[P.Foot_R], 0.5, 1e-9, "shoes spread over both feet (right)")
@@ -65,18 +67,20 @@ Support.assertClose(civ.parts[P.Foot_R], 0.5, 1e-9, "shoes spread over both feet
 -- Too heavy to recover while walking beats every other verdict.
 local heavy = build(runtime({
     burdenKg = 30, loadFraction = 0.4, walkRegenScale = -0.1, restRegenScale = 0.9, standRegenScale = 0.8,
-    runDrainScale = 1.5, sprintDrainScale = 1.7, heat = 0.7,
+    runDrainScale = 1.5, sprintDrainScale = 1.7, fightDrainScale = 1.25, heat = 0.7,
 }), { row("Cuirass", "TorsoExtraVest", 12, { rigidKg = 10 }), row("Greaves", "Calf_Left", 3) })
 Support.assertEqual(heavy.verdictTone, "bad", "drains walking is bad")
 Support.assertEqual(heavy.verdict, "Too heavy to recover endurance even at a walk.", "drain verdict wins")
 Support.assertEqual(heavy.endurance.state, "Drains even walking", "endurance state")
-local recovery, exertion = heavy.endurance.groups[1], heavy.endurance.groups[2]
-Support.assertEqual(recovery.label, "Recovery", "recovery group")
-Support.assertEqual(recovery.paces[2].value, "drains", "walking pace drains")
-Support.assertEqual(recovery.paces[2].tone, "bad", "walking pace is bad")
-Support.assertEqual(recovery.paces[1].value, "-20%", "standing recovery shown as percent")
-Support.assertEqual(exertion.label, "Exertion", "exertion group")
-Support.assertEqual(exertion.paces[2].value, "+70%", "sprint cost shown as percent")
+local paces = heavy.endurance.paces
+Support.assertEqual(#paces, 3, "walk, run and fight")
+Support.assertEqual(paces[1].label, "Walking", "walking pace")
+Support.assertEqual(paces[1].value, "drains", "walking pace drains")
+Support.assertEqual(paces[1].tone, "bad", "walking pace is bad")
+Support.assertEqual(paces[2].value, "+50%", "run cost shown as percent")
+Support.assertEqual(paces[3].label, "Fighting", "fighting pace")
+Support.assertEqual(paces[3].value, "+25%", "fighting cost shown as percent")
+Support.assertEqual(#heavy.channelOrder, 2, "hot heat and melee show; clear breathing and zero sleep cost hide")
 Support.assertEqual(heavy.load.tone, "bad", "extreme load is bad")
 Support.assertEqual(heavy.items[1].label, "Cuirass", "heaviest item first")
 Support.assertEqual(heavy.items[1].channels.sleep, 10, "rigid plate feeds sleep")
@@ -100,6 +104,8 @@ Support.assertEqual(pending.channels.heat.fill, 0, "pending heat shows empty")
 -- Cold weather: insulation is good news.
 local warm = build(runtime({ coldSuitability = 0.6 }), {})
 Support.assertEqual(warm.channels.heat.tone, "good", "keeping warm is good")
+Support.assertEqual(warm.channelOrder[1], warm.channels.heat, "keeping warm shows the heat row")
+Support.assertEqual(warm.channels.heat.detail, nil, "keeping warm needs no detail line")
 Support.assertEqual(warm.verdict, "Your clothes are keeping you warm.", "keeping warm verdict")
 
 -- Disabled channels disappear.

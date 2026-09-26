@@ -60,7 +60,7 @@ fi
 rg -q 'Strain\.applyArmorStrainOverlay' "${MP_SERVER}" || fail "MP server does not use the shared strain overlay"
 rg -q 'require "ArmorMakesSense_MPRequestPolicy"' "${MP_SERVER}" || fail "MP server does not use the request policy"
 rg -q 'RequestPolicy\.queueSnapshotRequest' "${MP_SERVER}" || fail "MP server does not queue bounded snapshot requests"
-rg -q 'Codec\.SCHEMA_VERSION = 7' "${LUA}/shared/ArmorMakesSense_MPSnapshotCodec.lua" \
+rg -q 'Codec\.SCHEMA_VERSION = 8' "${LUA}/shared/ArmorMakesSense_MPSnapshotCodec.lua" \
   || fail "MP snapshot schema is not the 2.0 schema"
 if rg -n '^registerEvents\(\)' "${MP_CLIENT}"; then
   fail "MP client runtime self-registers during module load"
@@ -104,7 +104,7 @@ for presenter in "${BURDEN_VIEW}" "${BURDEN_PANEL}" "${LUA}/client/core/ArmorMak
     || fail "presentation surface bypasses the shared policy: ${presenter}"
 done
 rg -q 'require "core/ArmorMakesSense_Draw"' "${BURDEN_PANEL}" || fail "Burden tab does not use the shared pip drawing"
-rg -q 'exportFn\(self:resolvePlayer\(\)\)' "${BURDEN_PANEL}" || fail "support export loses split-screen player identity"
+rg -q 'getSpecificPlayer\(self\.playerNum\)' "${LUA}/client/core/ArmorMakesSense_UI.lua" || fail "support export loses split-screen player identity"
 rg -q 'Physiology\.projectWithServerThermal' "${BURDEN_PANEL}" || fail "MP Burden tab does not use the local worn profile"
 rg -q 'BurdenPanel\.new' "${UI}" || fail "character-info tab does not host the Burden panel"
 

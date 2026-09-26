@@ -91,8 +91,8 @@ UI refreshes and MP snapshot requests use it.
 | Carrier | `bodyKg`, `strength`, `loadFraction` |
 | Heat | `heat`, `thermalResistance`, `hotPressure`, `coldSuitability` |
 | Breathing | `breathingSeverity`, `breathingEnabled` |
-| Per-pace preview | `restRegenScale`, `standRegenScale`, `walkRegenScale`, `runDrainScale`, `sprintDrainScale`, `sleepPenaltyFraction` |
-| Applied tick only | `naturalDelta`, `amsDelta`, `regenScale`, `drainScale`, `nmsRegenScale`, `nmsDrain`, `dtMinutes`, `metabolicRate`, `breathingEffortRamp`, `breathingPressure` |
+| Per-pace preview | `restRegenScale`, `standRegenScale`, `walkRegenScale`, `runDrainScale`, `sprintDrainScale`, `fightDrainScale`, `sleepPenaltyFraction` |
+| Applied tick only | `fighting`, `naturalDelta`, `amsDelta`, `regenScale`, `drainScale`, `nmsRegenScale`, `nmsDrain`, `dtMinutes`, `metabolicRate`, `breathingEffortRamp`, `breathingPressure` |
 
 The per-pace preview answers "what would this loadout cost at each pace right
 now", independent of what the character is doing. The Burden tab reads these
@@ -100,14 +100,23 @@ fields.
 
 ## Combat Event Path
 
-SP `OnPlayerAttackFinished` and MP server `OnWeaponSwing` apply the strain
-overlay when the attacker is the local (SP) or event (MP) player, the muscle
-strain model is enabled, and the weapon is eligible. Combat does not change AMS
-activity state or add a timed endurance drain. Vanilla owns the base melee
-stamina loss, attack metabolism and hit-count-dependent base muscle strain.
-Swing stamina lands in the minute's observed endurance delta, so the tick
-multiplies it by `drainScale` like any other drain: fighting in heavy gear
-costs more endurance.
+SP `OnPlayerAttackFinished` and MP server `OnWeaponSwing` do two things for the
+local (SP) or event (MP) player:
+
+- `Physiology.recordAttack(state, weapon)` marks the current tick window as
+  fighting for any melee attack that uses endurance (swings and shoves; not
+  firearms). This runs whether or not the muscle strain model is enabled.
+- When the muscle strain model is enabled and the weapon is strain-eligible,
+  the strain overlay is applied.
+
+Vanilla owns the base melee stamina loss (`CombatManager.processWeaponEndurance`
+per swing, `applyMeleeEnduranceLoss` per hit, both server-side in MP), attack
+metabolism and hit-count-dependent base muscle strain. Swing stamina lands in
+the minute's observed endurance delta and there is no hook between the
+deduction and the event, so the tick cannot separate it from other drain.
+Instead, a window with any attack and a sampled activity other than run or
+sprint pays `CombatDrainShare` (0.5) of the physical load share. The window
+clears on every tick, including rebases.
 
 ## Option Resolution
 
@@ -262,7 +271,7 @@ T-shirt, jeans and leather boots free. At strength 5 the factor is 1.0.
 ## Endurance (`EnduranceModel`)
 
 `EnduranceModel.scales(options, input)` with `loadFraction`, `heat`,
-`breathing` (pressure), `activityLabel` and `resting`:
+`breathing` (pressure), `activityLabel`, `resting` and `fighting`:
 
 ```lua
 physicalRegen = 1
@@ -272,7 +281,12 @@ elseif not resting then
     physicalRegen = max(0, 1 - StandRegenLoadWeight * loadFraction^2)             -- weight 1.0
 end
 thermalRegen   = 1 - ThermalRegenPenaltyMax * heat                               -- 0.5
-physicalDrain  = DrainLoadWeight * loadFraction                                  -- 1.0
+physicalDrain  = DrainLoadWeight * loadFraction
+               + DrainLoadCurveWeight * loadFraction^2                           -- 1.0, 1.0
+fighting       = input.fighting and activity ~= "run" and activity ~= "sprint"
+if fighting then
+    physicalDrain = physicalDrain * CombatDrainShare                              -- 0.5
+end
 thermalDrain   = ThermalDrainWeight * heat                                       -- 0.25
 breathingDrain = BreathingDrainWeight * breathing                                -- 0.35
 
@@ -305,13 +319,18 @@ Consequences:
   fixed share of movement cost (Pandolf). Drain therefore does not depend on
   the activity sampled at the tick, which can differ from what the player did
   during the minute (a game minute is 2.5 s at a 1-hour day, 30 s at 12 hours).
-- The weight is 1.0 because burden is already trunk-equivalent kg: placement
-  factors carry the extra cost of limb mass. Running cost grows with total
-  mass, so a load of 20% of body mass costs about 20% more (Pandolf's walking
-  estimate is lower still). A vest-and-uniform police loadout drains about
-  x1.08, a soldier x1.11, a full SWAT kit x1.21 and full crafted metal x1.42
-  (80 kg, Strength 5).
-- Melee swings are drains too, so the same multiplier applies to fighting.
+- The linear weight is 1.0 because burden is already trunk-equivalent kg:
+  placement factors carry the extra cost of limb mass. The squared term keeps
+  single pieces cheap while full kits cost more than their parts, matching
+  measured armour costs that climb past linear as bulk and gait restriction
+  add up. A vest-and-uniform police loadout drains about x1.09, a soldier
+  x1.13, a full SWAT kit x1.26 and full crafted metal x1.60 (80 kg,
+  Strength 5).
+- Fighting pays half the load share: police x1.04, SWAT x1.13, full crafted
+  metal x1.30. Standing melee moves the arms and weapon, not the whole carried
+  load, and protection has to stay worth wearing into a fight. Heat and
+  breathing drain are not reduced. Swinging while running pays the running
+  share.
 - Past the walk floor (load fraction above 0.5 at default weights), walking
   turns part of vanilla's recovery into drain.
 - With no vanilla change there is no AMS change.
@@ -491,7 +510,8 @@ vehicle over-encumbrance) stays vanilla.
 | `StrengthFactorBase` / `StrengthFactorPerLevel` | 1.3 / 0.06 | |
 | `WalkRegenLoadWeight` / `WalkRegenFloor` | 2.0 / −0.5 | |
 | `StandRegenLoadWeight` | 1.0 | |
-| `DrainLoadWeight` | 1.0 | |
+| `DrainLoadWeight` / `DrainLoadCurveWeight` | 1.0 / 1.0 | |
+| `CombatDrainShare` | 0.5 | |
 | `ThermalRegenPenaltyMax` / `ThermalDrainWeight` | 0.5 / 0.25 | |
 | `BreathingEffortOnset` / `BreathingDrainWeight` | 0.20 / 0.35 | |
 | `MuscleStrainMaxExtra` | 0.15 | |

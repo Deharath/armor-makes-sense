@@ -153,12 +153,16 @@ local function onClientCommand(module, command, playerObj, _args)
 end
 
 local function onWeaponSwing(playerObj, weapon)
-    local options = Options.get()
-    if not playerObj or not weapon or not Utils.toBoolean(options.EnableMuscleStrainModel) then
+    if not playerObj or not weapon then
         return
     end
     local mpState = ensurePlayerState(playerObj)
     if not mpState then
+        return
+    end
+    Physiology.recordAttack(mpState, weapon)
+    local options = Options.get()
+    if not Utils.toBoolean(options.EnableMuscleStrainModel) then
         return
     end
     local profile = mpState.cachedWornProfile

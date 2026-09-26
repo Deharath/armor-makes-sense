@@ -45,7 +45,7 @@ equipment choice contextual, not to make protection categorically inefficient.
 
 AMS supplements rather than replaces the following vanilla behaviors:
 
-- melee stamina cost
+- base melee stamina cost (AMS scales it with load like any other drain)
 - non-clothing discomfort
 - thermoregulation
 - bed quality, sleep traits, sleep planning and wake time

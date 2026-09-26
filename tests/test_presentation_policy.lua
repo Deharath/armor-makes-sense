@@ -13,12 +13,13 @@ for _, bands in ipairs({ Policy.LOAD_BANDS, Policy.ITEM_BANDS_KG, Policy.HEAT_BA
 end
 
 Support.assertEqual(Policy.loadPips(0), 0, "no load, no pips")
-Support.assertEqual(Policy.loadPips(0.0199), 0, "below the first load band")
-Support.assertEqual(Policy.loadPips(0.02), 1, "first load band")
-Support.assertEqual(Policy.loadPips(0.13), 3, "third load band")
+Support.assertEqual(Policy.loadPips(0.0299), 0, "below the first load band")
+Support.assertEqual(Policy.loadPips(0.03), 1, "first load band")
+Support.assertEqual(Policy.loadPips(0.20), 3, "third load band")
 Support.assertEqual(Policy.loadPips(5), 4, "load pips saturate")
-Support.assertEqual(Policy.itemPips(0.99), 0, "sub-kilogram items stay unlit")
-Support.assertEqual(Policy.itemPips(6), 4, "heavy item")
+Support.assertEqual(Policy.itemPips(1.99), 0, "everyday pieces stay unlit")
+Support.assertEqual(Policy.itemPips(5.5), 2, "kevlar vest reads two pips")
+Support.assertEqual(Policy.itemPips(8), 4, "heavy item")
 Support.assertEqual(Policy.heatPips(0.2), 2, "heat pips")
 Support.assertEqual(Policy.breathingPips(1), 4, "sealed mask breathing pips")
 Support.assertEqual(Policy.sleepPips(0.2), 3, "sleep pips")

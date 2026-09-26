@@ -27,12 +27,14 @@ ArmorMakesSense.DEFAULTS = {
     -- Endurance: AMS scales vanilla's own observed endurance change.
     -- Standing still under load slows recovery with the square of the load
     -- (never below zero); walking slows it linearly and can turn it into
-    -- drain. Any endurance use costs one load-proportional extra, because
-    -- vanilla already charges faster paces more.
+    -- drain. Any endurance use, including melee swings, costs one
+    -- load-proportional extra, because vanilla already charges faster paces
+    -- more. Load is already trunk-equivalent kg (placement), so drain grows
+    -- one to one with it, as running cost grows with total mass.
     StandRegenLoadWeight = 1.0,
     WalkRegenLoadWeight = 2.0,
     WalkRegenFloor = -0.5,
-    DrainLoadWeight = 1.5,
+    DrainLoadWeight = 1.0,
 
     -- Heat: insulation while overheating slows recovery and adds drain.
     ThermalRegenPenaltyMax = 0.5,

@@ -495,7 +495,7 @@ local function buildVerdict(v, r)
         return tr("UI_AMS_Verdict_Warm", "Your gear is holding in heat."), "warn"
     end
     if load >= 2 then
-        return tr("UI_AMS_Verdict_Moderate", "Noticeable load. You tire faster on the move."), "text"
+        return tr("UI_AMS_Verdict_Moderate", "Noticeable load. You tire faster on the move and in fights."), "text"
     end
     if load >= 1 then
         return tr("UI_AMS_Verdict_Light", "Light load. You will barely notice it."), "text"
@@ -553,10 +553,10 @@ end
 -- literal percent in a Java format string needs escaping.
 local INFO = {
     load = { "UI_AMS_Info_Load", "How heavy your worn gear is for your body.\n- Each item counts its weight.\n- Legs, feet and arms count up to twice as much: you lift them with every step and swing.\n- Stiff or bulky gear adds extra.\n- The first 3.5 kg, about a set of everyday clothes, is free.\n- A heavier or stronger character carries the same kit more easily.\nEvery other row grows with Load." },
-    endurance = { "UI_AMS_Info_Endurance", "What your gear does to endurance, compared with wearing nothing.\n# Recovery\n- Sitting: always normal.\n- Standing: a little slower.\n- Walking: much slower. Very heavy loads drain even at a walk.\n# Exertion\n- Running and sprinting drain faster the heavier you are.\nValues preview each pace with your current gear, heat and breathing." },
+    endurance = { "UI_AMS_Info_Endurance", "What your gear does to endurance, compared with wearing nothing.\n# Recovery\n- Sitting: always normal.\n- Standing: a little slower.\n- Walking: much slower. Very heavy loads drain even at a walk.\n# Exertion\n- Running, sprinting and fighting drain faster the heavier you are.\nValues preview each pace with your current gear, heat and breathing." },
     heat = { "UI_AMS_Info_Heat", "Insulating gear traps body heat.\n- It only counts once you are actually running hot.\n- Then recovery slows by up to half, even sitting down.\n- Exertion costs more too.\n- Cool off or shed a layer and it fades within minutes.\nIn the cold the same gear just keeps you warm, with no penalty." },
     breathing = { "UI_AMS_Info_Breathing", "Masks, respirators and sealed suits restrict airflow.\n- Resting and walking are free.\n- The harder you work, the more extra endurance it costs.\n- The full rating applies at a sprint.\nA filtered gas mask is the worst. Take it off when the air is clean." },
-    melee = { "UI_AMS_Info_Melee", "Gear on your shoulders, arms and hands moves with every attack.\n- Swings are %1 slower per kilo, up to %2.\n- Heavy arm gear makes your arms stiffen faster in a long fight.\n- Chest and leg armor do not touch your swing.", "1%", "5%" },
+    melee = { "UI_AMS_Info_Melee", "Gear on your shoulders, arms and hands moves with every attack.\n- Swings are %1 slower per kilo, up to %2.\n- Heavy arm gear makes your arms stiffen faster in a long fight.\n- Chest and leg armor do not slow your swing, but a heavy Load makes fighting cost more endurance.", "1%", "5%" },
     sleep = { "UI_AMS_Info_Sleep", "Stiff gear makes sleep clear fatigue more slowly.\n- About %1 slower per kilo, up to half.\n- Torso armor counts fully, limb armor partly, headgear not at all.\n- Soft clothes are fine.\nTake Off Armor before bed, Wear Armor when you wake up.", "2.5%" },
     gear = { "UI_AMS_Info_Gear", "The worn items that add the most load, heaviest first.\n- Cells rate a single piece.\n- Hover a row to see where it sits on your body.\n- When one piece makes the difference, the line below says what taking it off would change." },
 }

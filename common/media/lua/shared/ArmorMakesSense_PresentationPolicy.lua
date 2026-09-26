@@ -8,10 +8,10 @@ local Policy = ArmorMakesSense.PresentationPolicy
 Policy.PIP_COUNT = 4
 Policy.TIERS = { "negligible", "light", "moderate", "heavy", "extreme" }
 
-Policy.LOAD_BANDS = { 0.02, 0.07, 0.13, 0.25 }     -- load fraction of body mass
--- Starts above 1.0 kg: vanilla leaves most shoes and trousers at the default
--- script weight, which lands every pair of shoes at exactly 1.0 kg.
-Policy.ITEM_BANDS_KG = { 1.5, 3.0, 4.5, 6.0 }      -- one item's effective kg
+Policy.LOAD_BANDS = { 0.03, 0.10, 0.20, 0.35 }     -- load fraction of body mass
+-- One pip per 2 kg: a kevlar vest (5.5) reads as two pips, a tire cuirass
+-- (6.9) as three and only an SCBA tank (8.0) fills the strip.
+Policy.ITEM_BANDS_KG = { 2.0, 4.0, 6.0, 8.0 }      -- one item's effective kg
 Policy.HEAT_BANDS = { 0.05, 0.20, 0.40, 0.65 }     -- insulation x heat strain
 Policy.BREATHING_BANDS = { 0.10, 0.35, 0.60, 0.90 } -- respiratory severity
 Policy.SLEEP_BANDS = { 0.03, 0.10, 0.20, 0.30 }    -- fatigue recovery lost

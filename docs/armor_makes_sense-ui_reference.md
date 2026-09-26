@@ -12,8 +12,8 @@ A pip lights once the value reaches its band threshold.
 
 | Strip | Input | Pip 1 | Pip 2 | Pip 3 | Pip 4 |
 |---|---|---|---|---|---|
-| Load | `loadFraction` (share of body mass) | 0.02 | 0.07 | 0.13 | 0.25 |
-| Item | one item's `burdenKg` | 1.5 | 3.0 | 4.5 | 6.0 |
+| Load | `loadFraction` (share of body mass) | 0.03 | 0.10 | 0.20 | 0.35 |
+| Item | one item's `burdenKg` | 2.0 | 4.0 | 6.0 | 8.0 |
 | Heat | `heat` (insulation × heat strain) | 0.05 | 0.20 | 0.40 | 0.65 |
 | Breathing | `breathingSeverity` of worn gear | 0.10 | 0.35 | 0.60 | 0.90 |
 | Sleep | `sleepPenaltyFraction` | 0.03 | 0.10 | 0.20 | 0.30 |
@@ -26,9 +26,11 @@ tab fills cells continuously with `Policy.fill`: whole cells for passed bands
 and a partial cell for progress toward the next, so `floor(fill)` always equals
 the pip count.
 
-The item bands start above 1.0 kg because vanilla leaves most shoes and
-trousers at the default script weight: every pair of shoes is exactly 1.0 kg of
-burden, which should not read as a cost.
+Load bands follow the felt drain: Light stays under about x1.10, Moderate
+x1.10–1.20, Heavy x1.20–1.35 and Extreme above. Item bands are one pip per
+2 kg, so a kevlar vest (5.5 kg) shows two pips, a tire cuirass three, and only
+an SCBA tank fills the strip. Everyday pieces under 2 kg (leather jacket,
+hiking boots) show no Burden row.
 
 ## Tooltip Integration
 
@@ -44,7 +46,7 @@ without drawing.
 
 | Row | Shown when |
 |---|---|
-| Burden | item burden reaches the first item band (1.5 kg) |
+| Burden | item burden reaches the first item band (2.0 kg) |
 | Breathing | breathing channel enabled and item severity reaches the first breathing band |
 
 The label column clears the widest vanilla clothing label, so AMS pips line up

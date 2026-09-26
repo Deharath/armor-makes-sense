@@ -31,7 +31,7 @@ getTextManager = function()
     return { MeasureStringX = function(_, _, text) return #text * 7 end }
 end
 
-local signal = { burdenKg = 4.6, airflowResistance = 3.75, sealedRestriction = 1 }
+local signal = { burdenKg = 6.4, airflowResistance = 3.75, sealedRestriction = 1 }
 LoadModel.itemToBurdenSignal = function() return signal end
 
 local tooltipKey = "Tooltip_item_NoBackpack"
@@ -79,7 +79,7 @@ function tooltip:DrawTextureScaledColor(_, x, y, w, h, r, g, b, a) rects[#rects 
 local rows = UITooltip.buildRows(item)
 Support.assertEqual(#rows, 2, "burden and breathing rows")
 Support.assertEqual(rows[1].label, "Burden", "burden row first")
-Support.assertEqual(rows[1].pips, 3, "4.6 kg is three pips")
+Support.assertEqual(rows[1].pips, 3, "6.4 kg is three pips")
 Support.assertEqual(rows[2].label, "Breathing", "breathing row second")
 Support.assertEqual(rows[2].pips, 4, "sealed mask is four pips")
 
@@ -143,7 +143,7 @@ ISToolTipInv.render(panel)
 Support.assertEqual(calls.original, 4, "rowless items keep vanilla DoTooltip")
 
 -- Breathing toggle hides the breathing row.
-signal = { burdenKg = 4.6, airflowResistance = 3.75, sealedRestriction = 1 }
+signal = { burdenKg = 6.4, airflowResistance = 3.75, sealedRestriction = 1 }
 SandboxVars = { ArmorMakesSense = { EnableBreathingModel = false } }
 rows = UITooltip.buildRows(item)
 Support.assertEqual(#rows, 1, "breathing disabled leaves burden only")

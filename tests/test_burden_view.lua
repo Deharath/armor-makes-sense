@@ -64,7 +64,7 @@ Support.assertClose(civ.parts[P.Foot_R], 0.5, 1e-9, "shoes spread over both feet
 
 -- Too heavy to recover while walking beats every other verdict.
 local heavy = build(runtime({
-    burdenKg = 30, loadFraction = 0.3, walkRegenScale = -0.1, restRegenScale = 0.9, standRegenScale = 0.8,
+    burdenKg = 30, loadFraction = 0.4, walkRegenScale = -0.1, restRegenScale = 0.9, standRegenScale = 0.8,
     runDrainScale = 1.5, sprintDrainScale = 1.7, heat = 0.7,
 }), { row("Cuirass", "TorsoExtraVest", 12, { rigidKg = 10 }), row("Greaves", "Calf_Left", 3) })
 Support.assertEqual(heavy.verdictTone, "bad", "drains walking is bad")

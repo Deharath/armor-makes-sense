@@ -205,7 +205,7 @@ Derived channels per item:
 - `airflowResistance` and `sealedRestriction` come from the respiratory
   classifier.
 
-Signals are cached by `fullType|location|weight`; `clearSignalCache()` resets
+Signals are cached by `fullType|location|weight|hasFilter|hasTank`; `clearSignalCache()` resets
 the cache.
 
 Respiratory classification (`BreathingClassifier`):
@@ -222,6 +222,12 @@ Respiratory classification (`BreathingClassifier`):
 - respiratory tag classes take precedence
 - `gasmasknofilter`, `respiratornofilter`, and `scbanotank` explicitly select
   the no-filter state even when the item type does not contain `nofilter`
+- B42 removes filters and tanks in place (`Clothing.setNoFilter` /
+  `setNoTank`), keeping the filtered type and tags, so items tagged
+  `gasmask`, `respirator`, or `improvisedgasmask` also read the instance's
+  `hasFilter()`, and `scba` items read `hasTank()`; a tankless SCBA classifies
+  like `scbanotank`, while a tankless hazmat suit stays a sealed suit without
+  the sealed restriction
 - keyword identity matches include `gasmask`, `respirator`, `weldingmask`,
   `hazmat`, `dustmask`, `surgicalmask`, and `bandanamask`
 - generic `head` / `neck` slots do not add breathing restriction by themselves
@@ -274,15 +280,15 @@ T-shirt, jeans and leather boots free. At strength 5 the factor is 1.0.
 `breathing` (pressure), `activityLabel`, `resting` and `fighting`:
 
 ```lua
+headroom(e)    = 1 - loadFraction * e / (EffortSustainable - e)                  -- sustainable 0.60
 physicalRegen = 1
 if activity == "walk" and not resting then
-    physicalRegen = max(WalkRegenFloor, 1 - WalkRegenLoadWeight * loadFraction)   -- floor -0.5, weight 2.0
+    physicalRegen = max(WalkRegenFloor, headroom(EffortWalk))                   -- floor -0.5, walk 0.30
 elseif not resting then
-    physicalRegen = max(0, 1 - StandRegenLoadWeight * loadFraction^2)             -- weight 1.0
+    physicalRegen = max(0, headroom(EffortStand))                               -- stand 0.15
 end
 thermalRegen   = 1 - ThermalRegenPenaltyMax * heat                               -- 0.5
-physicalDrain  = DrainLoadWeight * loadFraction
-               + DrainLoadCurveWeight * loadFraction^2                           -- 1.0, 1.0
+physicalDrain  = DrainLoadWeight * loadFraction                                  -- 1.0
 fighting       = input.fighting and activity ~= "run" and activity ~= "sprint"
 if fighting then
     physicalDrain = physicalDrain * CombatDrainShare                              -- 0.5
@@ -312,27 +318,38 @@ Consequences:
 
 - Sitting and vehicle seats (`resting`) recover at the vanilla rate; only heat
   slows them.
-- Standing still slows recovery with the square of the load and never turns it
-  into drain: under 1% for a vest, about 13% for full crafted plate.
+- Every cost is linear in load, so a piece costs the same whatever else is
+  worn and the item pips mean the same thing in any kit. Armour studies find
+  the extra cost of armour over a backpack in the limbs and in breathing,
+  both per-piece effects: placement factors carry the limb share. Nothing
+  supports a discount or a surcharge for a complete set.
+- Recovery follows effort headroom. Effort is a fraction of aerobic capacity
+  (standing 0.15, walking 0.30, sustainable 0.60); load multiplies it by
+  `1 + loadFraction`, and recovery scales with the headroom left below
+  sustainable. Standing therefore loses a third of the load, walking all of
+  it, and walking drains only past a load fraction of 1 (not reachable at
+  default sandbox scale). Standing never drains. Vanilla walking already
+  recovers at about a third of the standing rate.
 - Drain uses one load weight whatever the pace. Vanilla already drains faster
   paces harder, and the extra metabolic cost of a carried load is close to a
   fixed share of movement cost (Pandolf). Drain therefore does not depend on
   the activity sampled at the tick, which can differ from what the player did
   during the minute (a game minute is 2.5 s at a 1-hour day, 30 s at 12 hours).
-- The linear weight is 1.0 because burden is already trunk-equivalent kg:
-  placement factors carry the extra cost of limb mass. The squared term keeps
-  single pieces cheap while full kits cost more than their parts, matching
-  measured armour costs that climb past linear as bulk and gait restriction
-  add up. A vest-and-uniform police loadout drains about x1.09, a soldier
-  x1.13, a full SWAT kit x1.26 and full crafted metal x1.60 (80 kg,
-  Strength 5).
-- Fighting pays half the load share: police x1.04, SWAT x1.13, full crafted
-  metal x1.30. Standing melee moves the arms and weapon, not the whole carried
+- The drain weight is 1.0 because burden is already trunk-equivalent kg:
+  running cost grows with total mass. At 80 kg and Strength 5:
+
+  | Loadout | Run | Fight | Walk recovery | Stand recovery |
+  |---|---|---|---|---|
+  | Police with vest | x1.08 | x1.04 | -8% | -3% |
+  | Full SWAT | x1.21 | x1.11 | -21% | -7% |
+  | Full crafted metal | x1.42 | x1.21 | -42% | -14% |
+
+- Fighting pays half the load share. Standing melee moves the arms and weapon, not the whole carried
   load, and protection has to stay worth wearing into a fight. Heat and
   breathing drain are not reduced. Swinging while running pays the running
   share.
-- Past the walk floor (load fraction above 0.5 at default weights), walking
-  turns part of vanilla's recovery into drain.
+- Past sustainable effort (load fraction above 1), walking turns part of
+  vanilla's recovery into drain, floored at `WalkRegenFloor`.
 - With no vanilla change there is no AMS change.
 - With no previous observation, nothing is applied (`canApply = false`).
 
@@ -508,9 +525,9 @@ vehicle over-encumbrance) stays vanilla.
 | `BurdenClothingAllowanceKg` | 3.5 | |
 | `BodyMassMinKg` / `BodyMassMaxKg` | 50 / 90 | |
 | `StrengthFactorBase` / `StrengthFactorPerLevel` | 1.3 / 0.06 | |
-| `WalkRegenLoadWeight` / `WalkRegenFloor` | 2.0 / −0.5 | |
-| `StandRegenLoadWeight` | 1.0 | |
-| `DrainLoadWeight` / `DrainLoadCurveWeight` | 1.0 / 1.0 | |
+| `EffortStand` / `EffortWalk` / `EffortSustainable` | 0.15 / 0.30 / 0.60 | |
+| `WalkRegenFloor` | −0.5 | |
+| `DrainLoadWeight` | 1.0 | |
 | `CombatDrainShare` | 0.5 | |
 | `ThermalRegenPenaltyMax` / `ThermalDrainWeight` | 0.5 / 0.25 | |
 | `BreathingEffortOnset` / `BreathingDrainWeight` | 0.20 / 0.35 | |

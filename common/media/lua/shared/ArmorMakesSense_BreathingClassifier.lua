@@ -147,6 +147,18 @@ local function strongerClass(left, right)
     return left
 end
 
+-- B42 removes filters and tanks in place (Clothing.setNoFilter/setNoTank), so the
+-- item keeps its filtered type and tags; only the instance knows it is empty.
+local function instanceMissingSupply(item, tags)
+    if tagPresent(tags, "gasmask") or tagPresent(tags, "respirator") or tagPresent(tags, "improvisedgasmask") then
+        return safeCall(item, "hasFilter") == false
+    end
+    if tagPresent(tags, "scba") then
+        return safeCall(item, "hasTank") == false
+    end
+    return false
+end
+
 function BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
     scriptItem = scriptItem or safeCall(item, "getScriptItem")
     local locationName = lower(wornLocation or safeCall(item, "getBodyLocation") or safeCall(scriptItem, "getBodyLocation"))
@@ -156,10 +168,13 @@ function BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
     local tags = collectTags(item, scriptItem)
 
     local slotClass = bodyLocationClass(locationName)
+    local missingSupply = instanceMissingSupply(item, tags)
+    local scbaNoTank = tagPresent(tags, "scbanotank")
+        or (missingSupply and tagPresent(tags, "scba") and not tagPresent(tags, "hazmatsuit"))
     local hasNoFilterTag = tagPresent(tags, "gasmasknofilter")
         or tagPresent(tags, "respiratornofilter")
-        or tagPresent(tags, "scbanotank")
-    local hasFilter = not hasNoFilterTag and not contains(identity, "nofilter")
+        or scbaNoTank
+    local hasFilter = not hasNoFilterTag and not missingSupply and not contains(identity, "nofilter")
     local class = "none"
     local tagClass = nil
     local keywordClass = respiratoryKeywordClass(identity)
@@ -168,9 +183,9 @@ function BreathingClassifier.computeSignals(item, scriptItem, wornLocation)
         or tagPresent(tags, "decorative")
     local slotFloorClass = "none"
 
-    if tagPresent(tags, "hazmatsuit") or tagPresent(tags, "scba") then
+    if tagPresent(tags, "hazmatsuit") or (tagPresent(tags, "scba") and not scbaNoTank) then
         tagClass = "sealed_suit"
-    elseif tagPresent(tags, "scbanotank") then
+    elseif scbaNoTank then
         tagClass = "sealed_mask"
     elseif tagPresent(tags, "gasmask") or tagPresent(tags, "gasmasknofilter") then
         tagClass = "sealed_mask"

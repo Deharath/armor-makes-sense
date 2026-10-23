@@ -97,7 +97,8 @@ thermoregulator metabolic rate and AMS movement anchors for the sampled
 activity. AMS does not maintain a parallel combat or exertion latch.
 
 The shared load model computes signals once per included item and caches them
-by full type, body location, and actual weight. Rigidity comes from the item's
+by full type, body location, actual weight, and the item's in-place filter and
+tank state. Rigidity comes from the item's
 original vanilla discomfort; respiratory data comes from the breathing
 classifier.
 

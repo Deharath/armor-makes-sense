@@ -38,29 +38,29 @@ Support.assertClose(state.lastTickMinute, 500, 1e-9, "first tick records the min
 Support.assertClose(state.lastEnduranceObserved, 0.8, 1e-9, "first tick rebases endurance")
 Support.assertEqual(snapshot.amsDelta, nil, "rebase tick applies nothing")
 Support.assertClose(snapshot.loadFraction, 0.25, 1e-9, "snapshot load fraction")
-Support.assertClose(snapshot.walkRegenScale, 0.5, 1e-9, "snapshot walk recovery")
--- Physical drain is LF + LF^2 = 0.3125; fighting pays half of it.
-Support.assertClose(snapshot.runDrainScale, 1.3125, 1e-9, "snapshot run drain")
-Support.assertClose(snapshot.sprintDrainScale, 1.3125, 1e-9, "sprint pays the same load share as running")
-Support.assertClose(snapshot.fightDrainScale, 1.15625, 1e-9, "fighting pays half the load share")
-Support.assertClose(snapshot.standRegenScale, 0.9375, 1e-9, "standing recovery slows with load squared")
+Support.assertClose(snapshot.walkRegenScale, 0.75, 1e-9, "walking recovery loses the load share")
+-- Drain grows one to one with load; fighting pays half of it.
+Support.assertClose(snapshot.runDrainScale, 1.25, 1e-9, "snapshot run drain")
+Support.assertClose(snapshot.sprintDrainScale, 1.25, 1e-9, "sprint pays the same load share as running")
+Support.assertClose(snapshot.fightDrainScale, 1.125, 1e-9, "fighting pays half the load share")
+Support.assertClose(snapshot.standRegenScale, 1 - 0.25 / 3, 1e-9, "standing recovery loses a third of the load share")
 Support.assertClose(snapshot.restRegenScale, 1, 1e-9, "sitting recovers at the vanilla rate")
 Support.assertClose(snapshot.sleepPenaltyFraction, 0.2, 1e-9, "snapshot sleep penalty preview")
 Support.assertClose(snapshot.heat, 0, 1e-9, "missing thermoregulator is neutral heat")
 Support.assertEqual(state.uiRuntimeSnapshot, snapshot, "snapshot stored for UI")
 Support.assertEqual(Physiology.getUiRuntimeSnapshot(state), snapshot, "SP UI snapshot read")
 
--- Walking recovery is halved.
+-- Walking recovery loses the load share.
 player.moving = true
 nowMinutes = 501
 endurance = 0.81
 snapshot = Physiology.tick(player, state, defaults, profile, nowMinutes)
-Support.assertClose(endurance, 0.805, 1e-9, "walking tick scales vanilla recovery")
+Support.assertClose(endurance, 0.8075, 1e-9, "walking tick scales vanilla recovery")
 Support.assertClose(snapshot.naturalDelta, 0.01, 1e-9, "natural delta observed")
-Support.assertClose(snapshot.amsDelta, -0.005, 1e-9, "AMS delta recorded")
+Support.assertClose(snapshot.amsDelta, -0.0025, 1e-9, "AMS delta recorded")
 Support.assertClose(snapshot.dtMinutes, 1, 1e-9, "tick step minutes")
 Support.assertEqual(snapshot.activityLabel, "walk", "walk activity label")
-Support.assertClose(state.lastEnduranceObserved, 0.805, 1e-9, "controlled value is the next baseline")
+Support.assertClose(state.lastEnduranceObserved, 0.8075, 1e-9, "controlled value is the next baseline")
 
 -- Same-minute tick and long gaps rebase instead of applying.
 endurance = 0.9
@@ -99,11 +99,12 @@ Compat:registerProvider("NutritionMakesSense", {
 nowMinutes = nowMinutes + 1
 endurance = 0.54
 snapshot = Physiology.tick(player, state, defaults, profile, nowMinutes)
--- Standing: 0.02 recovery * 0.9375 load * 0.5 NMS, less 0.001 NMS drain.
-Support.assertClose(endurance, 0.528375, 1e-9, "NMS regen scale and drain compose with standing load")
+-- Standing: 0.02 recovery * (1 - 0.25/3) load * 0.5 NMS, less 0.001 NMS drain.
+local nmsExpected = 0.52 + 0.02 * (1 - 0.25 / 3) * 0.5 - 0.001
+Support.assertClose(endurance, nmsExpected, 1e-9, "NMS regen scale and drain compose with standing load")
 Support.assertClose(snapshot.nmsRegenScale, 0.5, 1e-9, "snapshot NMS regen scale")
 Support.assertClose(snapshot.nmsDrain, 0.001, 1e-9, "snapshot NMS drain")
-Support.assertClose(recorded.controlledEndurance, 0.528375, 1e-9, "NMS receives the controlled result")
+Support.assertClose(recorded.controlledEndurance, nmsExpected, 1e-9, "NMS receives the controlled result")
 Compat.providers.NutritionMakesSense = nil
 
 -- Sleep: fatigue penalty applies, endurance pipeline pauses.
@@ -142,14 +143,14 @@ nowMinutes = nowMinutes + 1
 endurance = 0.88
 snapshot = Physiology.tick(player, fightState, defaults, profile, nowMinutes)
 Support.assertTrue(snapshot.fighting, "attack window ticks as fighting")
-Support.assertClose(endurance, 0.9 - 0.02 * 1.15625, 1e-9, "fighting drain pays half the load share")
+Support.assertClose(endurance, 0.9 - 0.02 * 1.125, 1e-9, "fighting drain pays half the load share")
 Support.assertEqual(fightState.attacksSinceTick, 0, "tick clears the attack window")
 nowMinutes = nowMinutes + 1
 endurance = endurance - 0.02
 local base = endurance + 0.02
 snapshot = Physiology.tick(player, fightState, defaults, profile, nowMinutes)
 Support.assertFalse(snapshot.fighting, "quiet window is not fighting")
-Support.assertClose(endurance, base - 0.02 * 1.3125, 1e-9, "non-fighting drain pays the full load share")
+Support.assertClose(endurance, base - 0.02 * 1.25, 1e-9, "non-fighting drain pays the full load share")
 player.running = true
 Physiology.recordAttack(fightState, weapon(true, false))
 nowMinutes = nowMinutes + 1
@@ -157,7 +158,7 @@ base = endurance
 endurance = endurance - 0.02
 snapshot = Physiology.tick(player, fightState, defaults, profile, nowMinutes)
 Support.assertFalse(snapshot.fighting, "running swings pay the running share")
-Support.assertClose(endurance, base - 0.02 * 1.3125, 1e-9, "running drain ignores fighting")
+Support.assertClose(endurance, base - 0.02 * 1.25, 1e-9, "running drain ignores fighting")
 player.running = false
 Physiology.recordAttack(fightState, weapon(true, false))
 nowMinutes = nowMinutes + 20

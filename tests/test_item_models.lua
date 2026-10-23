@@ -136,6 +136,53 @@ Support.assertFalse(tagOnlyNoFilterSignals.hasFilter, "tag-only no-filter gas ma
 Support.assertClose(tagOnlyNoFilterSignals.airflowResistance, 1.35, 1e-9, "tag-only no-filter airflow resistance")
 Support.assertClose(tagOnlyNoFilterSignals.sealedRestriction, 0, 1e-9, "tag-only no-filter sealed restriction")
 
+-- B42 filter and tank removal keeps the item type and tags (Clothing.setNoFilter/setNoTank).
+local wornGasMask = Support.makeItem({
+    fullType = "Base.Hat_GasMask",
+    type = "Hat_GasMask",
+    bodyLocation = "base:maskeyes",
+    tags = { "base:gasmask", "base:isdisguise" },
+    actualWeight = 1.0,
+})
+local gasMaskFilterIn = true
+function wornGasMask:hasFilter()
+    return gasMaskFilterIn
+end
+local inPlaceFiltered = LoadModel.itemToBurdenSignal(wornGasMask, "base:maskeyes")
+Support.assertClose(inPlaceFiltered.airflowResistance, 3.75, 1e-9, "in-place gas mask with filter")
+Support.assertClose(inPlaceFiltered.sealedRestriction, 1, 1e-9, "in-place gas mask with filter is sealed")
+gasMaskFilterIn = false
+local inPlaceEmpty = LoadModel.itemToBurdenSignal(wornGasMask, "base:maskeyes")
+Support.assertClose(inPlaceEmpty.airflowResistance, 1.35, 1e-9, "removing a filter in place lowers airflow resistance")
+Support.assertClose(inPlaceEmpty.sealedRestriction, 0, 1e-9, "removing a filter in place unseals the mask")
+Support.assertFalse(inPlaceEmpty.respiratoryHasFilter, "in-place filter removal reported")
+
+local wornRespirator = Support.makeItem({
+    fullType = "Base.Hat_BuildersRespirator",
+    bodyLocation = "base:mask",
+    tags = { "base:respirator" },
+})
+function wornRespirator:hasFilter()
+    return false
+end
+Support.assertClose(BreathingClassifier.computeSignals(wornRespirator, nil, "base:mask").airflowResistance, 0.90, 1e-9, "respirator without filter in place")
+
+local wornScba = Support.makeItem({ fullType = "Base.SCBA", bodyLocation = "base:scba", tags = { "base:scba" } })
+function wornScba:hasTank()
+    return false
+end
+local scbaNoTankSignals = BreathingClassifier.computeSignals(wornScba, nil, "base:scba")
+Support.assertEqual(scbaNoTankSignals.class, "sealed_mask", "SCBA without tank in place matches SCBA_notank")
+Support.assertClose(scbaNoTankSignals.airflowResistance, 1.35, 1e-9, "SCBA without tank airflow")
+
+local wornHazmat = Support.makeItem({ fullType = "Base.HazmatSuit", bodyLocation = "base:fullsuithead", tags = { "base:hazmatsuit", "base:scba" } })
+function wornHazmat:hasTank()
+    return false
+end
+local hazmatNoTankSignals = BreathingClassifier.computeSignals(wornHazmat, nil, "base:fullsuithead")
+Support.assertEqual(hazmatNoTankSignals.class, "sealed_suit", "hazmat without tank stays a sealed suit")
+Support.assertClose(hazmatNoTankSignals.sealedRestriction, 0, 1e-9, "hazmat without tank is not sealed")
+
 local decorativeMask = Support.makeItem({
     fullType = "Example.CeremonialMask",
     bodyLocation = "MaskFull",

@@ -14,12 +14,20 @@ local EnduranceModel = ArmorMakesSense.EnduranceModel
 -- (Pandolf). This keeps drain independent of the activity sampled at the
 -- tick, which can differ from what the player did during the minute.
 --
--- The load share grows with the square of the load too, so single pieces
--- stay cheap and full kits cost disproportionately more (limb loads and a
--- rigid torso compound, as in Pandolf's load term and armour studies).
+-- Every cost is linear in load, so a piece costs the same whatever else is
+-- worn. Limb pieces already cost more through placement, which is where
+-- armour studies find the extra cost (swinging armoured limbs).
+--
+-- Recovery follows effort headroom. Load multiplies an activity's effort by
+-- (1 + load); recovery scales with what is left below sustainable effort:
+--   (S - e * (1 + load)) / (S - e) = 1 - load * e / (S - e)
+-- Standing (e 0.15) loses a third of the load, walking (e 0.30) all of it,
+-- and walking only turns into drain past a load of 1. Sitting is free: the
+-- seat carries the weight.
+--
 -- A minute with melee attacks and no running pays only CombatDrainShare of
--- it: a chest plate barely changes the cost of a standing swing, and arm
--- gear already costs through strain and swing speed.
+-- the drain: a chest plate barely changes the cost of a standing swing, and
+-- arm gear already costs through strain and swing speed.
 
 local function requiredNumber(options, key)
     local value = tonumber(options and options[key])
@@ -41,18 +49,18 @@ function EnduranceModel.scales(options, input)
     local resting = input.resting == true
     local fighting = input.fighting == true and activityLabel ~= "run" and activityLabel ~= "sprint"
 
+    local sustainable = requiredNumber(options, "EffortSustainable")
+    local function headroom(effort)
+        return 1 - (loadFraction * effort / (sustainable - effort))
+    end
     local physicalRegen = 1
     if activityLabel == "walk" and not resting then
-        physicalRegen = math.max(
-            requiredNumber(options, "WalkRegenFloor"),
-            1 - (requiredNumber(options, "WalkRegenLoadWeight") * loadFraction)
-        )
+        physicalRegen = math.max(requiredNumber(options, "WalkRegenFloor"), headroom(requiredNumber(options, "EffortWalk")))
     elseif not resting then
-        physicalRegen = math.max(0, 1 - (requiredNumber(options, "StandRegenLoadWeight") * loadFraction * loadFraction))
+        physicalRegen = math.max(0, headroom(requiredNumber(options, "EffortStand")))
     end
     local thermalRegen = 1 - (requiredNumber(options, "ThermalRegenPenaltyMax") * heat)
-    local physicalDrain = (requiredNumber(options, "DrainLoadWeight") * loadFraction)
-        + (requiredNumber(options, "DrainLoadCurveWeight") * loadFraction * loadFraction)
+    local physicalDrain = requiredNumber(options, "DrainLoadWeight") * loadFraction
     if fighting then
         physicalDrain = physicalDrain * requiredNumber(options, "CombatDrainShare")
     end

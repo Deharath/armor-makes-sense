@@ -233,8 +233,9 @@ function LoadModel.computeItemSignal(item, wornLocation, options)
     }
 end
 
--- Item signals depend only on script data, so they are cached per type,
--- location and weight for the session. Options only change on sandbox load.
+-- Item signals depend on script data plus in-place filter/tank state, so they are
+-- cached per type, location, weight and supply for the session. Options only
+-- change on sandbox load.
 local signalCache = {}
 local EXCLUDED = {}
 
@@ -243,6 +244,8 @@ function LoadModel.itemToBurdenSignal(item, wornLocation, options)
     local key = getFullType(item, scriptItem)
         .. "|" .. Utils.lower(wornLocation or Utils.safeMethod(item, "getBodyLocation") or "")
         .. "|" .. tostring(tonumber(Utils.safeMethod(item, "getActualWeight")) or "")
+        .. "|" .. tostring(Utils.safeMethod(item, "hasFilter"))
+        .. "|" .. tostring(Utils.safeMethod(item, "hasTank"))
     local cached = signalCache[key]
     if cached == nil then
         cached = LoadModel.computeItemSignal(item, wornLocation, options) or EXCLUDED
